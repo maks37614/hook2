@@ -1,0 +1,6 @@
+{
+  "name": "signalhook",
+  "description": "Скрінер пошуку монет за технічними формаціями та патернами на біржах Bybit і Binance у реальному часі.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

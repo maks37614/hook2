@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    font-size: 13.5px;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  @media (min-width: 640px) {
+    html {
+      font-size: 14px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    html {
+      font-size: 13.5px;
+    }
+  }
+
+  @media (min-width: 1440px) {
+    html {
+      font-size: 14px;
+    }
+  }
+
+  @media (min-width: 1920px) {
+    html {
+      font-size: 14.5px;
+    }
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #090d16;
+    color: #f1f5f9;
+    overflow-x: hidden;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  
+  html {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+
+  #root {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Universal scrollbar removal across the whole application */
+*,
+*::before,
+*::after {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+*::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+html,
+body,
+#root,
+main,
+dialog,
+div,
+section,
+article,
+.no-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Smooth momentum scrolling for iOS/Android touch devices */
+.touch-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}

@@ -1,0 +1,362 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with personal preferences and Telegram alert credentials",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique Firebase Authentication user ID",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address",
+          "maxLength": 256
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 128
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Profile picture URL",
+          "maxLength": 1024
+        },
+        "telegramBotToken": {
+          "type": "string",
+          "description": "User custom Telegram bot token for price alert notifications",
+          "maxLength": 256
+        },
+        "telegramChatId": {
+          "type": "string",
+          "description": "User personal Telegram chat ID",
+          "maxLength": 64
+        },
+        "telegramBotUsername": {
+          "type": "string",
+          "description": "Username of the connected Telegram bot",
+          "maxLength": 64
+        },
+        "defaultExchange": {
+          "type": "string",
+          "description": "Preferred default exchange filter",
+          "enum": ["all", "binance", "bybit"]
+        },
+        "defaultMarketType": {
+          "type": "string",
+          "description": "Preferred market type filter",
+          "enum": ["all", "futures", "spot"]
+        },
+        "defaultTimeframe": {
+          "type": "string",
+          "description": "Preferred timeframe filter",
+          "enum": ["5m", "15m", "1h", "4h", "1d"]
+        },
+        "soundAlertsEnabled": {
+          "type": "boolean",
+          "description": "Whether sound alerts are enabled on price triggers"
+        },
+        "watchlist": {
+          "type": "array",
+          "description": "User personal list of favorite trading pair symbols"
+        },
+        "metaScalpSettings": {
+          "type": "object",
+          "description": "User personal MetaScalp terminal link configuration"
+        },
+        "inviteCode": {
+          "type": "string",
+          "description": "Special access code used during registration",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when user profile was created"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when user profile was last updated"
+        }
+      },
+      "required": ["uid"]
+    },
+    "PriceAlert": {
+      "title": "PriceAlert",
+      "description": "User price alert triggered by market movements",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique alert identifier",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase UID of the user who owns this alert",
+          "maxLength": 128
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Trading pair symbol e.g. BTCUSDT",
+          "maxLength": 32
+        },
+        "exchange": {
+          "type": "string",
+          "description": "Cryptocurrency exchange",
+          "enum": ["binance", "bybit"]
+        },
+        "marketType": {
+          "type": "string",
+          "description": "Market type",
+          "enum": ["futures", "spot"]
+        },
+        "targetPrice": {
+          "type": "number",
+          "description": "Target price trigger level"
+        },
+        "condition": {
+          "type": "string",
+          "description": "Trigger condition (greater than/equal or less than/equal)",
+          "enum": ["gte", "lte"]
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional user note or reason for the alert",
+          "maxLength": 500
+        },
+        "formationName": {
+          "type": "string",
+          "description": "Optional name of the detected pattern",
+          "maxLength": 128
+        },
+        "levelType": {
+          "type": "string",
+          "description": "Level type",
+          "enum": ["entry", "target", "stop_loss", "custom"]
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether the alert is active"
+        },
+        "triggered": {
+          "type": "boolean",
+          "description": "Whether the alert has been triggered"
+        },
+        "triggeredAt": {
+          "type": "number",
+          "description": "Timestamp when alert triggered"
+        },
+        "triggeredPrice": {
+          "type": "number",
+          "description": "Price at the moment of triggering"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when alert was created"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when alert was last modified"
+        }
+      },
+      "required": ["id", "userId", "symbol", "exchange", "marketType", "targetPrice", "condition", "isActive", "triggered"]
+    },
+    "AlertHistory": {
+      "title": "AlertHistory",
+      "description": "Historical record of triggered price alerts sent to Telegram",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique history item identifier",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase UID of user who owns this history item",
+          "maxLength": 128
+        },
+        "alertId": {
+          "type": "string",
+          "description": "ID of originating price alert",
+          "maxLength": 128
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Trading pair symbol e.g. BTCUSDT",
+          "maxLength": 32
+        },
+        "exchange": {
+          "type": "string",
+          "description": "Cryptocurrency exchange",
+          "enum": ["binance", "bybit"]
+        },
+        "marketType": {
+          "type": "string",
+          "description": "Market type",
+          "enum": ["futures", "spot"]
+        },
+        "targetPrice": {
+          "type": "number",
+          "description": "Target price trigger level"
+        },
+        "triggeredPrice": {
+          "type": "number",
+          "description": "Price at moment of triggering"
+        },
+        "condition": {
+          "type": "string",
+          "description": "Trigger condition",
+          "enum": ["gte", "lte"]
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional user note or reason",
+          "maxLength": 500
+        },
+        "formationName": {
+          "type": "string",
+          "description": "Formation name if associated with pattern",
+          "maxLength": 128
+        },
+        "levelType": {
+          "type": "string",
+          "description": "Level type",
+          "enum": ["entry", "target", "stop_loss", "custom"]
+        },
+        "telegramSent": {
+          "type": "boolean",
+          "description": "Whether the Telegram notification was successfully delivered"
+        },
+        "telegramError": {
+          "type": "string",
+          "description": "Error message if delivery failed",
+          "maxLength": 500
+        },
+        "triggeredAt": {
+          "type": "number",
+          "description": "Timestamp in milliseconds when alert triggered"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when history log was recorded"
+        }
+      },
+      "required": ["id", "userId", "symbol", "exchange", "marketType", "condition", "targetPrice", "triggeredPrice", "telegramSent", "triggeredAt"]
+    },
+    "ArchivedFormation": {
+      "title": "ArchivedFormation",
+      "description": "User saved chart pattern formation with price levels, markers, chart coordinates and restoration parameters",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of archived formation",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase UID of user owner",
+          "maxLength": 128
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Coin ticker symbol e.g. BTCUSDT",
+          "maxLength": 32
+        },
+        "baseAsset": {
+          "type": "string",
+          "description": "Base asset e.g. BTC",
+          "maxLength": 16
+        },
+        "quoteAsset": {
+          "type": "string",
+          "description": "Quote asset e.g. USDT",
+          "maxLength": 16
+        },
+        "exchange": {
+          "type": "string",
+          "description": "Exchange identifier",
+          "enum": ["binance", "bybit"]
+        },
+        "marketType": {
+          "type": "string",
+          "description": "Market type",
+          "enum": ["futures", "spot"]
+        },
+        "timeframe": {
+          "type": "string",
+          "description": "Chart timeframe",
+          "enum": ["5m", "15m", "1h", "4h", "1d"]
+        },
+        "formationName": {
+          "type": "string",
+          "description": "Pattern or formation name",
+          "maxLength": 128
+        },
+        "bias": {
+          "type": "string",
+          "description": "Pattern bias direction",
+          "enum": ["bullish", "bearish", "neutral"]
+        },
+        "entryPrice": {
+          "type": "number",
+          "description": "Entry point price"
+        },
+        "targetPrice": {
+          "type": "number",
+          "description": "Target take profit price"
+        },
+        "stopLossPrice": {
+          "type": "number",
+          "description": "Stop loss price"
+        },
+        "savedPrice": {
+          "type": "number",
+          "description": "Market price when saved"
+        },
+        "confidence": {
+          "type": "number",
+          "description": "Pattern detection confidence percentage"
+        },
+        "notes": {
+          "type": "string",
+          "description": "User notes or description",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when formation was archived"
+        }
+      },
+      "required": ["id", "userId", "symbol", "exchange", "marketType", "timeframe", "formationName", "bias", "entryPrice", "targetPrice", "stopLossPrice"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Individual user profile with personalized preferences and settings"
+    },
+    "/users/{userId}/alerts/{alertId}": {
+      "schema": "PriceAlert",
+      "description": "User-specific price alerts collection strictly scoped to the owner"
+    },
+    "/users/{userId}/history/{historyId}": {
+      "schema": "AlertHistory",
+      "description": "User-specific history collection of triggered Telegram alerts"
+    },
+    "/users/{userId}/archive/{archiveId}": {
+      "schema": "ArchivedFormation",
+      "description": "User-specific saved formations archive with chart parameters and markers"
+    }
+  }
+}

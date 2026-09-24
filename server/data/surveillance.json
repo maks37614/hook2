@@ -1,0 +1,51 @@
+[
+  {
+    "id": "surv_1790212566698_fy8y3",
+    "userId": "guest",
+    "symbol": "BTCUSDT",
+    "baseAsset": "BTC",
+    "quoteAsset": "USDT",
+    "exchange": "binance",
+    "marketType": "futures",
+    "isActive": true,
+    "createdAt": "2026-09-24T01:16:06.698Z",
+    "updatedAt": "2026-09-24T01:16:06.698Z",
+    "config": {
+      "timeframe": "4h",
+      "triggerMode": "bar_close",
+      "levelsEnabled": true,
+      "structureEnabled": true,
+      "momentumEnabled": true,
+      "momentumPct": 2.5,
+      "momentumBars": 3,
+      "momentumTf": "15m",
+      "channelEnabled": true,
+      "fibonacciEnabled": true,
+      "cooldownMinutes": 15
+    },
+    "state": {
+      "currentPrice": 84261.5,
+      "change24h": -0.11,
+      "high1d": 87385.1,
+      "low1d": 62228.8,
+      "swingHigh4h": 87247.3,
+      "swingLow4h": 85080,
+      "localHigh1h": 85932.5,
+      "localLow1h": 83450.1,
+      "rangePositionPct": 58.2,
+      "resistance4h": 87247.3,
+      "support4h": 80095.9,
+      "nextZoneUp": 90823,
+      "nextZoneDown": 76520.19999999998,
+      "fib618": 85907.9086,
+      "fib786": 85543.8022,
+      "structureTrend": "consolidation",
+      "channelUpper": 86564.7,
+      "channelLower": 83450.1,
+      "momentumRecentPct": -0.06,
+      "lastCalculated": 1790212569128,
+      "recentEvents": []
+    },
+    "lastCheckedAt": "2026-09-24T01:16:09.128Z"
+  }
+]
