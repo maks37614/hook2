@@ -4,7 +4,7 @@ providers = ["node"]
 nixPkgs = ["nodejs_22"]
 
 [phases.install]
-cmds = ["npm install --include=optional"]
+cmds = ["npm install"]
 
 [phases.build]
 cmds = ["npm run build"]
