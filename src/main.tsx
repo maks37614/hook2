@@ -6,6 +6,7 @@ import { AuthProvider } from './context/AuthContext';
 import { AlertsProvider } from './context/AlertsContext';
 import { ArchiveProvider } from './context/ArchiveContext';
 import { SurveillanceProvider } from './context/SurveillanceContext';
+import { LanguageProvider } from './context/LanguageContext';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -13,7 +14,9 @@ createRoot(document.getElementById('root')!).render(
       <AlertsProvider>
         <ArchiveProvider>
           <SurveillanceProvider>
-            <App />
+            <LanguageProvider>
+              <App />
+            </LanguageProvider>
           </SurveillanceProvider>
         </ArchiveProvider>
       </AlertsProvider>

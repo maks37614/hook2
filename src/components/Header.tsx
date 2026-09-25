@@ -15,10 +15,12 @@ import {
   FolderArchive,
   Monitor,
   Radar,
+  Globe,
 } from 'lucide-react';
 import { MetaScalpSettings } from '../utils/metaScalpService';
 import { useAuth } from '../context/AuthContext';
 import { ActivePageType } from '../types';
+import { useLanguage, SupportedLanguage } from '../context/LanguageContext';
 
 interface HeaderProps {
   isLoading: boolean;
@@ -72,6 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
   onPageChange,
 }) => {
   const { user, profile } = useAuth();
+  const { language, setLanguage, t } = useLanguage();
   return (
     <header className="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-30">
       <div className="max-w-[1720px] mx-auto px-2.5 sm:px-4 lg:px-6 py-1.5 sm:py-2">
@@ -84,7 +87,7 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </div>
 
-            {/* Navigation Category Tabs (Скрінер / Формації) */}
+            {/* Navigation Category Tabs */}
             <div className="flex items-center p-0.5 sm:p-1 rounded-xl bg-slate-900/90 border border-slate-800 text-xs shadow-inner">
               <button
                 id="nav-category-screener-btn"
@@ -96,7 +99,7 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Скрінер</span>
+                <span>{t('screener')}</span>
               </button>
 
               <button
@@ -109,7 +112,7 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span>Формації</span>
+                <span>{t('patterns')}</span>
                 {formationsCount > 0 && (
                   <span
                     className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
@@ -133,10 +136,10 @@ export const Header: React.FC<HeaderProps> = ({
                     ? 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white shadow-sm shadow-emerald-900/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
-                title="Термінал трейдера: мульти-графіки на один або кілька моніторів"
+                title="Термінал трейдера"
               >
                 <Monitor className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Термінал</span>
+                <span>{t('terminal')}</span>
               </button>
             </div>
           </div>
@@ -193,6 +196,21 @@ export const Header: React.FC<HeaderProps> = ({
             >
               {soundEnabled ? <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <BellOff className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
             </button>
+
+            {/* Language Switcher */}
+            <div className="relative">
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value as SupportedLanguage)}
+                className="bg-slate-900 border border-slate-800 text-xs font-mono font-bold text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                title={t('language')}
+              >
+                <option value="uk">🇺🇦 UA</option>
+                <option value="en">🇬🇧 EN</option>
+                <option value="ru">🇷🇺 RU</option>
+                <option value="pl">🇵🇱 PL</option>
+              </select>
+            </div>
 
             <button
               id="open-telegram-btn"
