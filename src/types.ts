@@ -558,7 +558,7 @@ export interface MarketSentimentData {
 export type SurveillanceEventType = 'structure' | 'level' | 'momentum' | 'risk';
 
 export interface SurveillanceConfig {
-  timeframe: '15m' | '1h' | '4h' | '1d';
+  timeframe: Timeframe;
   triggerMode: 'bar_close' | 'realtime'; // Once Per Bar Close vs Instant Realtime
   levelsEnabled: boolean; // Senior 4H/1D levels & local 1H levels
   structureEnabled: boolean; // Market structure BOS/CHoCH

@@ -241,40 +241,18 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     }
   }, []);
 
-  // Focus / Center on formation or candles in the center of the chart
+  // Focus / Center on recent candles and latest price action
   const centerChartOnScreen = useCallback(() => {
     if (!chartRef.current || !candleSeriesRef.current || klinesLengthRef.current === 0) return;
     const total = klinesLengthRef.current;
 
-    if (
-      formation &&
-      typeof formation.candleStartIndex === 'number' &&
-      typeof formation.candleEndIndex === 'number' &&
-      formation.candleStartIndex >= 0 &&
-      formation.candleEndIndex < total
-    ) {
-      // Center the formation directly in the middle of the chart
-      const start = formation.candleStartIndex;
-      const end = formation.candleEndIndex;
-      const formationSpan = Math.max(12, end - start);
-      const windowWidth = Math.max(45, Math.min(90, Math.round(formationSpan * 2.2)));
-      const center = Math.round((start + end) / 2);
-      const half = Math.round(windowWidth / 2);
-
-      chartRef.current.timeScale().setVisibleLogicalRange({
-        from: center - half,
-        to: center + half,
-      });
-    } else {
-      // Center recent price action in the middle of the view (with balanced left and right margins)
-      const visibleBars = Math.min(65, total);
-      // Give right offset so current price is centered with plenty of forward visibility
-      const rightPadding = Math.round(visibleBars * 0.35); // ~22 bars forward space
-      chartRef.current.timeScale().setVisibleLogicalRange({
-        from: Math.max(0, total - visibleBars),
-        to: total + rightPadding,
-      });
-    }
+    // Always focus on recent / latest candles where the current price and formation are active
+    const visibleBars = Math.min(65, total);
+    const rightPadding = Math.round(visibleBars * 0.35); // ~22 bars forward space
+    chartRef.current.timeScale().setVisibleLogicalRange({
+      from: Math.max(0, total - visibleBars),
+      to: total + rightPadding,
+    });
 
     // Auto-scale vertical price scale with comfortable margins for centered focus
     try {
@@ -288,7 +266,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     } catch {
       // Ignored
     }
-  }, [formation]);
+  }, []);
 
   // Zoom to recent candles
   const handleZoomRecent = useCallback(() => {
@@ -483,13 +461,19 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     if (savedChartParams?.visibleRange && totalBars > 0) {
       chartRef.current.timeScale().setVisibleLogicalRange(savedChartParams.visibleRange);
       hasInitiallyCenteredRef.current = true;
-    } else if (totalBars > 0 && !hasInitiallyCenteredRef.current) {
+    } else if (totalBars > 0) {
       hasInitiallyCenteredRef.current = true;
       centerChartOnScreen();
       // Ensure executed after layout painting completes
       setTimeout(() => {
         centerChartOnScreen();
       }, 50);
+      setTimeout(() => {
+        centerChartOnScreen();
+      }, 200);
+      setTimeout(() => {
+        centerChartOnScreen();
+      }, 500);
     }
 
     // Remove existing price lines
@@ -855,7 +839,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             </div>
           )}
 
-          {/* Zoom Recent Buttons */}
+             {/* Zoom Recent Buttons */}
           <div className="flex items-center gap-1">
             <button
               onClick={centerChartOnScreen}
@@ -884,8 +868,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
               <span className="hidden sm:inline">Вся історія</span>
               <span className="font-mono">({klines.length})</span>
             </button>
-
- 
           </div>
         </div>
       </div>
@@ -968,7 +950,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       )}
 
       {/* Levels Sub-header when formation present */}
-      {formation && (
+      {showNavigationControls && formation && (
         <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 bg-slate-900/60 border-b border-slate-800/80 text-[10px] sm:text-[11px] font-mono">
           <div className="flex items-center flex-wrap gap-2 sm:gap-4">
             <span className="flex items-center gap-1 text-sky-300 font-medium">
