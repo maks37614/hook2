@@ -87,11 +87,12 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   const [selectedExchange, setSelectedExchange] = useState<ExchangeId>(defaultEx);
   const [selectedMarketType, setSelectedMarketType] = useState<MarketType>(defaultMarket);
   const [coinSearchTerm, setCoinSearchTerm] = useState('');
+  const [addMinVolume, setAddMinVolume] = useState<number>(0);
 
   // Config modal state (for add or edit)
   const [formConfig, setFormConfig] = useState<SurveillanceConfig>({
     timeframe: prefs.defaultTimeframe,
-    triggerMode: 'bar_close',
+    triggerModes: ['bar_close'],
     levelsEnabled: true,
     structureEnabled: true,
     momentumEnabled: true,
@@ -102,6 +103,20 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     fibonacciEnabled: true,
     cooldownMinutes: 15,
   });
+
+  const toggleTriggerMode = (mode: 'bar_close' | 'realtime' | 'bar_close_15m' | 'bar_close_1h') => {
+    setFormConfig((prev) => {
+      const current = prev.triggerModes || ['bar_close'];
+      let next: ('bar_close' | 'realtime' | 'bar_close_15m' | 'bar_close_1h')[];
+      if (current.includes(mode)) {
+        if (current.length === 1) return prev; // keep at least one
+        next = current.filter((m) => m !== mode);
+      } else {
+        next = [...current, mode];
+      }
+      return { ...prev, triggerModes: next };
+    });
+  };
 
   useEffect(() => {
     setExchangeFilter(preferences.defaultExchange);
@@ -129,24 +144,25 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     });
   }, [coins, searchQuery, exchangeFilter]);
 
-  // Autocomplete candidate coins from screener
+  // Autocomplete candidate coins from screener with volume filter
   const candidateCoins = useMemo(() => {
     const list = availableCoins.length > 0 ? availableCoins : [
-      { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 84300, priceChange24h: 1.2 },
-      { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2050, priceChange24h: -0.8 },
-      { symbol: 'SOLUSDT', baseAsset: 'SOL', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 125, priceChange24h: 3.4 },
-      { symbol: 'DOGEUSDT', baseAsset: 'DOGE', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 0.165, priceChange24h: -2.1 },
-      { symbol: 'XRPUSDT', baseAsset: 'XRP', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 1.45, priceChange24h: 0.5 },
-      { symbol: 'SUIUSDT', baseAsset: 'SUI', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2.15, priceChange24h: 4.8 },
+      { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 84300, priceChange24h: 1.2, volumeUsd: 2500000000 },
+      { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2050, priceChange24h: -0.8, volumeUsd: 1200000000 },
+      { symbol: 'SOLUSDT', baseAsset: 'SOL', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 125, priceChange24h: 3.4, volumeUsd: 800000000 },
+      { symbol: 'DOGEUSDT', baseAsset: 'DOGE', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 0.165, priceChange24h: -2.1, volumeUsd: 400000000 },
+      { symbol: 'XRPUSDT', baseAsset: 'XRP', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 1.45, priceChange24h: 0.5, volumeUsd: 300000000 },
+      { symbol: 'SUIUSDT', baseAsset: 'SUI', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2.15, priceChange24h: 4.8, volumeUsd: 250000000 },
     ];
 
-    if (!coinSearchTerm.trim()) {
-      return list.slice(0, 10);
-    }
-    return list
-      .filter((c) => c.symbol.toLowerCase().includes(coinSearchTerm.toLowerCase()))
-      .slice(0, 10);
-  }, [availableCoins, coinSearchTerm]);
+    return list.filter((c) => {
+      const matchSearch = !coinSearchTerm.trim() || c.symbol.toLowerCase().includes(coinSearchTerm.toLowerCase());
+      const matchVol = addMinVolume === 0 || (c.volumeUsd !== undefined ? c.volumeUsd >= addMinVolume : true);
+      const matchEx = c.exchange === selectedExchange;
+      const matchMarket = c.marketType === selectedMarketType;
+      return matchSearch && matchVol && matchEx && matchMarket;
+    }).slice(0, 60);
+  }, [availableCoins, coinSearchTerm, addMinVolume, selectedExchange, selectedMarketType]);
 
   const handleOpenAddModal = (initialSymbol?: string) => {
     if (initialSymbol) {
@@ -158,7 +174,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     }
     setFormConfig({
       timeframe: '4h',
-      triggerMode: 'bar_close',
+      triggerModes: ['bar_close'],
       levelsEnabled: true,
       structureEnabled: true,
       momentumEnabled: true,
@@ -174,7 +190,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
   const handleOpenEditModal = (coin: SurveillanceCoin) => {
     setEditingCoin(coin);
-    setFormConfig({ ...coin.config });
+    const modes = coin.config.triggerModes || (coin.config.triggerMode ? [coin.config.triggerMode] : ['bar_close']);
+    setFormConfig({ ...coin.config, triggerModes: modes });
   };
 
   const handleSaveAddCoin = async () => {
@@ -712,7 +729,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {candidateCoins.slice(0, 6).map((c) => (
                     <button
-                      key={c.symbol}
+                      key={`${c.exchange}-${c.symbol}-${c.marketType}`}
                       onClick={() => {
                         setSelectedSymbolInput(c.symbol);
                         setCoinSearchTerm(c.symbol);
@@ -755,38 +772,102 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                 </div>
               </div>
 
-              {/* Trigger Confirmation Mode */}
+              {/* Volume Filter & Coin Picker List */}
+              <div className="space-y-2 p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-300">Фільтр за обсягом 24г та вибір монети</label>
+                  <span className="text-[10px] text-cyan-400 font-mono">Всього: {candidateCoins.length}</span>
+                </div>
+                <select
+                  value={addMinVolume}
+                  onChange={(e) => setAddMinVolume(Number(e.target.value))}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                >
+                  <option value={0}>Усі обсяги</option>
+                  <option value={50000}>Від $50k</option>
+                  <option value={100000}>Від $100k</option>
+                  <option value={300000}>Від $300k</option>
+                  <option value={500000}>Від $500k</option>
+                  <option value={1000000}>Від $1M</option>
+                  <option value={5000000}>Від $5M+</option>
+                </select>
+
+                <div className="max-h-40 overflow-y-auto rounded-lg bg-slate-900 border border-slate-800 p-1 space-y-1 custom-scrollbar">
+                  {candidateCoins.length === 0 ? (
+                    <div className="text-center py-4 text-xs text-slate-500 font-mono">Монет не знайдено</div>
+                  ) : (
+                    candidateCoins.map((c) => (
+                      <div
+                        key={`${c.exchange}-${c.symbol}-${c.marketType}`}
+                        onClick={() => {
+                          setSelectedSymbolInput(c.symbol);
+                          setCoinSearchTerm(c.symbol);
+                        }}
+                        className={`flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors ${
+                          selectedSymbolInput === c.symbol
+                            ? 'bg-cyan-600/30 border border-cyan-500 text-white font-bold'
+                            : 'hover:bg-slate-800 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white">{c.symbol}</span>
+                          <span className="text-[10px] text-slate-400">
+                            {c.volumeUsd ? `$${(c.volumeUsd / 1000).toFixed(0)}k` : ''}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {c.currentPrice !== undefined && (
+                            <span className="text-slate-200">${c.currentPrice >= 1 ? c.currentPrice.toLocaleString() : c.currentPrice}</span>
+                          )}
+                          {c.priceChange24h !== undefined && (
+                            <span className={c.priceChange24h >= 0 ? 'text-emerald-400 text-[10px]' : 'text-rose-400 text-[10px]'}>
+                              {c.priceChange24h >= 0 ? '+' : ''}{c.priceChange24h.toFixed(1)}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Trigger Confirmation Modes (Multi-select) */}
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
                 <label className="text-xs font-bold text-white flex items-center justify-between">
-                  <span>Режим підтвердження пробою</span>
-                  <span className="text-[10px] text-cyan-400 font-mono">РЕКОМЕНДОВАНО</span>
+                  <span>Режими підтвердження пробою (можна кілька)</span>
+                  <span className="text-[10px] text-cyan-400 font-mono">МУЛЬТИ-ВИБІР</span>
                 </label>
                 <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormConfig((prev) => ({ ...prev, triggerMode: 'bar_close' }))}
-                    className={`p-2 rounded-lg text-left text-xs transition-all border cursor-pointer ${
-                      formConfig.triggerMode === 'bar_close'
-                        ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold'
-                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <div className="font-bold">Один раз за закриттям бару (4-годинного)</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">Тільки якщо свічка закрилася за рівнем</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setFormConfig((prev) => ({ ...prev, triggerMode: 'realtime' }))}
-                    className={`p-2 rounded-lg text-left text-xs transition-all border cursor-pointer ${
-                      formConfig.triggerMode === 'realtime'
-                        ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold'
-                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <div className="font-bold">Realtime (Миттєво)</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">В момент першого дотику / перетину</div>
-                  </button>
+                  {[
+                    { id: 'bar_close', label: 'Закриття бару 4H', desc: 'Один раз за закриттям 4h' },
+                    { id: 'bar_close_1h', label: 'Закриття бару 1H', desc: 'Свічка 1h закрилась за рівнем' },
+                    { id: 'bar_close_15m', label: 'Закриття бару 15m', desc: 'Свічка 15m закрилась за рівнем' },
+                    { id: 'realtime', label: 'Realtime (Миттєво)', desc: 'В момент перетину ціною' },
+                  ].map((m) => {
+                    const isSelected = formConfig.triggerModes?.includes(m.id as any);
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => toggleTriggerMode(m.id as any)}
+                        className={`p-2.5 rounded-lg text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
+                          isSelected
+                            ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold shadow-sm'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div>
+                          <div className="font-bold flex items-center gap-1.5">
+                            <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] border ${isSelected ? 'bg-cyan-600 border-cyan-500 text-white font-bold' : 'border-slate-700 bg-slate-950'}`}>
+                              {isSelected ? '✓' : ''}
+                            </span>
+                            <span>{m.label}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-1">{m.desc}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -926,34 +1007,43 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
             <div className="p-5 space-y-4 overflow-y-auto flex-1">
               {/* Trigger Confirmation Mode */}
+              {/* Trigger Confirmation Modes (Multi-select) */}
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <label className="text-xs font-bold text-white">Режим підтвердження пробою</label>
+                <label className="text-xs font-bold text-white flex items-center justify-between">
+                  <span>Режими підтвердження пробою (можна кілька)</span>
+                  <span className="text-[10px] text-cyan-400 font-mono">МУЛЬТИ-ВИБІР</span>
+                </label>
                 <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormConfig((prev) => ({ ...prev, triggerMode: 'bar_close' }))}
-                    className={`p-2 rounded-lg text-left text-xs transition-all border cursor-pointer ${
-                      formConfig.triggerMode === 'bar_close'
-                        ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold'
-                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <div className="font-bold">Один раз за закриттям бару (4-годинного)</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">Тільки якщо свічка закрилася за рівнем</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setFormConfig((prev) => ({ ...prev, triggerMode: 'realtime' }))}
-                    className={`p-2 rounded-lg text-left text-xs transition-all border cursor-pointer ${
-                      formConfig.triggerMode === 'realtime'
-                        ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold'
-                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <div className="font-bold">Realtime (Миттєво)</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">В момент першого дотику / перетину</div>
-                  </button>
+                  {[
+                    { id: 'bar_close', label: 'Закриття бару 4H', desc: 'Один раз за закриттям 4h' },
+                    { id: 'bar_close_1h', label: 'Закриття бару 1H', desc: 'Свічка 1h закрилась за рівнем' },
+                    { id: 'bar_close_15m', label: 'Закриття бару 15m', desc: 'Свічка 15m закрилась за рівнем' },
+                    { id: 'realtime', label: 'Realtime (Миттєво)', desc: 'В момент перетину ціною' },
+                  ].map((m) => {
+                    const isSelected = formConfig.triggerModes?.includes(m.id as any);
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => toggleTriggerMode(m.id as any)}
+                        className={`p-2.5 rounded-lg text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
+                          isSelected
+                            ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold shadow-sm'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div>
+                          <div className="font-bold flex items-center gap-1.5">
+                            <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] border ${isSelected ? 'bg-cyan-600 border-cyan-500 text-white font-bold' : 'border-slate-700 bg-slate-950'}`}>
+                              {isSelected ? '✓' : ''}
+                            </span>
+                            <span>{m.label}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-1">{m.desc}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

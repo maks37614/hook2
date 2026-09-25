@@ -27,6 +27,13 @@ import {
   saveUserTelegram,
   getUserTelegram,
 } from './server/alertService';
+import {
+  loadSurveillanceList,
+  saveSurveillanceList,
+  getDefaultSurveillanceConfig,
+  checkCoinSurveillance,
+  startSurveillanceMonitor,
+} from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
 
 async function startServer() {
@@ -468,6 +475,123 @@ async function startServer() {
     }
   });
 
+  // Surveillance endpoints
+  app.get('/api/surveillance', (req, res) => {
+    try {
+      const userId = (req.query.userId as string) || 'guest';
+      const list = loadSurveillanceList(userId);
+      res.json({ success: true, data: list });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/surveillance', async (req, res) => {
+    try {
+      const { symbol, baseAsset, quoteAsset, exchange, marketType, userId, config } = req.body;
+      const uid = userId || 'guest';
+      if (!symbol) {
+        return res.status(400).json({ success: false, error: 'Тікер монети не вказано' });
+      }
+      const cleanSymbol = symbol.toUpperCase().replace('/', '').trim();
+      const list = loadSurveillanceList(uid);
+
+      if (list.some((c) => c.symbol === cleanSymbol && c.exchange === (exchange || 'binance'))) {
+        return res.status(400).json({ success: false, error: 'Ця монета вже додана до нагляду' });
+      }
+
+      const defaultCfg = getDefaultSurveillanceConfig();
+      const newCoin = {
+        id: `surv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        userId: uid,
+        symbol: cleanSymbol,
+        baseAsset: baseAsset || cleanSymbol.replace('USDT', ''),
+        quoteAsset: quoteAsset || 'USDT',
+        exchange: exchange || 'binance',
+        marketType: marketType || 'futures',
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        config: { ...defaultCfg, ...(config || {}) },
+      };
+
+      const { coin: checkedCoin } = await checkCoinSurveillance(newCoin, true);
+      list.unshift(checkedCoin);
+      saveSurveillanceList(uid, list);
+
+      res.json({ success: true, coin: checkedCoin });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put('/api/surveillance/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { userId, config, isActive } = req.body;
+      const uid = userId || 'guest';
+      const list = loadSurveillanceList(uid);
+      const idx = list.findIndex((c) => c.id === id);
+
+      if (idx === -1) {
+        return res.status(404).json({ success: false, error: 'Монету не знайдено в нагляді' });
+      }
+
+      const coin = list[idx];
+      const updatedCoin = {
+        ...coin,
+        isActive: isActive !== undefined ? Boolean(isActive) : coin.isActive,
+        config: config ? { ...coin.config, ...config } : coin.config,
+        updatedAt: new Date().toISOString(),
+      };
+
+      list[idx] = updatedCoin;
+      saveSurveillanceList(uid, list);
+
+      res.json({ success: true, coin: updatedCoin });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/surveillance/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = (req.query.userId as string) || req.body?.userId || 'guest';
+      const list = loadSurveillanceList(userId);
+      const filtered = list.filter((c) => c.id !== id);
+      saveSurveillanceList(userId, filtered);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/surveillance/:id/check', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { userId, forceNotify } = req.body;
+      const uid = userId || 'guest';
+      const list = loadSurveillanceList(uid);
+      const coin = list.find((c) => c.id === id);
+
+      if (!coin) {
+        return res.status(404).json({ success: false, error: 'Монету не знайдено' });
+      }
+
+      const { coin: updated } = await checkCoinSurveillance(coin, Boolean(forceNotify));
+      const idx = list.findIndex((c) => c.id === id);
+      if (idx !== -1) {
+        list[idx] = updated;
+        saveSurveillanceList(uid, list);
+      }
+
+      res.json({ success: true, coin: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -490,8 +614,9 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Crypto Pattern Screener server running on http://0.0.0.0:${PORT}`);
-    // Start background Telegram price alerts monitor
+    // Start background Telegram price alerts monitor and surveillance monitor
     startAlertMonitor(6000);
+    startSurveillanceMonitor(6000);
   });
 }
 

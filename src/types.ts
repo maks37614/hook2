@@ -557,10 +557,13 @@ export interface MarketSentimentData {
 
 export type SurveillanceEventType = 'structure' | 'level' | 'momentum' | 'risk';
 
+export type TriggerModeType = 'bar_close' | 'realtime' | 'bar_close_15m' | 'bar_close_1h';
+
 export interface SurveillanceConfig {
   timeframe: Timeframe;
-  triggerMode: 'bar_close' | 'realtime'; // Once Per Bar Close vs Instant Realtime
-  levelsEnabled: boolean; // Senior 4H/1D levels & local 1H levels
+  triggerModes: TriggerModeType[];
+  triggerMode?: TriggerModeType; // Backward compatibility
+  levelsEnabled: boolean; // Senior 4H/1D & 15m/1H levels
   structureEnabled: boolean; // Market structure BOS/CHoCH
   momentumEnabled: boolean; // Moving Up/Down % in N bars
   momentumPct: number; // e.g. 2.5%

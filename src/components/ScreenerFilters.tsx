@@ -183,11 +183,12 @@ export const ScreenerFilters: React.FC<ScreenerFiltersProps> = ({
               className="bg-transparent border-none text-slate-200 focus:outline-none cursor-pointer"
             >
               <option value={0} className="bg-slate-900">Всі монети</option>
-              <option value={50000} className="bg-slate-900">Від $50K</option>
-              <option value={100000} className="bg-slate-900">Від $100K</option>
-              <option value={500000} className="bg-slate-900">Від $500K</option>
+              <option value={50000} className="bg-slate-900">Від $50k</option>
+              <option value={100000} className="bg-slate-900">Від $100k</option>
+              <option value={300000} className="bg-slate-900">Від $300k</option>
+              <option value={500000} className="bg-slate-900">Від $500k</option>
               <option value={1000000} className="bg-slate-900">Від $1M</option>
-              <option value={5000000} className="bg-slate-900">Від $5M</option>
+              <option value={5000000} className="bg-slate-900">Від $5M+</option>
               <option value={20000000} className="bg-slate-900">Від $20M</option>
               <option value={50000000} className="bg-slate-900">Від $50M</option>
               <option value={100000000} className="bg-slate-900">Від $100M</option>
