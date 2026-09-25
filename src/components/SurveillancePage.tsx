@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Radar,
   Eye,
@@ -28,6 +28,7 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { useSurveillance } from '../context/SurveillanceContext';
+import { getStoredPreferences, useAppPreferences } from '../utils/userPreferences';
 import {
   SurveillanceCoin,
   SurveillanceConfig,
@@ -69,8 +70,13 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     refresh,
   } = useSurveillance();
 
+  const { preferences } = useAppPreferences();
+  const prefs = getStoredPreferences();
+  const defaultEx = prefs.defaultExchange === 'all' ? 'binance' : prefs.defaultExchange;
+  const defaultMarket = prefs.defaultMarketType === 'all' ? 'futures' : prefs.defaultMarketType;
+
   const [searchQuery, setSearchQuery] = useState('');
-  const [exchangeFilter, setExchangeFilter] = useState<'all' | ExchangeId>('all');
+  const [exchangeFilter, setExchangeFilter] = useState<'all' | ExchangeId>(prefs.defaultExchange);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingCoin, setEditingCoin] = useState<SurveillanceCoin | null>(null);
   const [isCheckingMap, setIsCheckingMap] = useState<Record<string, boolean>>({});
@@ -78,13 +84,13 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
   // New coin modal state
   const [selectedSymbolInput, setSelectedSymbolInput] = useState('');
-  const [selectedExchange, setSelectedExchange] = useState<ExchangeId>('binance');
-  const [selectedMarketType, setSelectedMarketType] = useState<MarketType>('futures');
+  const [selectedExchange, setSelectedExchange] = useState<ExchangeId>(defaultEx);
+  const [selectedMarketType, setSelectedMarketType] = useState<MarketType>(defaultMarket);
   const [coinSearchTerm, setCoinSearchTerm] = useState('');
 
   // Config modal state (for add or edit)
   const [formConfig, setFormConfig] = useState<SurveillanceConfig>({
-    timeframe: '4h',
+    timeframe: prefs.defaultTimeframe,
     triggerMode: 'bar_close',
     levelsEnabled: true,
     structureEnabled: true,
@@ -96,6 +102,15 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     fibonacciEnabled: true,
     cooldownMinutes: 15,
   });
+
+  useEffect(() => {
+    setExchangeFilter(preferences.defaultExchange);
+    const ex = preferences.defaultExchange === 'all' ? 'binance' : preferences.defaultExchange;
+    const m = preferences.defaultMarketType === 'all' ? 'futures' : preferences.defaultMarketType;
+    setSelectedExchange(ex);
+    setSelectedMarketType(m);
+    setFormConfig((prev) => ({ ...prev, timeframe: preferences.defaultTimeframe }));
+  }, [preferences]);
 
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setNotificationToast({ message, type });

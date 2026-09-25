@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Layers,
-  BarChart2,
   Send,
   Zap,
   Star,
@@ -29,12 +28,11 @@ import {
   Kline,
   TerminalBlockMode,
 } from '../types';
-import { TradingViewChart } from './TradingViewChart';
 import { TerminalChartWidget } from './terminal/TerminalChartWidget';
 import { AddChartModal } from './terminal/AddChartModal';
 import { TerminalSettingsDrawer } from './terminal/TerminalSettingsDrawer';
 import { formatCryptoPrice, formatVolume } from '../utils/formatters';
-import { fetchDirectKlines } from '../utils/directExchangeClient';
+import { getStoredPreferences, useAppPreferences } from '../utils/userPreferences';
 
 interface TerminalPageProps {
   coins: ScannedCoin[];
@@ -69,30 +67,34 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
   onOpenFullscreenModal,
   onReturnToPatterns,
 }) => {
-  // Initialize blocks from localStorage or default to BTCUSDT
+  const { preferences } = useAppPreferences();
+
+  // Initialize blocks from localStorage or default to BTCUSDT with preferences
   const [blocks, setBlocks] = useState<TerminalChartBlock[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_BLOCKS_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map((b: any) => ({ ...b, mode: 'tradingview' as const }));
         }
       }
     } catch (e) {
       console.error('Failed to load saved terminal blocks:', e);
     }
-    // Default initial chart: BTCUSDT
+    const prefs = getStoredPreferences();
+    const defaultEx = prefs.defaultExchange === 'all' ? 'binance' : prefs.defaultExchange;
+    const defaultMarket = prefs.defaultMarketType === 'all' ? 'futures' : prefs.defaultMarketType;
     return [
       {
         id: 'block-btc-default',
         symbol: 'BTCUSDT',
         baseAsset: 'BTC',
         quoteAsset: 'USDT',
-        exchange: 'binance',
-        marketType: 'futures',
-        timeframe: '15m',
-        mode: 'pattern',
+        exchange: defaultEx,
+        marketType: defaultMarket,
+        timeframe: prefs.defaultTimeframe,
+        mode: 'tradingview',
         colSpan: 1,
       },
     ];
@@ -144,8 +146,11 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
     }
   }, [coins, blocks]);
 
-  const [activeMode, setActiveMode] = useState<'tradingview' | 'pattern'>('pattern');
-  const [timeframe, setTimeframe] = useState<Timeframe>('15m');
+  const [timeframe, setTimeframe] = useState<Timeframe>(() => getStoredPreferences().defaultTimeframe);
+
+  useEffect(() => {
+    setTimeframe(preferences.defaultTimeframe);
+  }, [preferences.defaultTimeframe]);
   const [isFavoritesDrawerOpen, setIsFavoritesDrawerOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showDrawingToolbar, setShowDrawingToolbar] = useState<boolean>(() => {
@@ -157,8 +162,6 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
     }
   });
   const [iframeLoading, setIframeLoading] = useState<boolean>(true);
-  const [klines, setKlines] = useState<Kline[]>([]);
-  const [isLoadingKlines, setIsLoadingKlines] = useState<boolean>(false);
 
   // Modal / Drawer state for multi-chart mode
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -305,59 +308,12 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
           exchange: favCoin.exchange,
           marketType: favCoin.marketType,
           timeframe,
-          mode: activeMode,
+          mode: 'tradingview',
           colSpan: 1,
         },
       ]);
     }
   };
-
-  // Fetch klines for Pattern mode
-  useEffect(() => {
-    if (activeMode !== 'pattern') return;
-
-    let isMounted = true;
-    setIsLoadingKlines(true);
-
-    const endpoint = `/api/klines?symbol=${activeCoin.symbol}&timeframe=${timeframe}&interval=${timeframe}&exchange=${activeCoin.exchange}&limit=500&market=${activeCoin.marketType}&marketType=${activeCoin.marketType}`;
-
-    fetch(endpoint)
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to load klines from server');
-        return res.json();
-      })
-      .then((data) => {
-        if (!isMounted) return;
-        if (data && data.success && Array.isArray(data.data) && data.data.length > 0) {
-          setKlines(data.data);
-        } else {
-          // Direct fallback
-          fetchDirectKlines(activeCoin.exchange, activeCoin.marketType, activeCoin.symbol, timeframe, 500)
-            .then((directKlines) => {
-              if (isMounted && directKlines.length > 0) {
-                setKlines(directKlines);
-              }
-            });
-        }
-      })
-      .catch((err) => {
-        console.warn('Backend klines failed, loading directly from exchange:', err);
-        fetchDirectKlines(activeCoin.exchange, activeCoin.marketType, activeCoin.symbol, timeframe, 500)
-          .then((directKlines) => {
-            if (isMounted && directKlines.length > 0) {
-              setKlines(directKlines);
-            }
-          })
-          .catch((e) => console.error('Direct klines error:', e));
-      })
-      .finally(() => {
-        if (isMounted) setIsLoadingKlines(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [activeCoin.symbol, activeCoin.exchange, activeCoin.marketType, timeframe, activeMode]);
 
   // Build TradingView Embed URL
   const tradingViewUrl = useMemo(() => {
@@ -677,36 +633,8 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
 
         </div>
 
-        {/* Center: Mode Switcher, Timeframe Selector, Layout Presets */}
+        {/* Center: Timeframe Selector & Layout Presets */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Mode Switcher: TradingView Pro vs Pattern Geometry */}
-          <div className="flex items-center bg-slate-900 p-0.5 rounded-xl border border-slate-800 text-xs">
-            <button
-              onClick={() => setActiveMode('tradingview')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
-                activeMode === 'tradingview'
-                  ? 'bg-cyan-600 text-white font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="TradingView Pro з усіма технічними індикаторами, лініями тренду та малюванням"
-              aria-label="TradingView"
-            >
-              <Layers className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              onClick={() => setActiveMode('pattern')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
-                activeMode === 'pattern'
-                  ? 'bg-cyan-600 text-white font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Графік з розрахованими рівнями входу, TP/SL та живою сіткою патерну"
-              aria-label="Аналіз патерну"
-            >
-              <BarChart2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
 
           {/* Timeframe selector */}
           <div className="flex items-center bg-slate-900 p-0.5 rounded-xl border border-slate-800 text-xs font-mono">
@@ -1027,73 +955,47 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
 
         {/* Workspace Display: If 1 block or maximized block, show full single chart. If multiple blocks, show multi-chart grid */}
         {blocks.length <= 1 ? (
-          /* Single Screen 100% View (Matching FullscreenChartModal) */
-          activeMode === 'tradingview' ? (
-            <div className="w-full h-full relative overflow-hidden">
-              {iframeLoading && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3 z-10 pointer-events-none">
-                  <RefreshCw className="w-8 h-8 animate-spin text-cyan-400" />
-                  <span className="text-sm font-medium">Завантаження графіку {activeCoin.symbol}...</span>
-                </div>
-              )}
-              <div
-                className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
-                  showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
-                }`}
-              >
-                <iframe
-                  key={tradingViewUrl}
-                  src={tradingViewUrl}
-                  className="h-full w-full border-0"
-                  title={`TradingView Chart ${activeCoin.symbol}`}
-                  onLoad={() => setIframeLoading(false)}
-                  allow="fullscreen"
-                  loading="lazy"
-                />
+          /* Single Screen 100% View TradingView Pro */
+          <div className="w-full h-full relative overflow-hidden">
+            {iframeLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3 z-10 pointer-events-none">
+                <RefreshCw className="w-8 h-8 animate-spin text-cyan-400" />
+                <span className="text-sm font-medium">Завантаження графіку {activeCoin.symbol}...</span>
               </div>
-              <div
-                className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-[54px] bg-transparent transition-transform duration-200 ${
-                  showDrawingToolbar ? '-translate-x-full' : 'translate-x-0'
-                }`}
-                aria-hidden={showDrawingToolbar}
+            )}
+            <div
+              className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
+                showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
+              }`}
+            >
+              <iframe
+                key={tradingViewUrl}
+                src={tradingViewUrl}
+                className="h-full w-full border-0"
+                title={`TradingView Chart ${activeCoin.symbol}`}
+                onLoad={() => setIframeLoading(false)}
+                allow="fullscreen"
+                loading="lazy"
               />
-              <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleToggleDrawingToolbar}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow-md backdrop-blur-sm transition-all cursor-pointer group"
-                  title={showDrawingToolbar ? 'Сховати панель TradingView' : 'Показати панель TradingView'}
-                  aria-label={showDrawingToolbar ? 'Сховати панель TradingView' : 'Показати панель TradingView'}
-                >
-                  {showDrawingToolbar ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
-                </button>
-              </div>
             </div>
-          ) : (
-            <div className="w-full h-full flex flex-col p-2 sm:p-4 overflow-hidden">
-              {isLoadingKlines ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-400 gap-3">
-                  <RefreshCw className="w-8 h-8 animate-spin text-cyan-400" />
-                  <span className="text-sm">Завантаження свічок {activeCoin.symbol}...</span>
-                </div>
-              ) : (
-                <TradingViewChart
-                  klines={klines}
-                  formation={null}
-                  symbol={activeCoin.symbol}
-                  timeframe={timeframe}
-                  exchange={activeCoin.exchange}
-                  marketType={activeCoin.marketType}
-                  historyLimit={1000}
-                  fullHeight={true}
-                  onTimeframeChange={handleTimeframeSelect}
-                  onLivePriceUpdate={(price) =>
-                    setActiveCoin((prev) => (prev.currentPrice !== price ? { ...prev, currentPrice: price } : prev))
-                  }
-                />
-              )}
+            <div
+              className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-[54px] bg-transparent transition-transform duration-200 ${
+                showDrawingToolbar ? '-translate-x-full' : 'translate-x-0'
+              }`}
+              aria-hidden={showDrawingToolbar}
+            />
+            <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleToggleDrawingToolbar}
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow-md backdrop-blur-sm transition-all cursor-pointer group"
+                title={showDrawingToolbar ? 'Сховати панель TradingView' : 'Показати панель TradingView'}
+                aria-label={showDrawingToolbar ? 'Сховати панель TradingView' : 'Показати панель TradingView'}
+              >
+                {showDrawingToolbar ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+              </button>
             </div>
-          )
+          </div>
         ) : (
           /* Multi-chart Grid Layout */
           <div className="w-full h-full p-2 sm:p-3 overflow-y-auto no-scrollbar">

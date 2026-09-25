@@ -22,6 +22,7 @@ import { useAuth } from '../context/AuthContext';
 import { useAlerts } from '../context/AlertsContext';
 import { useArchive } from '../context/ArchiveContext';
 import { ExchangeId, MarketType, Timeframe } from '../types';
+import { saveStoredPreferences } from '../utils/userPreferences';
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -82,6 +83,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         displayName: displayName.trim() || user.email?.split('@')[0] || 'Користувач',
         telegramBotToken: telegramBotToken.trim(),
         telegramChatId: telegramChatId.trim(),
+        defaultExchange,
+        defaultMarketType,
+        defaultTimeframe,
+        soundAlertsEnabled,
+      });
+
+      saveStoredPreferences({
         defaultExchange,
         defaultMarketType,
         defaultTimeframe,
@@ -460,9 +468,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
             {/* Section 3: User Default Preferences */}
             <div className="space-y-3">
-              <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Sliders className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Індивідуальні налаштування інтерфейсу</span>
+              <div className="flex flex-col gap-0.5">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Sliders className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Індивідуальні налаштування інтерфейсу</span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Застосовуються на всіх сторінках сайту як значення за замовчуванням та зберігаються у профілі
+                </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

@@ -31,8 +31,6 @@ import {
   Kline,
 } from '../../types';
 import { formatCryptoPrice, formatVolume } from '../../utils/formatters';
-import { TradingViewChart } from '../TradingViewChart';
-import { fetchDirectKlines } from '../../utils/directExchangeClient';
 
 interface TerminalChartWidgetProps {
   block: TerminalChartBlock;
@@ -97,8 +95,6 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
   }, []);
 
   // Klines for Pattern mode
-  const [klines, setKlines] = useState<Kline[]>([]);
-  const [loadingKlines, setLoadingKlines] = useState(false);
   const [livePrice, setLivePrice] = useState<number>(coin?.currentPrice || 0);
 
   // Update livePrice when coin prop changes
@@ -117,52 +113,6 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
     }
     return coin.formations[0];
   }, [coin?.formations, block.formationId]);
-
-  // Load Klines if pattern mode is active
-  useEffect(() => {
-    if (block.mode !== 'pattern') return;
-
-    let isMounted = true;
-    const loadKlines = async () => {
-      setLoadingKlines(true);
-      let loaded = false;
-      try {
-        const res = await fetch(
-          `/api/klines?exchange=${block.exchange}&market=${block.marketType}&symbol=${block.symbol}&timeframe=${block.timeframe}&limit=300`
-        );
-        const json = await res.json();
-        if (isMounted && json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setKlines(json.data);
-          const lastClose = json.data[json.data.length - 1].close;
-          setLivePrice(lastClose);
-          loaded = true;
-        }
-      } catch (err) {
-        console.warn('Backend klines failed for block, falling back to direct exchange:', block.symbol);
-      }
-
-      if (!loaded) {
-        try {
-          const direct = await fetchDirectKlines(block.exchange, block.marketType, block.symbol, block.timeframe, 300);
-          if (isMounted && direct.length > 0) {
-            setKlines(direct);
-            const lastClose = direct[direct.length - 1].close;
-            setLivePrice(lastClose);
-            loaded = true;
-          }
-        } catch (directErr) {
-          console.error('Direct klines failed:', directErr);
-        }
-      }
-
-      if (isMounted) setLoadingKlines(false);
-    };
-
-    loadKlines();
-    return () => {
-      isMounted = false;
-    };
-  }, [block.symbol, block.timeframe, block.exchange, block.marketType, block.mode]);
 
   // Construct TradingView Embed URL
   const tradingViewUrl = useMemo(() => {
@@ -503,20 +453,18 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
           )}
 
           {/* Toggle Drawing Toolbar button */}
-          {block.mode === 'tradingview' && (
-            <button
-              onClick={handleToggleToolbar}
-              className={`p-1 rounded transition-colors ${
-                showDrawingToolbar
-                  ? 'text-cyan-400 bg-cyan-950/50 hover:bg-cyan-900/50'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-              title={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
-              aria-label={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
-            >
-              {showDrawingToolbar ? <PanelLeftClose className="w-3 h-3" /> : <PanelLeftOpen className="w-3 h-3" />}
-            </button>
-          )}
+          <button
+            onClick={handleToggleToolbar}
+            className={`p-1 rounded transition-colors ${
+              showDrawingToolbar
+                ? 'text-cyan-400 bg-cyan-950/50 hover:bg-cyan-900/50'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+            title={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
+            aria-label={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
+          >
+            {showDrawingToolbar ? <PanelLeftClose className="w-3 h-3" /> : <PanelLeftOpen className="w-3 h-3" />}
+          </button>
 
           {/* Fullscreen Modal trigger (open full analysis) */}
           {coin && onOpenFullscreenModal && (
@@ -557,60 +505,37 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
 
       {/* Main Chart Body */}
       <div className="flex-1 w-full relative bg-[#090d16] overflow-hidden">
-        {block.mode === 'tradingview' ? (
-          <>
-            <div
-              className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
-                showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
-              }`}
-            >
-              <iframe
-                key={`tv-${block.symbol}-${block.exchange}-${block.marketType}-${block.timeframe}`}
-                src={tradingViewUrl}
-                className="w-full h-full border-0"
-                title={`${block.symbol} TradingView Chart`}
-                loading="lazy"
-                allowFullScreen
-              />
-            </div>
+        <div
+          className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
+            showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
+          }`}
+        >
+          <iframe
+            key={`tv-${block.symbol}-${block.exchange}-${block.marketType}-${block.timeframe}`}
+            src={tradingViewUrl}
+            className="w-full h-full border-0"
+            title={`${block.symbol} TradingView Chart`}
+            loading="lazy"
+            allowFullScreen
+          />
+        </div>
 
-            {/* Quick floating toggle button on the chart itself */}
-            <div className="absolute bottom-2 left-2 z-20 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={handleToggleToolbar}
-                className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow-md backdrop-blur-sm transition-all cursor-pointer group"
-                title={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
-                aria-label={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
-              >
-                {showDrawingToolbar ? (
-                  <PanelLeftClose className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
-                ) : (
-                  <PanelLeftOpen className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
-                )}
-              </button>
-            </div>
-          </>
-        ) : loadingKlines ? (
-          <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 gap-2 bg-[#090d16]">
-            <RefreshCw className="w-5 h-5 animate-spin text-cyan-400" />
-            <span className="text-xs">Завантаження свічок...</span>
-          </div>
-        ) : (
-          <div className="w-full h-full absolute inset-0">
-            <TradingViewChart
-              klines={klines}
-              formation={null}
-              symbol={block.symbol}
-              timeframe={block.timeframe}
-              exchange={block.exchange}
-              marketType={block.marketType}
-              onLivePriceUpdate={setLivePrice}
-              fullHeight={true}
-              showNavigationControls={false}
-            />
-          </div>
-        )}
+        {/* Quick floating toggle button on the chart itself */}
+        <div className="absolute bottom-2 left-2 z-20 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleToggleToolbar}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow-md backdrop-blur-sm transition-all cursor-pointer group"
+            title={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
+            aria-label={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
+          >
+            {showDrawingToolbar ? (
+              <PanelLeftClose className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
+            ) : (
+              <PanelLeftOpen className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Bottom status strip */}

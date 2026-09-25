@@ -15,6 +15,7 @@ import { UserProfile } from '../types';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { cleanForFirestore } from '../lib/firestoreUtils';
 import { verifyAccessCode, normalizeAccessCode } from '../utils/accessCodes';
+import { getStoredPreferences, saveStoredPreferences } from '../utils/userPreferences';
 
 function getLocalUserId(email: string): string {
   let hash = 0;
@@ -61,22 +62,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const snap = await getDoc(userDocRef);
       if (!snap.exists()) {
+        const storedPrefs = getStoredPreferences();
         const newProfile: UserProfile = {
           uid: firebaseUser.uid,
           email: firebaseUser.email || '',
           displayName: firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Користувач'),
           photoURL: firebaseUser.photoURL || '',
-          soundAlertsEnabled: true,
-          defaultExchange: 'all',
-          defaultMarketType: 'all',
-          defaultTimeframe: '1h',
+          soundAlertsEnabled: storedPrefs.soundAlertsEnabled,
+          defaultExchange: storedPrefs.defaultExchange,
+          defaultMarketType: storedPrefs.defaultMarketType,
+          defaultTimeframe: storedPrefs.defaultTimeframe,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
         await setDoc(userDocRef, cleanForFirestore(newProfile));
         setProfile(newProfile);
       } else {
-        setProfile(snap.data() as UserProfile);
+        const loadedProfile = snap.data() as UserProfile;
+        setProfile(loadedProfile);
+        // Sync Firestore profile defaults into website-wide storage
+        if (loadedProfile) {
+          saveStoredPreferences({
+            ...(loadedProfile.defaultExchange ? { defaultExchange: loadedProfile.defaultExchange } : {}),
+            ...(loadedProfile.defaultMarketType ? { defaultMarketType: loadedProfile.defaultMarketType } : {}),
+            ...(loadedProfile.defaultTimeframe ? { defaultTimeframe: loadedProfile.defaultTimeframe } : {}),
+            ...(loadedProfile.soundAlertsEnabled !== undefined ? { soundAlertsEnabled: loadedProfile.soundAlertsEnabled } : {}),
+          });
+        }
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, `users/${firebaseUser.uid}`);
@@ -117,7 +129,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           userDocRef,
           (docSnap) => {
             if (docSnap.exists()) {
-              setProfile(docSnap.data() as UserProfile);
+              const updatedData = docSnap.data() as UserProfile;
+              setProfile(updatedData);
+              if (updatedData) {
+                saveStoredPreferences({
+                  ...(updatedData.defaultExchange ? { defaultExchange: updatedData.defaultExchange } : {}),
+                  ...(updatedData.defaultMarketType ? { defaultMarketType: updatedData.defaultMarketType } : {}),
+                  ...(updatedData.defaultTimeframe ? { defaultTimeframe: updatedData.defaultTimeframe } : {}),
+                  ...(updatedData.soundAlertsEnabled !== undefined ? { soundAlertsEnabled: updatedData.soundAlertsEnabled } : {}),
+                });
+              }
             }
           },
           (error) => {
@@ -447,6 +468,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...updates,
       updatedAt: new Date().toISOString(),
     };
+
+    if (
+      updates.defaultExchange !== undefined ||
+      updates.defaultMarketType !== undefined ||
+      updates.defaultTimeframe !== undefined ||
+      updates.soundAlertsEnabled !== undefined
+    ) {
+      saveStoredPreferences({
+        ...(updates.defaultExchange ? { defaultExchange: updates.defaultExchange } : {}),
+        ...(updates.defaultMarketType ? { defaultMarketType: updates.defaultMarketType } : {}),
+        ...(updates.defaultTimeframe ? { defaultTimeframe: updates.defaultTimeframe } : {}),
+        ...(updates.soundAlertsEnabled !== undefined ? { soundAlertsEnabled: updates.soundAlertsEnabled } : {}),
+      });
+    }
 
     if (isLocalUser) {
       try {

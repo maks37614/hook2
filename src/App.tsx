@@ -44,6 +44,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { AUTHOR_TELEGRAM_CHANNEL_URL, AUTHOR_TELEGRAM_USERNAME } from './utils/accessCodes';
+import { getStoredPreferences, useAppPreferences } from './utils/userPreferences';
 
 const DEFAULT_FILTERS: ScreenerFilterState = {
   exchange: 'binance',
@@ -59,11 +60,29 @@ const DEFAULT_FILTERS: ScreenerFilterState = {
 };
 
 export default function App() {
+  const { preferences } = useAppPreferences();
   const [coins, setCoins] = useState<ScannedCoin[]>(() => getFallbackScannedCoins());
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<ScreenerFilterState>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<ScreenerFilterState>(() => {
+    const prefs = getStoredPreferences();
+    return {
+      ...DEFAULT_FILTERS,
+      exchange: prefs.defaultExchange,
+      marketType: prefs.defaultMarketType,
+      timeframe: prefs.defaultTimeframe,
+    };
+  });
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+
+  useEffect(() => {
+    setFilters((prev) => ({
+      ...prev,
+      exchange: preferences.defaultExchange,
+      marketType: preferences.defaultMarketType,
+      timeframe: preferences.defaultTimeframe,
+    }));
+  }, [preferences.defaultExchange, preferences.defaultMarketType, preferences.defaultTimeframe]);
 
   // Active Category: 'patterns' | 'screener' | 'terminal' | 'surveillance'
   const [activePage, setActivePage] = useState<ActivePageType>(() => {
@@ -169,12 +188,13 @@ export default function App() {
 
   // Sound enabled
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('crypto_screener_sound') === 'true';
-    } catch {
-      return false;
-    }
+    const prefs = getStoredPreferences();
+    return prefs.soundAlertsEnabled;
   });
+
+  useEffect(() => {
+    setSoundEnabled(preferences.soundAlertsEnabled);
+  }, [preferences.soundAlertsEnabled]);
 
   const [selectedPair, setSelectedPair] = useState<{
     coin: ScannedCoin;

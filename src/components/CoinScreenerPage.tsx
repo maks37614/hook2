@@ -36,6 +36,7 @@ import {
   DetectedFormation,
 } from '../types';
 import { formatCryptoPrice, formatVolume, formatPercent } from '../utils/formatters';
+import { getStoredPreferences, useAppPreferences } from '../utils/userPreferences';
 import { MarketSentimentWidget } from './MarketSentimentWidget';
 import {
   fetchDirectBinanceTickers,
@@ -89,11 +90,18 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
+  const { preferences } = useAppPreferences();
+
   // Search & Filter state
   const [presetFilter, setPresetFilter] = useState<ScreenerPresetFilter>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [exchange, setExchange] = useState<'all' | ExchangeId>('binance');
-  const [marketType, setMarketType] = useState<'all' | MarketType>('futures');
+  const [exchange, setExchange] = useState<'all' | ExchangeId>(() => getStoredPreferences().defaultExchange);
+  const [marketType, setMarketType] = useState<'all' | MarketType>(() => getStoredPreferences().defaultMarketType);
+
+  useEffect(() => {
+    setExchange(preferences.defaultExchange);
+    setMarketType(preferences.defaultMarketType);
+  }, [preferences.defaultExchange, preferences.defaultMarketType]);
   const [minVolumeUsd, setMinVolumeUsd] = useState<number>(0);
   const [sortBy, setSortBy] = useState<ScreenerSortBy>('volume');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');

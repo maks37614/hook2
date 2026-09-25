@@ -259,32 +259,6 @@ export const AddChartModal: React.FC<AddChartModalProps> = ({
                 ))}
               </div>
             </div>
-
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400 text-[11px]">Тип:</span>
-              <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-[11px]">
-                <button
-                  onClick={() => setSelectedMode('tradingview')}
-                  className={`px-2 py-0.5 rounded transition-colors ${
-                    selectedMode === 'tradingview'
-                      ? 'bg-cyan-600 text-white font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  TradingView Pro
-                </button>
-                <button
-                  onClick={() => setSelectedMode('pattern')}
-                  className={`px-2 py-0.5 rounded transition-colors ${
-                    selectedMode === 'pattern'
-                      ? 'bg-cyan-600 text-white font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  Патерн-аналіз
-                </button>
-              </div>
-            </div>
           </div>
 
           <div className="flex items-center justify-end">
