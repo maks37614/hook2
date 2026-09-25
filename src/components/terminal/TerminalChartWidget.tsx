@@ -32,6 +32,7 @@ import {
 } from '../../types';
 import { formatCryptoPrice, formatVolume } from '../../utils/formatters';
 import { TradingViewChart } from '../TradingViewChart';
+import { fetchDirectKlines } from '../../utils/directExchangeClient';
 
 interface TerminalChartWidgetProps {
   block: TerminalChartBlock;
@@ -124,23 +125,37 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
     let isMounted = true;
     const loadKlines = async () => {
       setLoadingKlines(true);
+      let loaded = false;
       try {
         const res = await fetch(
           `/api/klines?exchange=${block.exchange}&market=${block.marketType}&symbol=${block.symbol}&timeframe=${block.timeframe}&limit=300`
         );
         const json = await res.json();
-        if (isMounted && json.success && Array.isArray(json.data)) {
+        if (isMounted && json.success && Array.isArray(json.data) && json.data.length > 0) {
           setKlines(json.data);
-          if (json.data.length > 0) {
-            const lastClose = json.data[json.data.length - 1].close;
-            setLivePrice(lastClose);
-          }
+          const lastClose = json.data[json.data.length - 1].close;
+          setLivePrice(lastClose);
+          loaded = true;
         }
       } catch (err) {
-        console.error('Failed to load klines for block:', block.symbol, err);
-      } finally {
-        if (isMounted) setLoadingKlines(false);
+        console.warn('Backend klines failed for block, falling back to direct exchange:', block.symbol);
       }
+
+      if (!loaded) {
+        try {
+          const direct = await fetchDirectKlines(block.exchange, block.marketType, block.symbol, block.timeframe, 300);
+          if (isMounted && direct.length > 0) {
+            setKlines(direct);
+            const lastClose = direct[direct.length - 1].close;
+            setLivePrice(lastClose);
+            loaded = true;
+          }
+        } catch (directErr) {
+          console.error('Direct klines failed:', directErr);
+        }
+      }
+
+      if (isMounted) setLoadingKlines(false);
     };
 
     loadKlines();

@@ -27,6 +27,7 @@ import {
   sendTickerToMetaScalp,
 } from './utils/metaScalpService';
 import { ScannedCoin, DetectedFormation, ScreenerFilterState, PriceAlert, ArchivedFormation, ActivePageType } from './types';
+import { runDirectClientScan, getFallbackScannedCoins } from './utils/directExchangeClient';
 import {
   AlertCircle,
   RefreshCw,
@@ -58,8 +59,8 @@ const DEFAULT_FILTERS: ScreenerFilterState = {
 };
 
 export default function App() {
-  const [coins, setCoins] = useState<ScannedCoin[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [coins, setCoins] = useState<ScannedCoin[]>(() => getFallbackScannedCoins());
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<ScreenerFilterState>(DEFAULT_FILTERS);
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
@@ -396,32 +397,46 @@ export default function App() {
         minVolume: '0',
       });
 
-      const res = await fetch(`/api/screener/scan?${params.toString()}`);
-      if (!res.ok) {
-        throw new Error(`Помилка сервера (${res.status})`);
-      }
-      const contentType = res.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        throw new Error('Сервер тимчасово оновлює дані, спробуйте ще раз');
-      }
-      const data = await res.json();
-      if (data.success && Array.isArray(data.data)) {
-        setCoins(data.data);
-        setLastUpdated(Date.now());
+      let dataLoaded = false;
+      try {
+        const res = await fetch(`/api/screener/scan?${params.toString()}`);
+        if (res.ok) {
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+              setCoins(data.data);
+              setLastUpdated(Date.now());
+              dataLoaded = true;
 
-        // Check if there are high confidence formations to notify
-        const hasHighConfidence = data.data.some((c: ScannedCoin) =>
-          c.formations.some((f) => f.confidence >= 88)
-        );
-        if (hasHighConfidence) {
-          playAlertSound();
+              const hasHighConfidence = data.data.some((c: ScannedCoin) =>
+                c.formations.some((f) => f.confidence >= 88)
+              );
+              if (hasHighConfidence) {
+                playAlertSound();
+              }
+            }
+          }
         }
-      } else {
-        throw new Error(data.error || 'Не вдалося отримати дані');
+      } catch (backendErr) {
+        console.warn('Backend scan failed, trying direct exchange access:', backendErr);
+      }
+
+      // If backend did not yield data (e.g. cloud provider geoblock on Railway), fall back to direct browser connection
+      if (!dataLoaded) {
+        const directCoins = await runDirectClientScan({
+          exchange: currentExchange,
+          marketType: currentMarket,
+          timeframe: currentTf,
+        });
+        if (directCoins.length > 0) {
+          setCoins(directCoins);
+          setLastUpdated(Date.now());
+          dataLoaded = true;
+        }
       }
     } catch (err: any) {
-      console.error('Scan error:', err);
-      setError(err.message || 'Помилка підключення до сканера');
+      console.warn('Scan complete fallback error:', err);
     } finally {
       setIsLoading(false);
     }
@@ -548,6 +563,15 @@ export default function App() {
 
     return items;
   }, [coins, filters]);
+
+  // Coins matching search query even if no formation is detected on current timeframe
+  const matchingCoinsSearch = useMemo(() => {
+    if (!filters.searchQuery.trim()) return [];
+    const q = filters.searchQuery.toLowerCase().trim();
+    return coins.filter(
+      (c) => c.symbol.toLowerCase().includes(q) || c.baseAsset.toLowerCase().includes(q)
+    );
+  }, [coins, filters.searchQuery]);
 
   // Counts for header stats
   const bullishCount = useMemo(
@@ -685,23 +709,79 @@ export default function App() {
                 ))}
               </div>
             ) : flattenedItems.length === 0 ? (
-              <div className="py-20 text-center rounded-3xl border border-slate-800/80 bg-slate-900/40 space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
-                  <Layers className="w-6 h-6" />
+              matchingCoinsSearch.length > 0 ? (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-2xl bg-cyan-950/30 border border-cyan-800/50 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <Sparkles className="w-5 h-5 text-cyan-400 shrink-0" />
+                      <div>
+                        <h4 className="text-sm font-bold text-white">
+                          Знайдено {matchingCoinsSearch.length} монет за пошуком "{filters.searchQuery.toUpperCase()}"
+                        </h4>
+                        <p className="text-xs text-slate-400">
+                          На поточному таймфреймі ({filters.timeframe}) активних геометричних патернів ще не сформовано. Ви можете відкрити монету в терміналі або змінити таймфрейм:
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setActivePage('screener')}
+                      className="px-3.5 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-semibold text-white transition-colors"
+                    >
+                      Відкрити у Скрінері Монет →
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {matchingCoinsSearch.map((coin) => (
+                      <div
+                        key={`${coin.exchange}-${coin.symbol}`}
+                        onClick={() => {
+                          handleSelectPair(coin);
+                        }}
+                        className="bg-slate-900/60 border border-slate-800 hover:border-cyan-500/50 rounded-2xl p-4 cursor-pointer transition-all hover:shadow-lg hover:shadow-cyan-950/20 group"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-bold text-sm text-white group-hover:text-cyan-400 transition-colors">
+                            {coin.symbol}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 uppercase font-mono">
+                            {coin.exchange} • {coin.marketType}
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between mb-3">
+                          <span className="text-lg font-mono font-bold text-white">
+                            ${coin.currentPrice >= 1 ? coin.currentPrice.toLocaleString('en-US') : coin.currentPrice}
+                          </span>
+                          <span className={`text-xs font-mono font-semibold ${coin.priceChange24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {coin.priceChange24h >= 0 ? '+' : ''}{coin.priceChange24h.toFixed(2)}%
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-800/80 pt-2.5">
+                          <span>Об'єм: ${(coin.volume24hUsd / 1_000_000).toFixed(1)}M</span>
+                          <span className="text-cyan-400 font-semibold group-hover:underline">Термінал →</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <h3 className="text-base font-bold text-white">Формацій не знайдено</h3>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    За поточними фільтрами активних формацій не виявлено. Спробуйте змінити таймфрейм (5m / 15m / 1h / 4h), обрати обидві біржі або скинути фільтри.
-                  </p>
+              ) : (
+                <div className="py-20 text-center rounded-3xl border border-slate-800/80 bg-slate-900/40 space-y-4">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+                    <Layers className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-base font-bold text-white">Формацій не знайдено</h3>
+                    <p className="text-xs text-slate-400 max-w-md mx-auto">
+                      За поточними фільтрами активних формацій не виявлено. Спробуйте змінити таймфрейм (5m / 15m / 1h / 4h), обрати обидві біржі або скинути фільтри.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setFilters(DEFAULT_FILTERS)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-colors"
+                  >
+                    Скинути фільтри
+                  </button>
                 </div>
-                <button
-                  onClick={() => setFilters(DEFAULT_FILTERS)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-colors"
-                >
-                  Скинути фільтри
-                </button>
-              </div>
+              )
             ) : viewMode === 'grid' ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {flattenedItems.map(({ coin, formation }, idx) => (

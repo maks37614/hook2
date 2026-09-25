@@ -34,6 +34,7 @@ import { TerminalChartWidget } from './terminal/TerminalChartWidget';
 import { AddChartModal } from './terminal/AddChartModal';
 import { TerminalSettingsDrawer } from './terminal/TerminalSettingsDrawer';
 import { formatCryptoPrice, formatVolume } from '../utils/formatters';
+import { fetchDirectKlines } from '../utils/directExchangeClient';
 
 interface TerminalPageProps {
   coins: ScannedCoin[];
@@ -322,21 +323,32 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
 
     fetch(endpoint)
       .then((res) => {
-        if (!res.ok) throw new Error('Failed to load klines');
+        if (!res.ok) throw new Error('Failed to load klines from server');
         return res.json();
       })
       .then((data) => {
         if (!isMounted) return;
-        if (data && data.success && Array.isArray(data.data)) {
+        if (data && data.success && Array.isArray(data.data) && data.data.length > 0) {
           setKlines(data.data);
-        } else if (Array.isArray(data)) {
-          setKlines(data);
-        } else if (data && data.klines && Array.isArray(data.klines)) {
-          setKlines(data.klines);
+        } else {
+          // Direct fallback
+          fetchDirectKlines(activeCoin.exchange, activeCoin.marketType, activeCoin.symbol, timeframe, 500)
+            .then((directKlines) => {
+              if (isMounted && directKlines.length > 0) {
+                setKlines(directKlines);
+              }
+            });
         }
       })
       .catch((err) => {
-        console.error('Error loading klines:', err);
+        console.warn('Backend klines failed, loading directly from exchange:', err);
+        fetchDirectKlines(activeCoin.exchange, activeCoin.marketType, activeCoin.symbol, timeframe, 500)
+          .then((directKlines) => {
+            if (isMounted && directKlines.length > 0) {
+              setKlines(directKlines);
+            }
+          })
+          .catch((e) => console.error('Direct klines error:', e));
       })
       .finally(() => {
         if (isMounted) setIsLoadingKlines(false);

@@ -459,61 +459,81 @@ function escapeHtml(str: string): string {
 // Fetch single ticker price from exchange with robust cross-exchange fallbacks
 async function fetchCurrentPrice(exchange: ExchangeId, market: MarketType, symbol: string): Promise<number | null> {
   const cleanSymbol = symbol.toUpperCase().replace('/', '').trim();
-  
-  // 1. Try primary request
-  try {
-    if (exchange === 'binance') {
-      const url = market === 'futures'
-        ? `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${cleanSymbol}`
-        : `https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`;
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+  };
 
-      const res = await fetch(url, { headers: { 'User-Agent': 'CryptoPatternScreener/1.0' }, signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        const data = await res.json();
-        const p = parseFloat(data.price);
-        if (!isNaN(p) && p > 0) return p;
-      }
-    } else {
-      // Bybit
-      const category = market === 'futures' ? 'linear' : 'spot';
-      const url = `https://api.bybit.com/v5/market/tickers?category=${category}&symbol=${cleanSymbol}`;
+  const binanceMirrors = market === 'futures'
+    ? [
+        `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${cleanSymbol}`,
+        `https://data-api.binance.vision/api/v3/ticker/price?symbol=${cleanSymbol}`,
+        `https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
+        `https://api1.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
+      ]
+    : [
+        `https://data-api.binance.vision/api/v3/ticker/price?symbol=${cleanSymbol}`,
+        `https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
+        `https://api1.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
+      ];
 
-      const res = await fetch(url, { headers: { 'User-Agent': 'CryptoPatternScreener/1.0' }, signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        const data = await res.json();
-        const list = data?.result?.list;
-        if (Array.isArray(list) && list.length > 0 && list[0].lastPrice) {
-          const p = parseFloat(list[0].lastPrice);
+  const bybitCategory = market === 'futures' ? 'linear' : 'spot';
+  const bybitMirrors = [
+    `https://api.bybit.com/v5/market/tickers?category=${bybitCategory}&symbol=${cleanSymbol}`,
+    `https://api.bytick.com/v5/market/tickers?category=${bybitCategory}&symbol=${cleanSymbol}`,
+  ];
+
+  if (exchange === 'binance') {
+    for (const url of binanceMirrors) {
+      try {
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3500) });
+        if (res.ok) {
+          const data = await res.json();
+          const p = parseFloat(data.price);
           if (!isNaN(p) && p > 0) return p;
         }
-      }
+      } catch {}
     }
-  } catch (err) {
-    // Primary failed, proceed to fallback
-  }
-
-  // 2. Try secondary exchange / alternate market fallback
-  try {
-    if (exchange === 'binance') {
-      const bybitRes = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${cleanSymbol}`, { signal: AbortSignal.timeout(3000) });
-      if (bybitRes.ok) {
-        const bybitData = await bybitRes.json();
-        const list = bybitData?.result?.list;
-        if (Array.isArray(list) && list.length > 0 && list[0].lastPrice) {
-          const p = parseFloat(list[0].lastPrice);
+    // Fallback to Bybit
+    for (const url of bybitMirrors) {
+      try {
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const data = await res.json();
+          const list = data?.result?.list;
+          if (Array.isArray(list) && list.length > 0 && list[0].lastPrice) {
+            const p = parseFloat(list[0].lastPrice);
+            if (!isNaN(p) && p > 0) return p;
+          }
+        }
+      } catch {}
+    }
+  } else {
+    // Bybit primary
+    for (const url of bybitMirrors) {
+      try {
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3500) });
+        if (res.ok) {
+          const data = await res.json();
+          const list = data?.result?.list;
+          if (Array.isArray(list) && list.length > 0 && list[0].lastPrice) {
+            const p = parseFloat(list[0].lastPrice);
+            if (!isNaN(p) && p > 0) return p;
+          }
+        }
+      } catch {}
+    }
+    // Fallback to Binance
+    for (const url of binanceMirrors) {
+      try {
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const data = await res.json();
+          const p = parseFloat(data.price);
           if (!isNaN(p) && p > 0) return p;
         }
-      }
-    } else {
-      const binanceRes = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${cleanSymbol}`, { signal: AbortSignal.timeout(3000) });
-      if (binanceRes.ok) {
-        const binData = await binanceRes.json();
-        const p = parseFloat(binData.price);
-        if (!isNaN(p) && p > 0) return p;
-      }
+      } catch {}
     }
-  } catch (e) {
-    // Silent fallback fail
   }
 
   return null;
