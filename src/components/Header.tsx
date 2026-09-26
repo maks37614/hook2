@@ -87,6 +87,21 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </div>
 
+    {/* Language Switcher */}
+            <div className="relative">
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value as SupportedLanguage)}
+                className="bg-slate-900 border border-slate-800 text-xs font-mono font-bold text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                title={t('language')}
+              >
+                <option value="uk">🇺🇦 UA</option>
+                <option value="en">🇬🇧 EN</option>
+                <option value="ru">🇷🇺 RU</option>
+                <option value="pl">🇵🇱 PL</option>
+              </select>
+            </div>
+
             {/* Navigation Category Tabs */}
             <div className="flex items-center p-0.5 sm:p-1 rounded-xl bg-slate-900/90 border border-slate-800 text-xs shadow-inner">
               <button
@@ -136,7 +151,7 @@ export const Header: React.FC<HeaderProps> = ({
                     ? 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white shadow-sm shadow-emerald-900/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
-                title="Термінал трейдера"
+                title="Термінал"
               >
                 <Monitor className="w-3.5 h-3.5 text-emerald-400" />
                 <span>{t('terminal')}</span>
@@ -197,21 +212,6 @@ export const Header: React.FC<HeaderProps> = ({
               {soundEnabled ? <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <BellOff className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
             </button>
 
-            {/* Language Switcher */}
-            <div className="relative">
-              <select
-                value={language}
-                onChange={(e) => setLanguage(e.target.value as SupportedLanguage)}
-                className="bg-slate-900 border border-slate-800 text-xs font-mono font-bold text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-cyan-500 cursor-pointer"
-                title={t('language')}
-              >
-                <option value="uk">🇺🇦 UA</option>
-                <option value="en">🇬🇧 EN</option>
-                <option value="ru">🇷🇺 RU</option>
-                <option value="pl">🇵🇱 PL</option>
-              </select>
-            </div>
-
             <button
               id="open-telegram-btn"
               onClick={onOpenTelegramAlerts}
@@ -219,7 +219,6 @@ export const Header: React.FC<HeaderProps> = ({
               title="Сповіщення ціни в Telegram"
             >
               <Send className="w-3.5 h-3.5 text-sky-400" />
-              <span className="font-semibold hidden md:inline">Telegram</span>
               {telegramAlertsCount > 0 && (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-sky-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {telegramAlertsCount}
@@ -238,7 +237,6 @@ export const Header: React.FC<HeaderProps> = ({
               title="Стеження за Монетою (Системний нагляд SignalHook)"
             >
               <Radar className="w-3.5 h-3.5 text-violet-400" />
-              <span className="font-semibold hidden lg:inline">Стеження за Монетою</span>
               <span className="font-semibold hidden sm:inline lg:hidden">Стеження</span>
               {surveillanceCount > 0 && (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-violet-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
@@ -258,7 +256,6 @@ export const Header: React.FC<HeaderProps> = ({
               title="Налаштування лінковки з терміналом MetaScalp"
             >
               <Zap className={`w-3.5 h-3.5 ${metaScalpSettings.enabled ? 'text-amber-400 fill-amber-400/20' : 'text-slate-500'}`} />
-              <span className="font-semibold hidden md:inline">MetaScalp</span>
               {metaScalpSettings.enabled && (
                 <span className="text-[10px] font-mono font-bold px-1 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30">
                   {metaScalpSettings.binding}
@@ -273,7 +270,6 @@ export const Header: React.FC<HeaderProps> = ({
               title="Список обраних монет"
             >
               <Bookmark className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden lg:inline">Обране</span>
               {watchlistCount > 0 && (
                 <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {watchlistCount}
@@ -288,7 +284,6 @@ export const Header: React.FC<HeaderProps> = ({
               title="Архів збережених формацій та графіків"
             >
               <FolderArchive className="w-3.5 h-3.5 text-purple-400" />
-              <span className="font-semibold hidden lg:inline">Архів</span>
               {archiveCount > 0 && (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-purple-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {archiveCount}
@@ -303,7 +298,6 @@ export const Header: React.FC<HeaderProps> = ({
               title="Довідник формацій"
             >
               <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="hidden lg:inline">Довідник</span>
             </button>
 
             {/* Profile / Auth Button */}

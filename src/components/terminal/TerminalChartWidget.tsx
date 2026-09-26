@@ -94,15 +94,119 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
     });
   }, []);
 
-  // Klines for Pattern mode
+  // Live Price State & Tick Animation
+  const [currentPrice, setCurrentPrice] = useState<number | null>(coin?.currentPrice || null);
+  const [priceDirection, setPriceDirection] = useState<'up' | 'down' | 'neutral'>('neutral');
+  const [tickAnimation, setTickAnimation] = useState<boolean>(false);
+  const prevPriceRef = useRef<number | null>(coin?.currentPrice || null);
   const [livePrice, setLivePrice] = useState<number>(coin?.currentPrice || 0);
 
-  // Update livePrice when coin prop changes
+  // Update when coin prop changes
   useEffect(() => {
     if (coin?.currentPrice) {
-      setLivePrice(coin.currentPrice);
+      const newPrice = coin.currentPrice;
+      const oldPrice = prevPriceRef.current;
+      if (oldPrice !== null && newPrice !== oldPrice) {
+        setPriceDirection(newPrice > oldPrice ? 'up' : 'down');
+        setTickAnimation(true);
+        const timer = setTimeout(() => setTickAnimation(false), 500);
+        prevPriceRef.current = newPrice;
+        setCurrentPrice(newPrice);
+        setLivePrice(newPrice);
+        return () => clearTimeout(timer);
+      } else {
+        prevPriceRef.current = newPrice;
+        setCurrentPrice(newPrice);
+        setLivePrice(newPrice);
+      }
     }
   }, [coin?.currentPrice]);
+
+  // Connect to lightweight real-time ticker stream
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let isDisposed = false;
+    let animTimer: any = null;
+
+    const cleanSymbol = block.symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    if (!cleanSymbol) return;
+
+    const handlePriceUpdate = (price: number) => {
+      if (isDisposed || !price || isNaN(price)) return;
+      const oldPrice = prevPriceRef.current;
+      if (oldPrice !== null && price !== oldPrice) {
+        setPriceDirection(price > oldPrice ? 'up' : 'down');
+        setTickAnimation(true);
+        clearTimeout(animTimer);
+        animTimer = setTimeout(() => setTickAnimation(false), 500);
+      }
+      prevPriceRef.current = price;
+      setCurrentPrice(price);
+      setLivePrice(price);
+    };
+
+    if (block.exchange === 'binance') {
+      const lower = cleanSymbol.toLowerCase();
+      const wsUrl =
+        block.marketType === 'futures'
+          ? `wss://fstream.binance.com/ws/${lower}@miniTicker`
+          : `wss://stream.binance.com:9443/ws/${lower}@miniTicker`;
+
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data && data.c) {
+              const p = parseFloat(data.c);
+              if (!isNaN(p)) handlePriceUpdate(p);
+            }
+          } catch {}
+        };
+      } catch {}
+    } else {
+      // Bybit
+      const wsUrl =
+        block.marketType === 'futures'
+          ? 'wss://stream.bybit.com/v5/public/linear'
+          : 'wss://stream.bybit.com/v5/public/spot';
+
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          if (isDisposed) return;
+          try {
+            ws?.send(
+              JSON.stringify({
+                op: 'subscribe',
+                args: [`tickers.${cleanSymbol}`],
+              })
+            );
+          } catch {}
+        };
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data?.data) {
+              const item = Array.isArray(data.data) ? data.data[0] : data.data;
+              const p = parseFloat(item?.lastPrice);
+              if (!isNaN(p)) handlePriceUpdate(p);
+            }
+          } catch {}
+        };
+      } catch {}
+    }
+
+    return () => {
+      isDisposed = true;
+      clearTimeout(animTimer);
+      if (ws) {
+        try {
+          ws.close();
+        } catch {}
+      }
+    };
+  }, [block.symbol, block.exchange, block.marketType]);
 
   // Active formation if any
   const activeFormation = useMemo(() => {
@@ -290,6 +394,30 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
             )}
           </div>
 
+          {/* Live Price Tag */}
+          {currentPrice !== null && (
+            <div
+              className={`flex items-center gap-1 font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded-lg border text-[11px] sm:text-xs transition-all duration-300 ${
+                tickAnimation
+                  ? priceDirection === 'up'
+                    ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500 scale-105 shadow-sm shadow-emerald-500/20'
+                    : 'bg-rose-500/30 text-rose-300 border-rose-500 scale-105 shadow-sm shadow-rose-500/20'
+                  : priceDirection === 'up'
+                  ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60'
+                  : priceDirection === 'down'
+                  ? 'bg-rose-950/60 text-rose-400 border-rose-800/60'
+                  : 'bg-slate-800 text-slate-200 border-slate-700'
+              }`}
+            >
+              <span>${formatCryptoPrice(currentPrice)}</span>
+              {priceDirection === 'up' ? (
+                <span className="text-[9px] sm:text-[10px] text-emerald-400 font-extrabold">▲</span>
+              ) : priceDirection === 'down' ? (
+                <span className="text-[9px] sm:text-[10px] text-rose-400 font-extrabold">▼</span>
+              ) : null}
+            </div>
+          )}
+
           {/* Exchange badge (click to toggle exchange if available) */}
           <button
             onClick={() =>
@@ -319,7 +447,6 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
           >
             {block.marketType === 'futures' ? 'Perp' : 'Spot'}
           </button>
-
         </div>
 
         {/* Right: MetaScalp, Telegram, Maximize, Close */}
@@ -543,7 +670,7 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
         <div className="flex items-center gap-2">
           {coin?.volume24hUsd && (
             <span>
-              Об'єм 24г: <span className="text-slate-200">${formatVolume(coin.volume24hUsd)}</span>
+              Vol 24г: <span className="text-slate-200">${formatVolume(coin.volume24hUsd)}</span>
             </span>
           )}
           {coin?.highPrice24h && (

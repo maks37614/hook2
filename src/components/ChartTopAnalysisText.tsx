@@ -162,28 +162,10 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
           </span>
 
-          <span className="text-slate-400 font-mono text-[11px]">
-            (${formatCryptoPrice(analysis.cur)})
-          </span>
+       
         </div>
 
-        {/* Timeframe selector directly above the chart (min 5m, no label text) */}
-        <div className="flex items-center gap-1">
-          {timeframes.map((tf) => (
-            <button
-              key={tf}
-              type="button"
-              onClick={() => onTimeframeChange(tf)}
-              className={`px-2 py-0.5 rounded font-mono font-bold transition-all cursor-pointer text-[11px] ${
-                timeframe === tf
-                  ? 'bg-cyan-500 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700'
-              }`}
-            >
-              {tf}
-            </button>
-          ))}
-        </div>
+       
       </div>
 
       {/* 3 Columns of Plain Text Information (No borders, simple crisp typography) */}
@@ -191,11 +173,11 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
         {/* Section 1: Найближчі пули ліквідності */}
         <div className="space-y-1">
           <div className="text-[11px] font-bold text-sky-400 uppercase tracking-wide">
-            Найближчі пули ліквідності:
+            
           </div>
 
           <div>
-            <span className="text-slate-400">Sell-Side Liquidity (Стопи шортистів над хаєм): </span>
+            <span className="text-slate-400">Стопи шорт: </span>
             <span className="font-mono font-bold text-white">
               ${formatCryptoPrice(analysis.sslPrice)}
             </span>
@@ -205,7 +187,7 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
           </div>
 
           <div>
-            <span className="text-slate-400">POC Volume Pool (Ядро накопиченого обсягу): </span>
+            <span className="text-slate-400">POC: </span>
             <span className="font-mono font-bold text-amber-300">
               ${formatCryptoPrice(analysis.pocPrice)}
             </span>
@@ -215,7 +197,7 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
           </div>
 
           <div>
-            <span className="text-slate-400">Buy-Side Liquidity (Стопи лонгістів під лоєм): </span>
+            <span className="text-slate-400">Стопи лонг: </span>
             <span className="font-mono font-bold text-white">
               ${formatCryptoPrice(analysis.bslPrice)}
             </span>
@@ -228,11 +210,11 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
         {/* Section 2: Сильні опорні рівні (Support / Resistance) */}
         <div className="space-y-1">
           <div className="text-[11px] font-bold text-indigo-400 uppercase tracking-wide">
-            Сильні опорні рівні (Support / Resistance):
+          
           </div>
 
           <div>
-            <span className="text-slate-400">Сильна підтримка (Demand): </span>
+            <span className="text-slate-400">Підтримка: </span>
             <span className="font-mono font-bold text-emerald-400">
               ${formatCryptoPrice(analysis.strongDemand)}
             </span>
@@ -242,7 +224,7 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
           </div>
 
           <div>
-            <span className="text-slate-400">Сильний опір (Supply): </span>
+            <span className="text-slate-400">Супротив: </span>
             <span className="font-mono font-bold text-rose-400">
               ${formatCryptoPrice(analysis.strongSupply)}
             </span>
@@ -255,7 +237,7 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
         {/* Section 3: Найбільші ліквідації */}
         <div className="space-y-1">
           <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wide">
-            Найбільші ліквідації:
+          
           </div>
 
           <div>

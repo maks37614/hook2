@@ -200,7 +200,7 @@ export const FormationGuideModal: React.FC<FormationGuideModalProps> = ({ isOpen
               <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80">
                 <span className="font-bold text-sky-400 flex items-center gap-1.5 mb-1 text-xs">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  Точка входу (Entry Rule):
+                  Точка входу:
                 </span>
                 <p className="text-slate-300 leading-relaxed pl-5">{activeItem.entryRule}</p>
               </div>
@@ -208,7 +208,7 @@ export const FormationGuideModal: React.FC<FormationGuideModalProps> = ({ isOpen
               <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80">
                 <span className="font-bold text-rose-400 flex items-center gap-1.5 mb-1 text-xs">
                   <AlertCircle className="w-3.5 h-3.5" />
-                  Стоп-лос (Stop Loss):
+                  Стоп-лос:
                 </span>
                 <p className="text-slate-300 leading-relaxed pl-5">{activeItem.stopLossRule}</p>
               </div>
@@ -216,7 +216,7 @@ export const FormationGuideModal: React.FC<FormationGuideModalProps> = ({ isOpen
               <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80">
                 <span className="font-bold text-emerald-400 flex items-center gap-1.5 mb-1 text-xs">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  Тейк-профіт (Target / Take Profit):
+                  Тейк-профіт:
                 </span>
                 <p className="text-slate-300 leading-relaxed pl-5">{activeItem.targetRule}</p>
               </div>

@@ -825,7 +825,7 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
           <div className="flex items-center gap-3 text-slate-400 text-[11px] shrink-0">
             <span className="flex items-center gap-1.5 text-slate-300">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              Синхронізація: <strong className="text-cyan-400 font-bold">WebSocket Live</strong>
+              Синхронізація: <strong className="text-cyan-400 font-bold">WLive</strong>
             </span>
             <span className="text-slate-500">|</span>
             <span>
@@ -855,7 +855,7 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
             <button
               onClick={() => setIsFavoritesDrawerOpen(false)}
               className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Сховати шторку"
+              title="Сховати"
             >
               <PanelLeftClose className="w-4 h-4" />
             </button>
