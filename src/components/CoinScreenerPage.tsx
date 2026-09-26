@@ -129,6 +129,9 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
       if (res.success) {
         setSurveillanceToast(`#${coin.symbol} додано на системний нагляд!`);
         setTimeout(() => setSurveillanceToast(null), 3000);
+      } else {
+        setSurveillanceToast(res.error || `Не вдалося додати #${coin.symbol}`);
+        setTimeout(() => setSurveillanceToast(null), 3500);
       }
     }
   };

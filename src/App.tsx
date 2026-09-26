@@ -675,6 +675,7 @@ export default function App() {
               }
             }}
             onOpenTelegramSettings={() => setIsTelegramModalOpen(true)}
+            onNavigateToScreener={() => handlePageChange('screener')}
           />
         ) : activePage === 'screener' ? (
           <CoinScreenerPage

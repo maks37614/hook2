@@ -21,6 +21,7 @@ interface SurveillanceContextType {
   updateCoinConfig: (id: string, config: Partial<SurveillanceConfig>) => Promise<boolean>;
   toggleCoinActive: (id: string) => Promise<boolean>;
   checkCoinNow: (id: string, forceNotify?: boolean) => Promise<SurveillanceCoin | null>;
+  checkAllCoinsNow: () => Promise<boolean>;
   isCoinMonitored: (symbol: string, exchange?: ExchangeId) => boolean;
   refresh: () => Promise<void>;
 }
@@ -112,14 +113,14 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const removeCoinFromSurveillance = async (id: string): Promise<boolean> => {
     try {
-      const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}`, {
+      const userId = user?.uid || 'guest';
+      const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}?userId=${encodeURIComponent(userId)}`, {
         method: 'DELETE',
       });
       const data = await res.json();
       if (data.success) {
         setCoins((prev) => {
           const next = prev.filter((c) => c.id !== id);
-          const userId = user?.uid || 'guest';
           try {
             localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(next));
           } catch {}
@@ -138,14 +139,21 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     config: Partial<SurveillanceConfig>
   ): Promise<boolean> => {
     try {
+      const userId = user?.uid || 'guest';
       const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config }),
+        body: JSON.stringify({ userId, config }),
       });
       const data = await res.json();
       if (data.success && data.coin) {
-        setCoins((prev) => prev.map((c) => (c.id === id ? data.coin : c)));
+        setCoins((prev) => {
+          const next = prev.map((c) => (c.id === id ? data.coin : c));
+          try {
+            localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(next));
+          } catch {}
+          return next;
+        });
         return true;
       }
       return false;
@@ -158,14 +166,21 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const coin = coins.find((c) => c.id === id);
     if (!coin) return false;
     try {
+      const userId = user?.uid || 'guest';
       const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isActive: !coin.isActive }),
+        body: JSON.stringify({ userId, isActive: !coin.isActive }),
       });
       const data = await res.json();
       if (data.success && data.coin) {
-        setCoins((prev) => prev.map((c) => (c.id === id ? data.coin : c)));
+        setCoins((prev) => {
+          const next = prev.map((c) => (c.id === id ? data.coin : c));
+          try {
+            localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(next));
+          } catch {}
+          return next;
+        });
         return true;
       }
       return false;
@@ -176,19 +191,48 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const checkCoinNow = async (id: string, forceNotify = false): Promise<SurveillanceCoin | null> => {
     try {
+      const userId = user?.uid || 'guest';
       const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ forceNotify }),
+        body: JSON.stringify({ userId, forceNotify }),
       });
       const data = await res.json();
       if (data.success && data.coin) {
-        setCoins((prev) => prev.map((c) => (c.id === id ? data.coin : c)));
+        setCoins((prev) => {
+          const next = prev.map((c) => (c.id === id ? data.coin : c));
+          try {
+            localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(next));
+          } catch {}
+          return next;
+        });
         return data.coin;
       }
       return null;
     } catch {
       return null;
+    }
+  };
+
+  const checkAllCoinsNow = async (): Promise<boolean> => {
+    try {
+      const userId = user?.uid || 'guest';
+      const res = await fetch('/api/surveillance/check-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setCoins(data.data);
+        try {
+          localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(data.data));
+        } catch {}
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
     }
   };
 
@@ -210,6 +254,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         updateCoinConfig,
         toggleCoinActive,
         checkCoinNow,
+        checkAllCoinsNow,
         isCoinMonitored,
         refresh: fetchCoins,
       }}

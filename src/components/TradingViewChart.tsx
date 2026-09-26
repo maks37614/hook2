@@ -43,6 +43,10 @@ interface TradingViewChartProps {
   savedChartParams?: ChartRestoreParams;
   fullHeight?: boolean;
   showNavigationControls?: boolean;
+  hideHeaderLiveIndicator?: boolean;
+  hideHeaderFormationBadge?: boolean;
+  hideSymbolAndPrice?: boolean;
+  onLiveStatusChange?: (status: { isConnected: boolean; mode: 'ws' | 'rest' }) => void;
 }
 
 // Convert timeframe string to Binance WS interval
@@ -164,6 +168,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   savedChartParams,
   fullHeight = false,
   showNavigationControls = true,
+  hideHeaderLiveIndicator = false,
+  hideHeaderFormationBadge = false,
+  hideSymbolAndPrice = false,
+  onLiveStatusChange,
 }) => {
   const { profile } = useAuth();
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -191,6 +199,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
   const [liveMode, setLiveMode] = useState<'ws' | 'rest'>('rest');
   const [tickAnimation, setTickAnimation] = useState<boolean>(false);
+
+  useEffect(() => {
+    onLiveStatusChange?.({ isConnected: isLiveConnected, mode: liveMode });
+  }, [isLiveConnected, liveMode, onLiveStatusChange]);
   const defaultLabelState = profile?.chartLabelSettings || { entry: true, target: true, stop: true };
   const [showEntryLevel, setShowEntryLevel] = useState<boolean>(defaultLabelState.entry);
   const [showTargetLevel, setShowTargetLevel] = useState<boolean>(defaultLabelState.target);
@@ -738,116 +750,96 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   return (
     <div className={`relative w-full rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-xl flex flex-col ${fullHeight ? 'h-full flex-1 min-h-0' : ''}`}>
       {/* Top Header Bar */}
-      {showNavigationControls && (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 bg-slate-900/95 border-b border-slate-800 text-xs z-10 shrink-0">
-        {/* Left: Symbol, Live Price, Badges */}
-        <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
-          <span className="font-bold text-slate-100 font-mono text-xs sm:text-sm tracking-wide">{symbol}</span>
+      {showNavigationControls && (!hideSymbolAndPrice || !hideHeaderLiveIndicator || (!hideHeaderFormationBadge && !!formation)) && (
+        <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 bg-slate-900/95 border-b border-slate-800 text-xs z-10 shrink-0">
+          {/* Left: Symbol, Live Price, Badges */}
+          <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
+            {!hideSymbolAndPrice && (
+              <>
+                <span className="font-bold text-slate-100 font-mono text-xs sm:text-sm tracking-wide">{symbol}</span>
 
-          {/* Live Price Tag */}
-          {currentPrice !== null && (
-            <div
-              className={`flex items-center gap-1 font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded-lg border text-[11px] sm:text-xs transition-all duration-300 ${
-                tickAnimation
-                  ? priceDirection === 'up'
-                    ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500 scale-105 shadow-sm shadow-emerald-500/20'
-                    : 'bg-rose-500/30 text-rose-300 border-rose-500 scale-105 shadow-sm shadow-rose-500/20'
-                  : priceDirection === 'up'
-                  ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60'
-                  : priceDirection === 'down'
-                  ? 'bg-rose-950/60 text-rose-400 border-rose-800/60'
-                  : 'bg-slate-800 text-slate-200 border-slate-700'
-              }`}
-            >
-              <span>${formatCryptoPrice(currentPrice)}</span>
-              {priceDirection === 'up' ? (
-                <span className="text-[9px] sm:text-[10px] text-emerald-400 font-extrabold">▲</span>
-              ) : priceDirection === 'down' ? (
-                <span className="text-[9px] sm:text-[10px] text-rose-400 font-extrabold">▼</span>
-              ) : null}
-            </div>
-          )}
+                {/* Live Price Tag */}
+                {currentPrice !== null && (
+                  <div
+                    className={`flex items-center gap-1 font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded-lg border text-[11px] sm:text-xs transition-all duration-300 ${
+                      tickAnimation
+                        ? priceDirection === 'up'
+                          ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500 scale-105 shadow-sm shadow-emerald-500/20'
+                          : 'bg-rose-500/30 text-rose-300 border-rose-500 scale-105 shadow-sm shadow-rose-500/20'
+                        : priceDirection === 'up'
+                        ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60'
+                        : priceDirection === 'down'
+                        ? 'bg-rose-950/60 text-rose-400 border-rose-800/60'
+                        : 'bg-slate-800 text-slate-200 border-slate-700'
+                    }`}
+                  >
+                    <span>${formatCryptoPrice(currentPrice)}</span>
+                    {priceDirection === 'up' ? (
+                      <span className="text-[9px] sm:text-[10px] text-emerald-400 font-extrabold">▲</span>
+                    ) : priceDirection === 'down' ? (
+                      <span className="text-[9px] sm:text-[10px] text-rose-400 font-extrabold">▼</span>
+                    ) : null}
+                  </div>
+                )}
+              </>
+            )}
 
-          {/* Live Stream Status Indicator */}
-          <div
-            className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded-full border text-[10px] sm:text-[11px] font-mono font-medium ${
-              isLiveConnected
-                ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300'
-                : 'bg-slate-800/80 border-slate-700 text-slate-400'
-            }`}
-            title={`Оновлення в реальному часі (${liveMode.toUpperCase()})`}
-          >
-            <span className="relative flex h-2 w-2">
-              <span
-                className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                  isLiveConnected ? 'bg-emerald-400' : 'bg-slate-400'
+            {/* Live Stream Status Indicator */}
+            {!hideHeaderLiveIndicator && (
+              <div
+                className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded-full border text-[10px] sm:text-[11px] font-mono font-medium ${
+                  isLiveConnected
+                    ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300'
+                    : 'bg-slate-800/80 border-slate-700 text-slate-400'
                 }`}
-              ></span>
+                title={`Оновлення в реальному часі (${liveMode.toUpperCase()})`}
+              >
+                <span className="relative flex h-2 w-2">
+                  <span
+                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                      isLiveConnected ? 'bg-emerald-400' : 'bg-slate-400'
+                    }`}
+                  ></span>
+                  <span
+                    className={`relative inline-flex rounded-full h-2 w-2 ${
+                      isLiveConnected ? 'bg-emerald-500' : 'bg-slate-500'
+                    }`}
+                  ></span>
+                </span>
+                <span className="font-bold tracking-wider">
+                  {liveMode === 'ws' ? '⚡' : '●'}
+                </span>
+              </div>
+            )}
+
+            {!hideHeaderFormationBadge && formation && (
               <span
-                className={`relative inline-flex rounded-full h-2 w-2 ${
-                  isLiveConnected ? 'bg-emerald-500' : 'bg-slate-500'
+                className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-medium truncate max-w-[130px] sm:max-w-none ${
+                  formation.bias === 'bullish'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : formation.bias === 'bearish'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                 }`}
-              ></span>
-            </span>
-            <span className="font-bold tracking-wider">
-              LIVE {liveMode === 'ws' ? '⚡' : '●'}
-            </span>
-          </div>
-
-          {formation && (
-            <span
-              className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-medium truncate max-w-[130px] sm:max-w-none ${
-                formation.bias === 'bullish'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  : formation.bias === 'bearish'
-                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-              }`}
-              title={formation.name}
-            >
-              {formation.name}
-            </span>
-          )}
-        </div>
-
-  
-        {/* Right: View Controls */}
-        <div className="flex items-center flex-wrap gap-1.5 sm:gap-2 text-slate-300 text-[10px] sm:text-[11px]">
-          {/* Zoom Recent Buttons */}
-          <div className="flex items-center gap-1">
-            <button
-              onClick={handleZoomRecent}
-              className="flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 text-[10px] sm:text-[11px] cursor-pointer active:scale-95"
-              title="Наблизити до останніх свічок"
-            >
-              <ZoomIn className="w-3 h-3 text-cyan-400" />
-              <span className="hidden sm:inline">Останні свічки</span>
-            </button>
-
-            <button
-              onClick={handleFitAll}
-              className="flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 text-[10px] sm:text-[11px] cursor-pointer active:scale-95"
-              title="Вписати всю завантажену історію свічок"
-            >
-              <Maximize2 className="w-3 h-3 text-cyan-400" />
-              <span className="hidden sm:inline">Вся історія</span>
-              <span className="font-mono">({klines.length})</span>
-            </button>
+                title={formation.name}
+              >
+                {formation.name}
+              </span>
+            )}
           </div>
         </div>
-      </div>
+      )}
 
       {onTimeframeChange && (
-        <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 py-1.5 bg-slate-900/60 border-b border-slate-800/80">
-          <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-center justify-between gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 bg-slate-900/90 border-b border-slate-800/80 overflow-x-auto no-scrollbar flex-nowrap w-full">
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-nowrap shrink-0">
             {/* Timeframe selector directly above the chart */}
-            <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-xs font-mono">
+            <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-xs font-mono shrink-0">
               {(['1m', '5m', '15m', '1h', '4h', '1d'] as Timeframe[]).map((option) => (
                 <button
                   key={option}
                   onClick={() => onTimeframeChange(option)}
-                  className={`px-2 sm:px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                  className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded transition-colors cursor-pointer text-[11px] sm:text-xs shrink-0 ${
                     timeframe === option ? 'bg-cyan-600 text-white font-bold shadow-sm' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -858,7 +850,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
             {/* Formation levels toggle badges */}
             {formation && (
-              <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px] sm:text-[11px]">
+              <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px] sm:text-[11px] shrink-0">
                 {[
                   { key: 'entry', label: 'Вхід', enabled: showEntryLevel, activeClass: 'bg-sky-500/20 text-sky-300 border-sky-500/40' },
                   { key: 'target', label: 'Ціль', enabled: showTargetLevel, activeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
@@ -872,7 +864,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
                       if (item.key === 'target') setShowTargetLevel((value) => !value);
                       if (item.key === 'stop') setShowStopLevel((value) => !value);
                     }}
-                    className={`px-1.5 sm:px-2 py-1 rounded-md border transition-colors cursor-pointer ${
+                    className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md border transition-colors cursor-pointer shrink-0 ${
                       item.enabled ? item.activeClass : 'bg-slate-800 text-slate-400 border-slate-700'
                     }`}
                     title={`${item.enabled ? 'Вимкнути' : 'Увімкнути'} мітку ${item.label}`}
@@ -885,51 +877,74 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
-            {onAddToArchive && (
+          {/* Right: View Controls */}
+          <div className="flex items-center gap-1 sm:gap-1.5 text-slate-300 text-[10px] sm:text-[11px] flex-nowrap shrink-0 ml-auto">
+            {/* Zoom Recent Buttons */}
+            <div className="flex items-center gap-1 shrink-0">
               <button
-                type="button"
-                onClick={onAddToArchive}
-                disabled={isSavingArchive}
-                className="p-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 transition-colors disabled:opacity-50 cursor-pointer"
-                title={isArchived ? 'Формацію збережено в архіві' : 'Додати монету та формацію в архів'}
-                aria-label={isArchived ? 'Формацію збережено в архіві' : 'Додати монету та формацію в архів'}
+                onClick={handleZoomRecent}
+                className="flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 text-[10px] sm:text-[11px] cursor-pointer active:scale-95 shrink-0 whitespace-nowrap"
+                title="Наблизити до останніх свічок"
               >
-                {isArchived ? <CheckCircle2 className="w-3.5 h-3.5" /> : <FolderArchive className={`w-3.5 h-3.5 ${isSavingArchive ? 'animate-pulse' : ''}`} />}
+                <ZoomIn className="w-3 h-3 text-cyan-400" />
+                <span className="hidden md:inline">Останні свічки</span>
               </button>
-            )}
-            {onOpenFullscreen && (
+
               <button
-                type="button"
-                onClick={onOpenFullscreen}
-                className="p-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 transition-colors cursor-pointer"
-                title="Відкрити повний графік"
-                aria-label="Відкрити повний графік"
+                onClick={handleFitAll}
+                className="flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 text-[10px] sm:text-[11px] cursor-pointer active:scale-95 shrink-0 whitespace-nowrap"
+                title="Вписати всю завантажену історію свічок"
               >
-                <Expand className="w-3.5 h-3.5" />
+                <Maximize2 className="w-3 h-3 text-cyan-400" />
+                <span className="hidden md:inline">Вся історія</span>
+                <span className="font-mono text-[9px] sm:text-[10px] text-slate-400">({klines.length})</span>
               </button>
-            )}
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0">
+              {onAddToArchive && (
+                <button
+                  type="button"
+                  onClick={onAddToArchive}
+                  disabled={isSavingArchive}
+                  className="p-1 sm:p-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                  title={isArchived ? 'Формацію збережено в архіві' : 'Додати монету та формацію в архів'}
+                  aria-label={isArchived ? 'Формацію збережено в архіві' : 'Додати монету та формацію в архів'}
+                >
+                  {isArchived ? <CheckCircle2 className="w-3.5 h-3.5" /> : <FolderArchive className={`w-3.5 h-3.5 ${isSavingArchive ? 'animate-pulse' : ''}`} />}
+                </button>
+              )}
+              {onOpenFullscreen && (
+                <button
+                  type="button"
+                  onClick={onOpenFullscreen}
+                  className="p-1 sm:p-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 transition-colors cursor-pointer shrink-0"
+                  title="Відкрити повний графік"
+                  aria-label="Відкрити повний графік"
+                >
+                  <Expand className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
-      )}
-        </>
       )}
 
       {/* Levels Sub-header when formation present */}
       {showNavigationControls && formation && (
-        <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 bg-slate-900/60 border-b border-slate-800/80 text-[10px] sm:text-[11px] font-mono">
-          <div className="flex items-center flex-wrap gap-2 sm:gap-4">
-            <span className="flex items-center gap-1 text-sky-300 font-medium">
+        <div className="flex items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 bg-slate-900/60 border-b border-slate-800/80 text-[10px] sm:text-[11px] font-mono overflow-x-auto no-scrollbar flex-nowrap w-full">
+          <div className="flex items-center gap-2 sm:gap-4 flex-nowrap shrink-0">
+            <span className="flex items-center gap-1 text-sky-300 font-medium shrink-0">
               <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-sky-400"></span> Вхід: ${formatCryptoPrice(formation.levels.entryPrice)}
             </span>
-            <span className="flex items-center gap-1 text-emerald-400 font-bold">
+            <span className="flex items-center gap-1 text-emerald-400 font-bold shrink-0">
               <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-emerald-500"></span> Ціль: ${formatCryptoPrice(formation.levels.targetPrice)} (+{Math.abs(formation.potentialProfitPct)}%)
             </span>
-            <span className="flex items-center gap-1 text-rose-400 font-bold">
+            <span className="flex items-center gap-1 text-rose-400 font-bold shrink-0">
               <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-rose-500"></span> Стоп: ${formatCryptoPrice(formation.levels.stopLossPrice)} (-{Math.abs(formation.potentialRiskPct)}%)
             </span>
           </div>
-          <div className="text-slate-400 font-medium text-[10px] sm:text-[11px]">
+          <div className="text-slate-400 font-medium text-[10px] sm:text-[11px] shrink-0 whitespace-nowrap ml-auto">
             R:R <span className="text-cyan-400 font-bold">1:{formation.riskRewardRatio}</span>
           </div>
         </div>

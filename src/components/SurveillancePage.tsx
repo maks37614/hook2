@@ -26,6 +26,7 @@ import {
   Sliders,
   AlertCircle,
   HelpCircle,
+  Sparkles,
 } from 'lucide-react';
 import { useSurveillance } from '../context/SurveillanceContext';
 import { getStoredPreferences, useAppPreferences } from '../utils/userPreferences';
@@ -37,12 +38,14 @@ import {
   ExchangeId,
   MarketType,
   Timeframe,
+  TriggerModeType,
 } from '../types';
 
 interface SurveillancePageProps {
   availableCoins?: ScannedCoin[];
   onSelectCoinForChart?: (symbol: string, exchange: ExchangeId, marketType: MarketType) => void;
   onOpenTelegramSettings?: () => void;
+  onNavigateToScreener?: () => void;
 }
 
 function formatPrice(val?: number): string {
@@ -53,10 +56,18 @@ function formatPrice(val?: number): string {
   return val.toFixed(8);
 }
 
+const TRIGGER_MODE_OPTIONS: { id: TriggerModeType; label: string; desc: string }[] = [
+  { id: 'bar_close', label: 'Закриття бару 4H', desc: 'Один раз за закриттям 4h свічки' },
+  { id: 'bar_close_1h', label: 'Закриття бару 1H', desc: 'Свічка 1h закрилась за рівнем' },
+  { id: 'bar_close_15m', label: 'Закриття бару 15m', desc: 'Свічка 15m закрилась за рівнем' },
+  { id: 'realtime', label: 'Realtime (Миттєво)', desc: 'В момент перетину ціною' },
+];
+
 export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   availableCoins = [],
   onSelectCoinForChart,
   onOpenTelegramSettings,
+  onNavigateToScreener,
 }) => {
   const {
     coins,
@@ -67,6 +78,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     updateCoinConfig,
     toggleCoinActive,
     checkCoinNow,
+    checkAllCoinsNow,
     refresh,
   } = useSurveillance();
 
@@ -80,19 +92,34 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingCoin, setEditingCoin] = useState<SurveillanceCoin | null>(null);
   const [isCheckingMap, setIsCheckingMap] = useState<Record<string, boolean>>({});
+  const [isRunningAll, setIsRunningAll] = useState(false);
   const [notificationToast, setNotificationToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  // New coin modal state
-  const [selectedSymbolInput, setSelectedSymbolInput] = useState('');
+  // Screener coins list for selection
+  const screenerCoinsList = useMemo(() => {
+    if (availableCoins && availableCoins.length > 0) {
+      return availableCoins;
+    }
+    return [
+      { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 84300, priceChange24h: 1.2, volume24hUsd: 2500000000 },
+      { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2050, priceChange24h: -0.8, volume24hUsd: 1200000000 },
+      { symbol: 'SOLUSDT', baseAsset: 'SOL', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 125, priceChange24h: 3.4, volume24hUsd: 800000000 },
+      { symbol: 'DOGEUSDT', baseAsset: 'DOGE', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 0.165, priceChange24h: -2.1, volume24hUsd: 400000000 },
+      { symbol: 'XRPUSDT', baseAsset: 'XRP', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 1.45, priceChange24h: 0.5, volume24hUsd: 300000000 },
+      { symbol: 'SUIUSDT', baseAsset: 'SUI', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2.15, priceChange24h: 4.8, volume24hUsd: 250000000 },
+    ] as ScannedCoin[];
+  }, [availableCoins]);
+
+  // New coin modal selection state
+  const [selectedSymbolInput, setSelectedSymbolInput] = useState(screenerCoinsList[0]?.symbol || 'BTCUSDT');
   const [selectedExchange, setSelectedExchange] = useState<ExchangeId>(defaultEx);
   const [selectedMarketType, setSelectedMarketType] = useState<MarketType>(defaultMarket);
-  const [coinSearchTerm, setCoinSearchTerm] = useState('');
-  const [addMinVolume, setAddMinVolume] = useState<number>(0);
 
   // Config modal state (for add or edit)
   const [formConfig, setFormConfig] = useState<SurveillanceConfig>({
     timeframe: prefs.defaultTimeframe,
     triggerModes: ['bar_close'],
+    triggerMode: 'bar_close',
     levelsEnabled: true,
     structureEnabled: true,
     momentumEnabled: true,
@@ -104,17 +131,19 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     cooldownMinutes: 15,
   });
 
-  const toggleTriggerMode = (mode: 'bar_close' | 'realtime' | 'bar_close_15m' | 'bar_close_1h') => {
+  const toggleTriggerMode = (mode: TriggerModeType) => {
     setFormConfig((prev) => {
-      const current = prev.triggerModes || ['bar_close'];
-      let next: ('bar_close' | 'realtime' | 'bar_close_15m' | 'bar_close_1h')[];
+      const current: TriggerModeType[] = Array.isArray(prev.triggerModes) && prev.triggerModes.length > 0
+        ? (prev.triggerModes as TriggerModeType[])
+        : (prev.triggerMode ? [prev.triggerMode as TriggerModeType] : ['bar_close']);
+      let next: TriggerModeType[];
       if (current.includes(mode)) {
-        if (current.length === 1) return prev; // keep at least one
+        if (current.length === 1) return prev; // keep at least 1 selected
         next = current.filter((m) => m !== mode);
       } else {
         next = [...current, mode];
       }
-      return { ...prev, triggerModes: next };
+      return { ...prev, triggerModes: next, triggerMode: next[0] };
     });
   };
 
@@ -144,38 +173,23 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     });
   }, [coins, searchQuery, exchangeFilter]);
 
-  // Autocomplete candidate coins from screener with volume filter
-  const candidateCoins = useMemo(() => {
-    const list = availableCoins.length > 0 ? availableCoins : [
-      { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 84300, priceChange24h: 1.2, volumeUsd: 2500000000 },
-      { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2050, priceChange24h: -0.8, volumeUsd: 1200000000 },
-      { symbol: 'SOLUSDT', baseAsset: 'SOL', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 125, priceChange24h: 3.4, volumeUsd: 800000000 },
-      { symbol: 'DOGEUSDT', baseAsset: 'DOGE', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 0.165, priceChange24h: -2.1, volumeUsd: 400000000 },
-      { symbol: 'XRPUSDT', baseAsset: 'XRP', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 1.45, priceChange24h: 0.5, volumeUsd: 300000000 },
-      { symbol: 'SUIUSDT', baseAsset: 'SUI', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2.15, priceChange24h: 4.8, volumeUsd: 250000000 },
-    ];
-
-    return list.filter((c) => {
-      const matchSearch = !coinSearchTerm.trim() || c.symbol.toLowerCase().includes(coinSearchTerm.toLowerCase());
-      const vol = (c as any).volumeUsd ?? (c as any).volume24hUsd ?? 0;
-      const matchVol = addMinVolume === 0 || vol >= addMinVolume;
-      const matchEx = c.exchange === selectedExchange;
-      const matchMarket = c.marketType === selectedMarketType;
-      return matchSearch && matchVol && matchEx && matchMarket;
-    }).slice(0, 60);
-  }, [availableCoins, coinSearchTerm, addMinVolume, selectedExchange, selectedMarketType]);
-
   const handleOpenAddModal = (initialSymbol?: string) => {
-    if (initialSymbol) {
-      setSelectedSymbolInput(initialSymbol);
-      setCoinSearchTerm(initialSymbol);
+    const target = initialSymbol
+      ? screenerCoinsList.find((c) => c.symbol === initialSymbol) || screenerCoinsList[0]
+      : screenerCoinsList[0];
+
+    if (target) {
+      setSelectedSymbolInput(target.symbol);
+      setSelectedExchange(target.exchange);
+      setSelectedMarketType(target.marketType);
     } else {
-      setSelectedSymbolInput('');
-      setCoinSearchTerm('');
+      setSelectedSymbolInput(initialSymbol || 'BTCUSDT');
     }
+
     setFormConfig({
       timeframe: '4h',
       triggerModes: ['bar_close'],
+      triggerMode: 'bar_close',
       levelsEnabled: true,
       structureEnabled: true,
       momentumEnabled: true,
@@ -191,23 +205,34 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
   const handleOpenEditModal = (coin: SurveillanceCoin) => {
     setEditingCoin(coin);
-    const modes = coin.config.triggerModes || (coin.config.triggerMode ? [coin.config.triggerMode] : ['bar_close']);
-    setFormConfig({ ...coin.config, triggerModes: modes });
+    const modes: TriggerModeType[] = Array.isArray(coin.config.triggerModes) && coin.config.triggerModes.length > 0
+      ? (coin.config.triggerModes as TriggerModeType[])
+      : (coin.config.triggerMode ? [coin.config.triggerMode as TriggerModeType] : ['bar_close']);
+    setFormConfig({ ...coin.config, triggerModes: modes, triggerMode: modes[0] });
   };
 
   const handleSaveAddCoin = async () => {
-    const symbolToUse = selectedSymbolInput.trim().toUpperCase() || coinSearchTerm.trim().toUpperCase();
+    const symbolToUse = selectedSymbolInput.trim().toUpperCase() || (screenerCoinsList[0]?.symbol ?? 'BTCUSDT');
     if (!symbolToUse) {
-      showToast('Введіть або виберіть тікер монети', 'error');
+      showToast('Будь ласка, оберіть монету зі списку Скрінера', 'error');
       return;
     }
 
-    const res = await addCoinToSurveillance(symbolToUse, selectedExchange, selectedMarketType, formConfig);
-    if (res.success) {
-      showToast(`Монету #${symbolToUse} додано до системного нагляду!`);
+    const modes: TriggerModeType[] = Array.isArray(formConfig.triggerModes) && formConfig.triggerModes.length > 0
+      ? (formConfig.triggerModes as TriggerModeType[])
+      : ['bar_close'];
+
+    const configToSave: SurveillanceConfig = {
+      ...formConfig,
+      triggerModes: modes,
+      triggerMode: modes[0],
+    };
+
+    const res = await addCoinToSurveillance(symbolToUse, selectedExchange, selectedMarketType, configToSave);
+    if (res.success && res.coin) {
+      checkCoinNow(res.coin.id, true);
+      showToast(`Монету #${symbolToUse} успішно додано на системний нагляд!`, 'success');
       setIsAddModalOpen(false);
-      setSelectedSymbolInput('');
-      setCoinSearchTerm('');
     } else {
       showToast(res.error || 'Не вдалося додати монету', 'error');
     }
@@ -215,10 +240,23 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
   const handleSaveEditConfig = async () => {
     if (!editingCoin) return;
-    const ok = await updateCoinConfig(editingCoin.id, formConfig);
+    const modes: TriggerModeType[] = Array.isArray(formConfig.triggerModes) && formConfig.triggerModes.length > 0
+      ? (formConfig.triggerModes as TriggerModeType[])
+      : ['bar_close'];
+
+    const configToSave: SurveillanceConfig = {
+      ...editingCoin.config,
+      ...formConfig,
+      triggerModes: modes,
+      triggerMode: modes[0],
+    };
+
+    const ok = await updateCoinConfig(editingCoin.id, configToSave);
     if (ok) {
-      showToast(`Налаштування для #${editingCoin.symbol} оновлено`);
+      showToast(`Налаштування для #${editingCoin.symbol} успішно збережено!`, 'success');
       setEditingCoin(null);
+      // Run quick check to recalculate state with new thresholds
+      checkCoinNow(editingCoin.id, false);
     } else {
       showToast('Помилка збереження налаштувань', 'error');
     }
@@ -229,10 +267,32 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     try {
       const updated = await checkCoinNow(id, true);
       if (updated) {
-        showToast(`Аналіз #${symbol} оновлено з ринку`, 'info');
+        showToast(`Аналіз #${symbol} оновлено з біржі`, 'info');
       }
     } finally {
       setIsCheckingMap((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
+  // Run full system scan / overview on all monitored coins
+  const handleRunAllSurveillance = async () => {
+    if (coins.length === 0) {
+      showToast('Список нагляду порожній. Додайте монету зі скрінера', 'info');
+      return;
+    }
+
+    setIsRunningAll(true);
+    try {
+      const ok = await checkAllCoinsNow();
+      if (ok) {
+        showToast(`Запуск системного огляду виконано для ${coins.length} монет!`, 'success');
+      } else {
+        showToast('Не вдалося оновити системний нагляд', 'error');
+      }
+    } catch {
+      showToast('Помилка під час запуску системного огляду', 'error');
+    } finally {
+      setIsRunningAll(false);
     }
   };
 
@@ -261,23 +321,35 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
           <div className="space-y-1.5">
             <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs font-mono">
               <Radar className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-              <span>СИСТЕМНИЙ НАГЛЯД ЗА МОНЕТОЮ [SURVEILLANCE WATCHDOG]</span>
+              <span>Нагляд за монетами</span>
             </div>
 
             <p className="text-xs sm:text-sm text-slate-400 max-w-3xl leading-relaxed">
               Серверний нагляд за алгоритмом: <strong>структура 4H/1D → рівні → імпульс % → ризик</strong>.
-              Відстежує пробої 6 типів, закриття свічки (Один раз за закриттям бару (4-годинного)), реакцію на Fibonacci 0.618 Golden Pocket та миттєво інформує у ваш Telegram.
+              Відстежує пробої 6 типів, мульти-режими закриття свічок (4H / 1H / 15m / Realtime), реакцію на Fibonacci 0.618 Golden Pocket та миттєво інформує у ваш Telegram.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Run All Surveillance Button */}
+            <button
+              onClick={handleRunAllSurveillance}
+              disabled={isRunningAll || coins.length === 0}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-emerald-950/40 transition-all cursor-pointer disabled:opacity-50"
+              title="Запустити негайний аналіз усіх монет на нагляді"
+            >
+              <Play className={`w-4 h-4 fill-current ${isRunningAll ? 'animate-spin' : ''}`} />
+            
+            </button>
+
+            {/* Add Coin Button */}
             <button
               onClick={() => handleOpenAddModal()}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-cyan-950/40 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>+ Додати монету на нагляд</span>
             </button>
+
             <button
               onClick={() => refresh()}
               title="Оновити дані"
@@ -293,23 +365,23 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
           <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
               <Eye className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Всього на нагляді</span>
+              <span>Всього</span>
             </div>
             <div className="text-lg font-bold font-mono text-white mt-0.5">{coins.length}</div>
           </div>
           <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
               <Play className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Активні монітори</span>
+              <span>Активні</span>
             </div>
             <div className="text-lg font-bold font-mono text-emerald-400 mt-0.5">{activeCount}</div>
           </div>
           <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Режим підтвердження</span>
+              <span>Режими підтвердження</span>
             </div>
-            <div className="text-xs font-bold text-indigo-300 mt-1">Один раз за закриттям бару (4-годинного)</div>
+            <div className="text-xs font-bold text-indigo-300 mt-1">Мульти-вибір (4H • 1H • 15m • Realtime)</div>
           </div>
           <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
             <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
@@ -385,25 +457,34 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
           <div className="space-y-1">
             <h3 className="text-base font-bold text-white">Список системного нагляду порожній</h3>
             <p className="text-xs text-slate-400 max-w-md mx-auto">
-              Додайте будь-яку криптовалюту зі сторінки Скрінер або скористайтеся кнопкою нижче. Сервер почне постійне технічне спостереження за рівнями та структурою.
+              Оберіть монети зі сторінки Скрінер або додайте їх через меню вибору нижче. Сервер веде постійне 24/7 технічне спостереження за рівнями та структурою.
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+            {onNavigateToScreener && (
+              <button
+                onClick={onNavigateToScreener}
+                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-md shadow-cyan-950/40 cursor-pointer flex items-center gap-1.5"
+              >
+                <span>Відкрити Скрінер монет</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               onClick={() => handleOpenAddModal('BTCUSDT')}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
             >
               + Стежити за BTCUSDT
             </button>
             <button
               onClick={() => handleOpenAddModal('ETHUSDT')}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
             >
               + Стежити за ETHUSDT
             </button>
             <button
               onClick={() => handleOpenAddModal('SOLUSDT')}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
             >
               + Стежити за SOLUSDT
             </button>
@@ -416,6 +497,10 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
             const isChecking = Boolean(isCheckingMap[coin.id]);
             const isBullish = state?.structureTrend === 'bullish';
             const isBearish = state?.structureTrend === 'bearish';
+
+            const activeModes = Array.isArray(coin.config.triggerModes) && coin.config.triggerModes.length > 0
+              ? coin.config.triggerModes
+              : (coin.config.triggerMode ? [coin.config.triggerMode] : ['bar_close']);
 
             return (
               <div
@@ -552,23 +637,25 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                             <span>BEARISH</span>
                           </span>
                         ) : (
-                          <span className="text-amber-300">RANGE (4H)</span>
+                          <span className="text-amber-400">RANGING</span>
                         )}
                       </div>
-                      <div className="text-[10px] text-slate-400">
-                        1D: ${formatPrice(state?.low1d)} — ${formatPrice(state?.high1d)}
+                      <div className="text-[10px] text-slate-400 truncate">
+                        {state?.structureTrend || '4H Trend'}
                       </div>
                     </div>
 
                     {/* 2. Senior Levels */}
                     <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
                       <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                        <Crosshair className="w-3 h-3 text-cyan-400" />
-                        <span>Локальний 1H</span>
+                        <Target className="w-3 h-3 text-cyan-400" />
+                        <span>Рівні 4H/1D</span>
                       </div>
-                      <div className="font-mono text-white text-[11px] space-y-0.5">
-                        <div className="text-rose-300">H: ${formatPrice(state?.localHigh1h)}</div>
-                        <div className="text-emerald-300">L: ${formatPrice(state?.localLow1h)}</div>
+                      <div className="font-mono font-bold text-white text-[11px] truncate">
+                        ${formatPrice(state?.resistance4h)}
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate">
+                        Supp: ${formatPrice(state?.support4h)}
                       </div>
                     </div>
 
@@ -576,27 +663,25 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                     <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
                       <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
                         <Zap className="w-3 h-3 text-amber-400" />
-                        <span>Імпульс ({coin.config.momentumBars}б {coin.config.momentumTf})</span>
+                        <span>Імпульс</span>
                       </div>
-                      <div className="font-mono font-bold text-[11px]">
-                        <span
-                          className={
-                            (state?.momentumRecentPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                          }
-                        >
-                          {(state?.momentumRecentPct || 0) >= 0 ? '+' : ''}
-                          {state?.momentumRecentPct || 0}%
-                        </span>
+                      <div
+                        className={`font-mono font-bold text-[11px] ${
+                          (state?.momentumRecentPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
+                        {(state?.momentumRecentPct || 0) >= 0 ? '+' : ''}
+                        {state?.momentumRecentPct || 0}%
                       </div>
                       <div className="text-[10px] text-slate-400">
-                        Поріг: {coin.config.momentumPct}%
+                        {coin.config.momentumBars}b ({coin.config.momentumTf})
                       </div>
                     </div>
 
-                    {/* 4. Risk / Fibonacci */}
+                    {/* 4. Fibonacci 0.618 */}
                     <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
                       <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                        <Target className="w-3 h-3 text-violet-400" />
+                        <Layers className="w-3 h-3 text-violet-400" />
                         <span>Fibo 0.618</span>
                       </div>
                       <div className="font-mono font-bold text-violet-300 text-[11px]">
@@ -649,11 +734,28 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
                 {/* Card Footer Actions */}
                 <div className="p-3 border-t border-slate-800/80 bg-slate-950/80 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2 text-slate-400 text-[11px]">
-                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-                    <span>
-                      {coin.config.triggerMode === 'bar_close' ? 'Один раз за закриттям бару (4-годинного)' : 'Realtime Cross'}
-                    </span>
+                  {/* Multi-Trigger Mode Badges */}
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shrink-0" />
+                    <span className="text-slate-500">Режими:</span>
+                    {activeModes.map((m) => {
+                      const label =
+                        m === 'bar_close'
+                          ? '4H'
+                          : m === 'bar_close_1h'
+                          ? '1H'
+                          : m === 'bar_close_15m'
+                          ? '15m'
+                          : 'Realtime';
+                      return (
+                        <span
+                          key={m}
+                          className="px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold"
+                        >
+                          {label}
+                        </span>
+                      );
+                    })}
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -710,44 +812,90 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
             </div>
 
             <div className="p-5 space-y-4 overflow-y-auto flex-1">
-              {/* Select or type coin symbol */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-300">Виберіть або введіть монету</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Наприклад: BTCUSDT, ETHUSDT, SOLUSDT..."
-                    value={coinSearchTerm}
-                    onChange={(e) => {
-                      setCoinSearchTerm(e.target.value.toUpperCase());
-                      setSelectedSymbolInput(e.target.value.toUpperCase());
-                    }}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500 uppercase"
-                  />
+              {/* Screener Coins Direct Selection (No search input required) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Виберіть монету зі сторінки Скрінер:</span>
+                  </label>
+                  {onNavigateToScreener && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddModalOpen(false);
+                        onNavigateToScreener();
+                      }}
+                      className="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1 underline cursor-pointer"
+                    >
+                      <span>Відкрити Скрінер →</span>
+                    </button>
+                  )}
                 </div>
 
-                {/* Fast picks from candidate coins */}
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {candidateCoins.slice(0, 6).map((c) => (
-                    <button
-                      key={`${c.exchange}-${c.symbol}-${c.marketType}`}
-                      onClick={() => {
-                        setSelectedSymbolInput(c.symbol);
-                        setCoinSearchTerm(c.symbol);
-                      }}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition-colors cursor-pointer border ${
-                        selectedSymbolInput === c.symbol
-                          ? 'bg-cyan-600 border-cyan-500 text-white'
-                          : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      {c.symbol}
-                    </button>
-                  ))}
+                {/* Coins Grid from Screener */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-52 overflow-y-auto p-1 rounded-xl bg-slate-950 border border-slate-800">
+                  {screenerCoinsList.map((c) => {
+                    const isSelected = selectedSymbolInput === c.symbol;
+                    return (
+                      <button
+                        key={`${c.exchange}-${c.symbol}-${c.marketType}`}
+                        type="button"
+                        onClick={() => {
+                          setSelectedSymbolInput(c.symbol);
+                          setSelectedExchange(c.exchange);
+                          setSelectedMarketType(c.marketType);
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                          isSelected
+                            ? 'bg-cyan-500/20 border-cyan-400 shadow-md shadow-cyan-950/40 ring-1 ring-cyan-400'
+                            : 'bg-slate-900/90 border-slate-800 hover:border-slate-700 hover:bg-slate-800/80 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-mono font-extrabold text-white text-xs">{c.symbol}</span>
+                          {isSelected ? (
+                            <span className="w-3.5 h-3.5 rounded-full bg-cyan-500 text-slate-950 flex items-center justify-center text-[10px] font-bold">
+                              ✓
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center justify-between gap-1 mt-1 text-[10px] font-mono">
+                          <span className="text-slate-400">
+                            ${c.currentPrice >= 1 ? c.currentPrice.toLocaleString() : c.currentPrice}
+                          </span>
+                          <span className={c.priceChange24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                            {c.priceChange24h >= 0 ? '+' : ''}{c.priceChange24h.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 mt-1 text-[9px] text-slate-500 uppercase font-mono">
+                          <span>{c.exchange}</span>
+                          <span>•</span>
+                          <span>{c.marketType}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Exchange and Market Type */}
+              {/* Selected Coin Details Banner */}
+              <div className="p-3 rounded-xl bg-cyan-950/30 border border-cyan-800/40 flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] text-cyan-400 uppercase font-bold tracking-wider">Обрана монета</div>
+                  <div className="text-sm font-extrabold font-mono text-white mt-0.5">{selectedSymbolInput}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-amber-300 font-mono uppercase font-bold border border-slate-700">
+                    {selectedExchange}
+                  </span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono uppercase border border-slate-700">
+                    {selectedMarketType}
+                  </span>
+                </div>
+              </div>
+
+              {/* Exchange and Market Type Selectors */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-[11px] text-slate-400">Біржа</label>
@@ -773,98 +921,45 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                 </div>
               </div>
 
-              {/* Volume Filter & Coin Picker List */}
-              <div className="space-y-2 p-3 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-slate-300">Фільтр за обсягом 24г та вибір монети</label>
-                  <span className="text-[10px] text-cyan-400 font-mono">Всього: {candidateCoins.length}</span>
-                </div>
-                <select
-                  value={addMinVolume}
-                  onChange={(e) => setAddMinVolume(Number(e.target.value))}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
-                >
-                  <option value={0}>Усі обсяги</option>
-                  <option value={50000}>Від $50k</option>
-                  <option value={100000}>Від $100k</option>
-                  <option value={300000}>Від $300k</option>
-                  <option value={500000}>Від $500k</option>
-                  <option value={1000000}>Від $1M</option>
-                  <option value={5000000}>Від $5M+</option>
-                </select>
-
-                <div className="max-h-40 overflow-y-auto rounded-lg bg-slate-900 border border-slate-800 p-1 space-y-1 custom-scrollbar">
-                  {candidateCoins.length === 0 ? (
-                    <div className="text-center py-4 text-xs text-slate-500 font-mono">Монет не знайдено</div>
-                  ) : (
-                    candidateCoins.map((c) => (
-                      <div
-                        key={`${c.exchange}-${c.symbol}-${c.marketType}`}
-                        onClick={() => {
-                          setSelectedSymbolInput(c.symbol);
-                          setCoinSearchTerm(c.symbol);
-                        }}
-                        className={`flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors ${
-                          selectedSymbolInput === c.symbol
-                            ? 'bg-cyan-600/30 border border-cyan-500 text-white font-bold'
-                            : 'hover:bg-slate-800 text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-white">{c.symbol}</span>
-                          <span className="text-[10px] text-slate-400">
-                            {((c as any).volumeUsd || (c as any).volume24hUsd) ? `$${(((c as any).volumeUsd || (c as any).volume24hUsd) / 1000).toFixed(0)}k` : ''}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {c.currentPrice !== undefined && (
-                            <span className="text-slate-200">${c.currentPrice >= 1 ? c.currentPrice.toLocaleString() : c.currentPrice}</span>
-                          )}
-                          {c.priceChange24h !== undefined && (
-                            <span className={c.priceChange24h >= 0 ? 'text-emerald-400 text-[10px]' : 'text-rose-400 text-[10px]'}>
-                              {c.priceChange24h >= 0 ? '+' : ''}{c.priceChange24h.toFixed(1)}%
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
               {/* Trigger Confirmation Modes (Multi-select) */}
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <label className="text-xs font-bold text-white flex items-center justify-between">
-                  <span>Режими підтвердження пробою (можна кілька)</span>
-                  <span className="text-[10px] text-cyan-400 font-mono">МУЛЬТИ-ВИБІР</span>
-                </label>
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Режими підтвердження пробою (можна кілька)</span>
+                  </label>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono font-bold">
+                    МУЛЬТИ-ВИБІР ({formConfig.triggerModes?.length || 1})
+                  </span>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { id: 'bar_close', label: 'Закриття бару 4H', desc: 'Один раз за закриттям 4h' },
-                    { id: 'bar_close_1h', label: 'Закриття бару 1H', desc: 'Свічка 1h закрилась за рівнем' },
-                    { id: 'bar_close_15m', label: 'Закриття бару 15m', desc: 'Свічка 15m закрилась за рівнем' },
-                    { id: 'realtime', label: 'Realtime (Миттєво)', desc: 'В момент перетину ціною' },
-                  ].map((m) => {
-                    const isSelected = formConfig.triggerModes?.includes(m.id as any);
+                  {TRIGGER_MODE_OPTIONS.map((m) => {
+                    const isSelected = formConfig.triggerModes?.includes(m.id);
                     return (
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => toggleTriggerMode(m.id as any)}
-                        className={`p-2.5 rounded-lg text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
+                        onClick={() => toggleTriggerMode(m.id)}
+                        className={`p-2.5 rounded-xl text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
                           isSelected
-                            ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold shadow-sm'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                            ? 'bg-cyan-500/20 border-cyan-400 text-white font-semibold shadow-sm shadow-cyan-950/30'
+                            : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
                         }`}
                       >
                         <div>
                           <div className="font-bold flex items-center gap-1.5">
-                            <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] border ${isSelected ? 'bg-cyan-600 border-cyan-500 text-white font-bold' : 'border-slate-700 bg-slate-950'}`}>
-                              {isSelected ? '✓' : ''}
+                            <span
+                              className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] border transition-colors ${
+                                isSelected
+                                  ? 'bg-cyan-500 border-cyan-400 text-slate-950 font-black'
+                                  : 'border-slate-700 bg-slate-950 text-transparent'
+                              }`}
+                            >
+                              ✓
                             </span>
                             <span>{m.label}</span>
                           </div>
-                          <div className="text-[10px] text-slate-400 mt-1">{m.desc}</div>
+                          <div className="text-[10px] text-slate-400 mt-1 pl-5.5">{m.desc}</div>
                         </div>
                       </button>
                     );
@@ -930,8 +1025,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
               {/* Toggles for Indicators & Levels */}
               <div className="space-y-2 text-xs">
-                <div className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300">Старші рівні 4H/1D (Crossing Up / Down)</span>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Старші рівні 4H/1D (Crossing Up / Down)</span>
                   <input
                     type="checkbox"
                     checked={formConfig.levelsEnabled}
@@ -939,8 +1034,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                     className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
                   />
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300">Зміна структури ринку (BOS / CHoCH)</span>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Зміна структури ринку (BOS / CHoCH)</span>
                   <input
                     type="checkbox"
                     checked={formConfig.structureEnabled}
@@ -948,8 +1043,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                     className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
                   />
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300">Вихід із консолідаційного каналу (Channel Break)</span>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Вихід із консолідаційного каналу (Channel Break)</span>
                   <input
                     type="checkbox"
                     checked={formConfig.channelEnabled}
@@ -957,8 +1052,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                     className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
                   />
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300">Зона Fibonacci 0.618 Golden Pocket</span>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Зона Fibonacci 0.618 Golden Pocket</span>
                   <input
                     type="checkbox"
                     checked={formConfig.fibonacciEnabled}
@@ -973,16 +1068,17 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
               <button
                 type="button"
                 onClick={() => setIsAddModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white cursor-pointer"
               >
                 Скасувати
               </button>
               <button
                 type="button"
                 onClick={handleSaveAddCoin}
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-cyan-950/40 cursor-pointer"
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-cyan-950/40 cursor-pointer flex items-center gap-1.5"
               >
-                Запустити системний нагляд
+                <Radar className="w-4 h-4" />
+                <span>Запустити системний нагляд</span>
               </button>
             </div>
           </div>
@@ -1001,46 +1097,51 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                 </h3>
                 <p className="text-[11px] text-slate-400">Зміна параметрів рівнів, імпульсу та підтвердження свічки</p>
               </div>
-              <button onClick={() => setEditingCoin(null)} className="p-1 rounded-lg text-slate-400 hover:text-white">
+              <button onClick={() => setEditingCoin(null)} className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="p-5 space-y-4 overflow-y-auto flex-1">
-              {/* Trigger Confirmation Mode */}
               {/* Trigger Confirmation Modes (Multi-select) */}
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <label className="text-xs font-bold text-white flex items-center justify-between">
-                  <span>Режими підтвердження пробою (можна кілька)</span>
-                  <span className="text-[10px] text-cyan-400 font-mono">МУЛЬТИ-ВИБІР</span>
-                </label>
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Режими підтвердження пробою (можна кілька)</span>
+                  </label>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono font-bold">
+                    МУЛЬТИ-ВИБІР ({formConfig.triggerModes?.length || 1})
+                  </span>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { id: 'bar_close', label: 'Закриття бару 4H', desc: 'Один раз за закриттям 4h' },
-                    { id: 'bar_close_1h', label: 'Закриття бару 1H', desc: 'Свічка 1h закрилась за рівнем' },
-                    { id: 'bar_close_15m', label: 'Закриття бару 15m', desc: 'Свічка 15m закрилась за рівнем' },
-                    { id: 'realtime', label: 'Realtime (Миттєво)', desc: 'В момент перетину ціною' },
-                  ].map((m) => {
-                    const isSelected = formConfig.triggerModes?.includes(m.id as any);
+                  {TRIGGER_MODE_OPTIONS.map((m) => {
+                    const isSelected = formConfig.triggerModes?.includes(m.id);
                     return (
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => toggleTriggerMode(m.id as any)}
-                        className={`p-2.5 rounded-lg text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
+                        onClick={() => toggleTriggerMode(m.id)}
+                        className={`p-2.5 rounded-xl text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
                           isSelected
-                            ? 'bg-cyan-500/20 border-cyan-500/50 text-white font-semibold shadow-sm'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                            ? 'bg-cyan-500/20 border-cyan-400 text-white font-semibold shadow-sm shadow-cyan-950/30'
+                            : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
                         }`}
                       >
                         <div>
                           <div className="font-bold flex items-center gap-1.5">
-                            <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] border ${isSelected ? 'bg-cyan-600 border-cyan-500 text-white font-bold' : 'border-slate-700 bg-slate-950'}`}>
-                              {isSelected ? '✓' : ''}
+                            <span
+                              className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] border transition-colors ${
+                                isSelected
+                                  ? 'bg-cyan-500 border-cyan-400 text-slate-950 font-black'
+                                  : 'border-slate-700 bg-slate-950 text-transparent'
+                              }`}
+                            >
+                              ✓
                             </span>
                             <span>{m.label}</span>
                           </div>
-                          <div className="text-[10px] text-slate-400 mt-1">{m.desc}</div>
+                          <div className="text-[10px] text-slate-400 mt-1 pl-5.5">{m.desc}</div>
                         </div>
                       </button>
                     );
@@ -1104,23 +1205,75 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                 )}
               </div>
 
-              {/* Cooldown */}
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
-                <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Пауза між повторними сповіщеннями (Cooldown)</span>
-                </label>
-                <select
-                  value={formConfig.cooldownMinutes}
-                  onChange={(e) => setFormConfig((prev) => ({ ...prev, cooldownMinutes: Number(e.target.value) }))}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
-                >
-                  <option value={5}>5 хвилин</option>
-                  <option value={15}>15 хвилин (рекомендовано)</option>
-                  <option value={30}>30 хвилин</option>
-                  <option value={60}>1 година</option>
-                  <option value={240}>4 години</option>
-                </select>
+              {/* Timeframe & Cooldown */}
+              <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-400 font-medium">Базовий таймфрейм</label>
+                  <select
+                    value={formConfig.timeframe || '4h'}
+                    onChange={(e) => setFormConfig((prev) => ({ ...prev, timeframe: e.target.value as Timeframe }))}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="15m">15m</option>
+                    <option value="1h">1h</option>
+                    <option value="4h">4h (Рекомендовано)</option>
+                    <option value="1d">1d</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-400 font-medium">Кулдаун сповіщень (хв)</label>
+                  <select
+                    value={formConfig.cooldownMinutes ?? 15}
+                    onChange={(e) => setFormConfig((prev) => ({ ...prev, cooldownMinutes: Number(e.target.value) }))}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value={5}>5 хв</option>
+                    <option value={10}>10 хв</option>
+                    <option value={15}>15 хв</option>
+                    <option value={30}>30 хв</option>
+                    <option value={60}>60 хв</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Toggles */}
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Старші рівні 4H/1D (Crossing Up / Down)</span>
+                  <input
+                    type="checkbox"
+                    checked={formConfig.levelsEnabled}
+                    onChange={(e) => setFormConfig((prev) => ({ ...prev, levelsEnabled: e.target.checked }))}
+                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
+                  />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Зміна структури ринку (BOS / CHoCH)</span>
+                  <input
+                    type="checkbox"
+                    checked={formConfig.structureEnabled}
+                    onChange={(e) => setFormConfig((prev) => ({ ...prev, structureEnabled: e.target.checked }))}
+                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
+                  />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Вихід із консолідаційного каналу (Channel Break)</span>
+                  <input
+                    type="checkbox"
+                    checked={formConfig.channelEnabled}
+                    onChange={(e) => setFormConfig((prev) => ({ ...prev, channelEnabled: e.target.checked }))}
+                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
+                  />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="text-slate-300 font-medium">Зона Fibonacci 0.618 Golden Pocket</span>
+                  <input
+                    type="checkbox"
+                    checked={formConfig.fibonacciEnabled}
+                    onChange={(e) => setFormConfig((prev) => ({ ...prev, fibonacciEnabled: e.target.checked }))}
+                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1128,16 +1281,16 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
               <button
                 type="button"
                 onClick={() => setEditingCoin(null)}
-                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white cursor-pointer"
               >
                 Скасувати
               </button>
               <button
                 type="button"
                 onClick={handleSaveEditConfig}
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-cyan-950/40 cursor-pointer"
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-cyan-950/40 cursor-pointer"
               >
-                Зберегти налаштування
+                Зберегти параметри
               </button>
             </div>
           </div>

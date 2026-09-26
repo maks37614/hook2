@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { ScannedCoin, DetectedFormation, Kline, Timeframe } from '../types';
 import { formatCryptoPrice } from '../utils/formatters';
 
@@ -11,6 +11,40 @@ interface ChartTopAnalysisTextProps {
   onTimeframeChange: (tf: Timeframe) => void;
 }
 
+interface OpenInterestData {
+  valueUsd: number;
+  amountCoins: number;
+  change5mPct: number | null;
+  lastUpdated: number;
+}
+
+function formatOI(val: number): string {
+  if (val >= 1_000_000_000) return `$${(val / 1_000_000_000).toFixed(2)}B`;
+  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
+  if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}K`;
+  return `$${val.toFixed(0)}`;
+}
+
+function getCandidateSymbols(symbol: string, baseAsset?: string): string[] {
+  const clean = symbol.replace(/[\/\-_]/g, '').toUpperCase();
+  const candidates: string[] = [clean];
+  if (!clean.startsWith('1000') && (
+    clean.startsWith('PEPE') || clean.startsWith('SHIB') || clean.startsWith('FLOKI') ||
+    clean.startsWith('BONK') || clean.startsWith('LUNC') || clean.startsWith('SATS') ||
+    clean.startsWith('RATS') || clean.startsWith('CAT') || clean.startsWith('MOG')
+  )) {
+    candidates.unshift('1000' + clean);
+  }
+  if (baseAsset) {
+    const baseClean = baseAsset.toUpperCase();
+    candidates.push(`${baseClean}USDT`);
+    if (!baseClean.startsWith('1000')) {
+      candidates.push(`1000${baseClean}USDT`);
+    }
+  }
+  return Array.from(new Set(candidates));
+}
+
 export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
   coin,
   formation,
@@ -20,6 +54,163 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
   onTimeframeChange,
 }) => {
   const timeframes: Timeframe[] = ['5m', '15m', '1h', '4h', '1d'];
+
+  // Open Interest state for Binance and Bybit with auto-updating
+  const [binanceOI, setBinanceOI] = useState<OpenInterestData | null>(null);
+  const [bybitOI, setBybitOI] = useState<OpenInterestData | null>(null);
+  const [loadingOI, setLoadingOI] = useState<boolean>(true);
+  const [oiPulse, setOiPulse] = useState<boolean>(false);
+  const pulseTimerRef = useRef<any>(null);
+
+  const fetchOI = useCallback(async (isAuto = false) => {
+    const curPrice = livePrice > 0 ? livePrice : coin.currentPrice || 1;
+    const candidates = getCandidateSymbols(coin.symbol, coin.baseAsset);
+
+    // Fetch Binance OI
+    const fetchBinance = async (): Promise<OpenInterestData | null> => {
+      for (const sym of candidates) {
+        try {
+          const resHist = await fetch(
+            `https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=5m&limit=2`,
+            { signal: AbortSignal.timeout(4000) }
+          );
+          if (resHist.ok) {
+            const data = await resHist.json();
+            if (Array.isArray(data) && data.length > 0) {
+              const latest = data[data.length - 1];
+              const val = parseFloat(latest.sumOpenInterestValue) || 0;
+              const coins = parseFloat(latest.sumOpenInterest) || 0;
+              let change5m: number | null = null;
+              if (data.length > 1) {
+                const prevVal = parseFloat(data[0].sumOpenInterestValue) || 0;
+                if (prevVal > 0) {
+                  change5m = ((val - prevVal) / prevVal) * 100;
+                }
+              }
+              if (val > 0 || coins > 0) {
+                return {
+                  valueUsd: val > 0 ? val : coins * curPrice,
+                  amountCoins: coins,
+                  change5mPct: change5m !== null ? Number(change5m.toFixed(2)) : null,
+                  lastUpdated: Date.now(),
+                };
+              }
+            }
+          }
+        } catch {
+          // fallback to standard endpoint
+        }
+
+        try {
+          const res = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`, {
+            signal: AbortSignal.timeout(4000),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const coins = parseFloat(data.openInterest) || 0;
+            if (coins > 0) {
+              return {
+                valueUsd: coins * curPrice,
+                amountCoins: coins,
+                change5mPct: null,
+                lastUpdated: Date.now(),
+              };
+            }
+          }
+        } catch {
+          // next candidate
+        }
+      }
+      return null;
+    };
+
+    // Fetch Bybit OI
+    const fetchBybit = async (): Promise<OpenInterestData | null> => {
+      for (const sym of candidates) {
+        const mirrors = [
+          `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${sym}`,
+          `https://api.bytick.com/v5/market/tickers?category=linear&symbol=${sym}`,
+        ];
+
+        for (const url of mirrors) {
+          try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+            if (!res.ok) continue;
+            const json = await res.json();
+            const item = json?.result?.list?.[0];
+            if (item) {
+              const val = parseFloat(item.openInterestValue) || 0;
+              const coins = parseFloat(item.openInterest) || 0;
+              if (val > 0 || coins > 0) {
+                let change5m: number | null = null;
+                try {
+                  const histRes = await fetch(
+                    `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${sym}&intervalTime=5min&limit=2`,
+                    { signal: AbortSignal.timeout(3000) }
+                  );
+                  if (histRes.ok) {
+                    const histJson = await histRes.json();
+                    const list = histJson?.result?.list;
+                    if (Array.isArray(list) && list.length >= 2) {
+                      const latestOi = parseFloat(list[0].openInterest) || 0;
+                      const prevOi = parseFloat(list[1].openInterest) || 0;
+                      if (prevOi > 0) {
+                        change5m = ((latestOi - prevOi) / prevOi) * 100;
+                      }
+                    }
+                  }
+                } catch {
+                  // ignore
+                }
+
+                return {
+                  valueUsd: val > 0 ? val : coins * curPrice,
+                  amountCoins: coins,
+                  change5mPct: change5m !== null ? Number(change5m.toFixed(2)) : null,
+                  lastUpdated: Date.now(),
+                };
+              }
+            }
+          } catch {
+            // next mirror
+          }
+        }
+      }
+      return null;
+    };
+
+    try {
+      const [resB, resBy] = await Promise.allSettled([fetchBinance(), fetchBybit()]);
+      if (resB.status === 'fulfilled' && resB.value) {
+        setBinanceOI(resB.value);
+      }
+      if (resBy.status === 'fulfilled' && resBy.value) {
+        setBybitOI(resBy.value);
+      }
+      if (isAuto) {
+        setOiPulse(true);
+        if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
+        pulseTimerRef.current = setTimeout(() => setOiPulse(false), 900);
+      }
+    } finally {
+      setLoadingOI(false);
+    }
+  }, [coin.symbol, coin.baseAsset, coin.currentPrice, livePrice]);
+
+  // Initial fetch and auto-update every 10 seconds
+  useEffect(() => {
+    setLoadingOI(true);
+    fetchOI(false);
+
+    const interval = setInterval(() => {
+      fetchOI(true);
+    }, 10000);
+
+    return () => {
+      clearInterval(interval);
+      if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
+    };
+  }, [fetchOI]);
 
   // Recalculate analysis strictly based on the active timeframe and its klines
   const analysis = useMemo(() => {
@@ -154,22 +345,13 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
 
   return (
     <div className="w-full text-slate-300 text-xs font-sans select-text pb-1 space-y-2">
-      {/* Header row without borders: Live indicator & Timeframe buttons above the chart */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-          </span>
-
-       
-        </div>
-
-       
-      </div>
-
       {/* 3 Columns of Plain Text Information (No borders, simple crisp typography) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-2 text-xs leading-relaxed">
+  
+
+       
+
+
         {/* Section 1: Найближчі пули ліквідності */}
         <div className="space-y-1">
           <div className="text-[11px] font-bold text-sky-400 uppercase tracking-wide">

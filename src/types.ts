@@ -609,6 +609,8 @@ export interface SurveillanceState {
   channelUpper: number;
   channelLower: number;
   momentumRecentPct?: number;
+  momentumPct?: number;
+  structureStatus?: string;
   lastEvent?: SurveillanceEvent;
   recentEvents?: SurveillanceEvent[];
   lastCalculated?: number;

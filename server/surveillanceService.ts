@@ -102,6 +102,34 @@ export function saveSurveillanceList(userId: string, list: SurveillanceCoin[]): 
   return saveSurveillanceStore(store);
 }
 
+export function findSurveillanceCoinById(
+  id: string,
+  preferredUserId?: string
+): { userId: string; coin: SurveillanceCoin; index: number; list: SurveillanceCoin[] } | null {
+  const store = loadSurveillanceStore();
+
+  // Try preferred user first
+  if (preferredUserId && store[preferredUserId]) {
+    const list = store[preferredUserId];
+    const idx = list.findIndex((c) => c.id === id);
+    if (idx !== -1) {
+      return { userId: preferredUserId, coin: list[idx], index: idx, list };
+    }
+  }
+
+  // Fallback: search across all user stores
+  for (const [uid, list] of Object.entries(store)) {
+    if (Array.isArray(list)) {
+      const idx = list.findIndex((c) => c.id === id);
+      if (idx !== -1) {
+        return { userId: uid, coin: list[idx], index: idx, list };
+      }
+    }
+  }
+
+  return null;
+}
+
 export function getAllActiveSurveillanceCoins(): { userId: string; coin: SurveillanceCoin }[] {
   const store = loadSurveillanceStore();
   const results: { userId: string; coin: SurveillanceCoin }[] = [];
@@ -150,12 +178,24 @@ export async function calculateSurveillanceState(
       fetchKlines(exchange, marketType, symbol, '15m', 40).catch(() => []),
     ]);
 
-    if (!klines4h || klines4h.length < 10) {
-      console.warn(`[Surveillance] Insufficient 4h klines for ${symbol}`);
-      return null;
+    let activeCandles = klines4h;
+    if (!activeCandles || activeCandles.length < 5) {
+      if (klines1h && klines1h.length >= 5) activeCandles = klines1h;
+      else if (klines15m && klines15m.length >= 5) activeCandles = klines15m;
+      else if (klines1d && klines1d.length >= 2) activeCandles = klines1d;
     }
 
-    const currentCandle = klines4h[klines4h.length - 1];
+    if (!activeCandles || activeCandles.length === 0) {
+      console.warn(`[Surveillance] Attempting fallback fetch for ${symbol}`);
+      const altMarket = marketType === 'futures' ? 'spot' : 'futures';
+      const fallbackKlines = await fetchKlines(exchange, altMarket, symbol, '1h', 30).catch(() => []);
+      if (!fallbackKlines || fallbackKlines.length === 0) {
+        return null;
+      }
+      activeCandles = fallbackKlines;
+    }
+
+    const currentCandle = activeCandles[activeCandles.length - 1];
     const currentPrice = currentCandle.close;
 
     let change24h = 0;
@@ -624,6 +664,28 @@ export async function checkCoinSurveillance(
 }
 
 let isLoopRunning = false;
+
+export async function checkAllUserCoins(userId: string): Promise<SurveillanceCoin[]> {
+  const store = loadSurveillanceStore();
+  const uid = userId && userId.trim() !== '' ? userId.trim() : 'guest';
+  const list = store[uid] || [];
+  if (list.length === 0) return [];
+
+  const updatedList: SurveillanceCoin[] = [];
+  for (const coin of list) {
+    try {
+      const { coin: updated } = await checkCoinSurveillance(coin, true);
+      updatedList.push(updated);
+    } catch {
+      updatedList.push(coin);
+    }
+  }
+
+  store[uid] = updatedList;
+  saveSurveillanceStore(store);
+  return updatedList;
+}
+
 export function startSurveillanceMonitor(intervalMs = 25000) {
   if (isLoopRunning) return;
   isLoopRunning = true;

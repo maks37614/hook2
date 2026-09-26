@@ -237,7 +237,6 @@ export const Header: React.FC<HeaderProps> = ({
               title="Стеження за Монетою (Системний нагляд SignalHook)"
             >
               <Radar className="w-3.5 h-3.5 text-violet-400" />
-              <span className="font-semibold hidden sm:inline lg:hidden">Стеження</span>
               {surveillanceCount > 0 && (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-violet-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {surveillanceCount}

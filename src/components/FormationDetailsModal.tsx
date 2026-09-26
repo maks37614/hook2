@@ -102,6 +102,10 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
   const [livePrice, setLivePrice] = useState<number>(
     archivedItem?.savedPrice || coin.currentPrice
   );
+  const [liveStatus, setLiveStatus] = useState<{ isConnected: boolean; mode: 'ws' | 'rest' }>({
+    isConnected: true,
+    mode: 'ws',
+  });
   const [klines, setKlines] = useState<Kline[]>([]);
   const [loadingKlines, setLoadingKlines] = useState<boolean>(true);
   const [aiAnalysis, setAiAnalysis] = useState<FormationAIAnalysis | null>(null);
@@ -515,6 +519,61 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
                 <h2 className="text-base sm:text-xl font-extrabold text-white font-mono tracking-wide">
                   {coin.baseAsset}/{coin.quoteAsset}
                 </h2>
+
+                {/* Green round live stream status indicator moved to header next to coin name */}
+                <div
+                  className={`flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 rounded-full border text-[10px] sm:text-[11px] font-mono font-medium transition-all ${
+                    liveStatus.isConnected
+                      ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300 shadow-sm shadow-emerald-950/40'
+                      : 'bg-slate-800/80 border-slate-700 text-slate-400'
+                  }`}
+                  title={`Оновлення котирувань в реальному часі (${liveStatus.mode.toUpperCase()})`}
+                >
+                  <span className="relative flex h-2 w-2">
+                    <span
+                      className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                        liveStatus.isConnected ? 'bg-emerald-400' : 'bg-slate-400'
+                      }`}
+                    ></span>
+                    <span
+                      className={`relative inline-flex rounded-full h-2 w-2 ${
+                        liveStatus.isConnected ? 'bg-emerald-500' : 'bg-slate-500'
+                      }`}
+                    ></span>
+                  </span>
+                  <span className="font-bold tracking-wider">
+                    {liveStatus.mode === 'ws' ? '⚡ LIVE' : '● LIVE'}
+                  </span>
+                </div>
+
+                {/* Formation Button moved to header next to coin name */}
+                {formation && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById('formation-trade-setup-card');
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
+                    }}
+                    className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-0.5 rounded-full border text-[10px] sm:text-[11px] font-semibold transition-all cursor-pointer shadow-sm ${
+                      isBullish
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                        : isBearish
+                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                        : 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                    }`}
+                    title={`Формація: ${formation.name} (${formation.statusLabel})`}
+                  >
+                    <span className="text-[9px] sm:text-[10px] font-black">
+                      {isBullish ? '▲' : isBearish ? '▼' : '◆'}
+                    </span>
+                    <span className="font-medium tracking-tight">
+                      {formation.name}
+                    </span>
+                  </button>
+                )}
+
                 <span
                   className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded font-bold uppercase ${
                     coin.exchange === 'binance'
@@ -555,7 +614,6 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
               title="Налаштувати сповіщення в Telegram"
             >
               <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400" />
-              <span className="hidden md:inline">Telegram</span>
             </button>
 
             {onSendMetaScalp && (
@@ -565,7 +623,6 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
                 title={`Відкрити в MetaScalp (Група ${metaScalpBinding})`}
               >
                 <Zap className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 fill-amber-400/30" />
-                <span className="hidden md:inline">В MetaScalp</span>
                 <span className="font-mono text-[10px] px-1 rounded bg-amber-500/20 text-amber-200">
                   {metaScalpBinding}
                 </span>
@@ -579,7 +636,6 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
               title="Повернутися в головне меню"
             >
               <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span className="hidden sm:inline">В головне меню</span>
               <span className="sm:hidden">Назад</span>
             </button>
           </div>
@@ -618,6 +674,10 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
                   onHistoryLimitChange={setHistoryLimit}
                   onTimeframeChange={setTimeframe}
                   onLivePriceUpdate={setLivePrice}
+                  hideHeaderLiveIndicator={true}
+                  hideHeaderFormationBadge={true}
+                  hideSymbolAndPrice={true}
+                  onLiveStatusChange={setLiveStatus}
                   onOpenFullscreen={() => setIsFullscreenChartOpen(true)}
                   onAddToArchive={handleSaveToArchive}
                   isArchived={alreadyArchived}
@@ -913,7 +973,7 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
 
             {/* Right: Formation & Trade Setup Card */}
             <div className="space-y-4">
-              <div className="p-5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4">
+              <div id="formation-trade-setup-card" className="p-5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">

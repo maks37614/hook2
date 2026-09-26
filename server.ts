@@ -33,6 +33,8 @@ import {
   getDefaultSurveillanceConfig,
   checkCoinSurveillance,
   startSurveillanceMonitor,
+  checkAllUserCoins,
+  findSurveillanceCoinById,
 } from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
 
@@ -529,15 +531,13 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { userId, config, isActive } = req.body;
-      const uid = userId || 'guest';
-      const list = loadSurveillanceList(uid);
-      const idx = list.findIndex((c) => c.id === id);
+      const found = findSurveillanceCoinById(id, userId);
 
-      if (idx === -1) {
+      if (!found) {
         return res.status(404).json({ success: false, error: 'Монету не знайдено в нагляді' });
       }
 
-      const coin = list[idx];
+      const coin = found.coin;
       const updatedCoin = {
         ...coin,
         isActive: isActive !== undefined ? Boolean(isActive) : coin.isActive,
@@ -545,8 +545,8 @@ async function startServer() {
         updatedAt: new Date().toISOString(),
       };
 
-      list[idx] = updatedCoin;
-      saveSurveillanceList(uid, list);
+      found.list[found.index] = updatedCoin;
+      saveSurveillanceList(found.userId, found.list);
 
       res.json({ success: true, coin: updatedCoin });
     } catch (err: any) {
@@ -557,11 +557,32 @@ async function startServer() {
   app.delete('/api/surveillance/:id', (req, res) => {
     try {
       const { id } = req.params;
-      const userId = (req.query.userId as string) || req.body?.userId || 'guest';
-      const list = loadSurveillanceList(userId);
-      const filtered = list.filter((c) => c.id !== id);
-      saveSurveillanceList(userId, filtered);
+      const userId = (req.query.userId as string) || req.body?.userId;
+      const found = findSurveillanceCoinById(id, userId);
+
+      if (!found) {
+        // Fallback: try by userId directly
+        const uid = userId || 'guest';
+        const list = loadSurveillanceList(uid);
+        const filtered = list.filter((c) => c.id !== id);
+        saveSurveillanceList(uid, filtered);
+        return res.json({ success: true });
+      }
+
+      const filtered = found.list.filter((c) => c.id !== id);
+      saveSurveillanceList(found.userId, filtered);
       res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/surveillance/check-all', async (req, res) => {
+    try {
+      const { userId } = req.body;
+      const uid = userId || 'guest';
+      const updatedList = await checkAllUserCoins(uid);
+      res.json({ success: true, data: updatedList });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -571,20 +592,15 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { userId, forceNotify } = req.body;
-      const uid = userId || 'guest';
-      const list = loadSurveillanceList(uid);
-      const coin = list.find((c) => c.id === id);
+      const found = findSurveillanceCoinById(id, userId);
 
-      if (!coin) {
+      if (!found) {
         return res.status(404).json({ success: false, error: 'Монету не знайдено' });
       }
 
-      const { coin: updated } = await checkCoinSurveillance(coin, Boolean(forceNotify));
-      const idx = list.findIndex((c) => c.id === id);
-      if (idx !== -1) {
-        list[idx] = updated;
-        saveSurveillanceList(uid, list);
-      }
+      const { coin: updated } = await checkCoinSurveillance(found.coin, Boolean(forceNotify));
+      found.list[found.index] = updated;
+      saveSurveillanceList(found.userId, found.list);
 
       res.json({ success: true, coin: updated });
     } catch (err: any) {
