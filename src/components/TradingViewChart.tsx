@@ -978,7 +978,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           />
 
           <span className="text-[10px] font-sans text-slate-400 uppercase tracking-tight">
-            Закриття {timeframe}:
+           
           </span>
 
           <span
