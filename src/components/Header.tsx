@@ -144,6 +144,8 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
+
+
           {/* Quick Stats Bar */}
           <div className="hidden xl:flex items-center gap-2.5 sm:gap-4 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs">
             <div className="flex items-center gap-1.5">
@@ -167,8 +169,6 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-rose-400 font-semibold">▼ {bearishCount}</span>
             </div>
           </div>
-
-          {/* Action Buttons */}
           <div className="flex items-center gap-2">
             <button
               id="refresh-screener-btn"

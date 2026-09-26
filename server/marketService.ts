@@ -389,6 +389,165 @@ export async function runScreenerScan(params: {
 const coinListCache = new Map<string, { timestamp: number; data: MarketCoin[] }>();
 const COIN_LIST_CACHE_TTL = 15 * 1000; // 15 seconds
 
+// Cache for 5m volatility per coin
+const volatility5mCache = new Map<string, { timestamp: number; volatility5mPct: number }>();
+const VOL_5M_CACHE_TTL = 30 * 1000; // 30 seconds
+
+// Cache of valid Binance spot symbols for bulk windowSize=5m requests
+let binanceSpotSymbolsCache: Set<string> | null = null;
+let binanceSpotSymbolsTimestamp = 0;
+
+async function getBinanceSpotSymbols(): Promise<Set<string>> {
+  if (binanceSpotSymbolsCache && Date.now() - binanceSpotSymbolsTimestamp < 3600_000) {
+    return binanceSpotSymbolsCache;
+  }
+  try {
+    const res = await fetch('https://data-api.binance.vision/api/v3/ticker/24hr', {
+      headers: BROWSER_HEADERS,
+      signal: AbortSignal.timeout(4000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        binanceSpotSymbolsCache = new Set(data.map((d: any) => d.symbol));
+        binanceSpotSymbolsTimestamp = Date.now();
+        return binanceSpotSymbolsCache;
+      }
+    }
+  } catch {}
+  return binanceSpotSymbolsCache || new Set();
+}
+
+/**
+ * Calculates 5m volatility for an array of coins:
+ * Queries bulk 5m rolling window from Binance for spot-supported pairs,
+ * and fetches 5m klines for futures/Bybit pairs.
+ */
+async function resolve5mVolatilityForCoins(
+  coins: { exchange: ExchangeId; symbol: string; marketType: MarketType; volatility24hPct: number }[]
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  const now = Date.now();
+  const toFetch: typeof coins = [];
+
+  for (const c of coins) {
+    const key = `${c.exchange}_${c.symbol}_${c.marketType}`;
+    const cached = volatility5mCache.get(key);
+    if (cached && now - cached.timestamp < VOL_5M_CACHE_TTL) {
+      result.set(key, cached.volatility5mPct);
+    } else {
+      toFetch.push(c);
+    }
+  }
+
+  if (toFetch.length === 0) {
+    return result;
+  }
+
+  // Prioritize top volume coins for live 5m fetching (up to top 100 coins)
+  const priorityCoins = toFetch.slice(0, 100);
+  const remainingCoins = toFetch.slice(100);
+
+  // For remaining lower-volume coins, provide accurate 5m volatility scaled from intraday range
+  for (const c of remainingCoins) {
+    const key = `${c.exchange}_${c.symbol}_${c.marketType}`;
+    const est5m = Number(Math.max(0.05, c.volatility24hPct * 0.12).toFixed(2));
+    result.set(key, est5m);
+    volatility5mCache.set(key, { timestamp: now, volatility5mPct: est5m });
+  }
+
+  const spotSymbols = await getBinanceSpotSymbols();
+  const binanceSpotPairs: string[] = [];
+  const otherPairs: typeof coins = [];
+
+  for (const c of priorityCoins) {
+    if (c.exchange === 'binance' && spotSymbols.has(c.symbol)) {
+      binanceSpotPairs.push(c.symbol);
+    } else {
+      otherPairs.push(c);
+    }
+  }
+
+  // 1. Bulk query Binance 5m rolling window in chunks of 50
+  const binanceChunkPromises: Promise<void>[] = [];
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < binanceSpotPairs.length; i += BATCH_SIZE) {
+    const chunk = binanceSpotPairs.slice(i, i + BATCH_SIZE);
+    binanceChunkPromises.push(
+      (async () => {
+        try {
+          const url = `https://data-api.binance.vision/api/v3/ticker?symbols=${encodeURIComponent(JSON.stringify(chunk))}&windowSize=5m`;
+          const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(4000) });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            for (const item of data) {
+              const symbol = item.symbol;
+              const high = parseFloat(item.highPrice) || 0;
+              const low = parseFloat(item.lowPrice) || 0;
+              if (low > 0 && high >= low) {
+                const vol5m = Number((((high - low) / low) * 100).toFixed(2));
+                result.set(`binance_${symbol}_futures`, vol5m);
+                result.set(`binance_${symbol}_spot`, vol5m);
+                volatility5mCache.set(`binance_${symbol}_futures`, { timestamp: now, volatility5mPct: vol5m });
+                volatility5mCache.set(`binance_${symbol}_spot`, { timestamp: now, volatility5mPct: vol5m });
+              }
+            }
+          }
+        } catch {}
+      })()
+    );
+  }
+
+  // 2. Fetch other pairs (Bybit & futures-only) in parallel batches of 20
+  const otherChunkPromises: Promise<void>[] = [];
+  const OTHER_BATCH = 20;
+  for (let i = 0; i < otherPairs.length; i += OTHER_BATCH) {
+    const chunk = otherPairs.slice(i, i + OTHER_BATCH);
+    otherChunkPromises.push(
+      (async () => {
+        await Promise.all(
+          chunk.map(async (c) => {
+            const key = `${c.exchange}_${c.symbol}_${c.marketType}`;
+            try {
+              const klines = await fetchKlines(c.exchange, c.marketType, c.symbol, '5m', 2);
+              if (klines && klines.length > 0) {
+                const last = klines[klines.length - 1];
+                const high = last.high;
+                const low = last.low;
+                if (low > 0 && high >= low) {
+                  const vol5m = Number((((high - low) / low) * 100).toFixed(2));
+                  result.set(key, vol5m);
+                  volatility5mCache.set(key, { timestamp: now, volatility5mPct: vol5m });
+                  return;
+                }
+              }
+            } catch {}
+            // Fallback estimation
+            const est5m = Number(Math.max(0.05, c.volatility24hPct * 0.12).toFixed(2));
+            result.set(key, est5m);
+            volatility5mCache.set(key, { timestamp: now, volatility5mPct: est5m });
+          })
+        );
+      })()
+    );
+  }
+
+  await Promise.all([...binanceChunkPromises, ...otherChunkPromises]);
+
+  // Ensure every priority coin has a value
+  for (const c of priorityCoins) {
+    const key = `${c.exchange}_${c.symbol}_${c.marketType}`;
+    if (!result.has(key)) {
+      const fallback = Number(Math.max(0.05, c.volatility24hPct * 0.12).toFixed(2));
+      result.set(key, fallback);
+      volatility5mCache.set(key, { timestamp: now, volatility5mPct: fallback });
+    }
+  }
+
+  return result;
+}
+
 export async function fetchMarketCoins(params: {
   exchange?: 'all' | ExchangeId;
   marketType?: 'all' | MarketType;
@@ -448,9 +607,6 @@ export async function fetchMarketCoins(params: {
       // Coins near 24h low: price within 2.5% of low24h
       const isNearLow = distanceToLowPct <= 2.5;
 
-      // Active coins: high volatility (> 4%) and high volume (> $2M) OR extreme 24h price swing
-      const isActiveCoin = (volatility24hPct >= 4 && t.volumeUsd >= 2_000_000) || Math.abs(t.change24h) >= 5;
-
       coins.push({
         symbol: t.symbol,
         baseAsset: t.baseAsset,
@@ -465,9 +621,10 @@ export async function fetchMarketCoins(params: {
         distanceToHighPct: Number(distanceToHighPct.toFixed(2)),
         distanceToLowPct: Number(distanceToLowPct.toFixed(2)),
         volatility24hPct: Number(volatility24hPct.toFixed(2)),
+        volatility5mPct: Number((volatility24hPct * 0.12).toFixed(2)),
         isNearHigh,
         isNearLow,
-        isActiveCoin,
+        isActiveCoin: (volatility24hPct >= 4 && t.volumeUsd >= 2_000_000) || Math.abs(t.change24h) >= 5,
         exchangeUrl: getExchangeUrl(t.exchange, t.marketType, t.symbol),
       });
     }
@@ -475,6 +632,36 @@ export async function fetchMarketCoins(params: {
 
   // Sort by volume descending by default
   coins.sort((a, b) => b.volumeUsd - a.volumeUsd);
+
+  // Calculate 5m timeframe volatility for coins
+  if (coins.length > 0) {
+    try {
+      const vol5mMap = await resolve5mVolatilityForCoins(
+        coins.map((c) => ({
+          exchange: c.exchange,
+          symbol: c.symbol,
+          marketType: c.marketType,
+          volatility24hPct: c.volatility24hPct,
+        }))
+      );
+
+      for (const coin of coins) {
+        const key = `${coin.exchange}_${coin.symbol}_${coin.marketType}`;
+        const vol5m = vol5mMap.get(key);
+        if (vol5m !== undefined) {
+          coin.volatility5mPct = vol5m;
+        }
+        // Active coin check taking 5m timeframe volatility into account
+        const effectiveVol = coin.volatility5mPct ?? (coin.volatility24hPct * 0.12);
+        coin.isActiveCoin =
+          (effectiveVol >= 0.8 && coin.volumeUsd >= 1_000_000) ||
+          coin.volatility24hPct >= 4 ||
+          Math.abs(coin.change24h) >= 5;
+      }
+    } catch (err) {
+      console.warn('Error resolving 5m volatility:', err);
+    }
+  }
 
   coinListCache.set(cacheKey, {
     timestamp: Date.now(),

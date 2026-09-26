@@ -161,9 +161,7 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
           </span>
-          <span className="font-extrabold text-white uppercase text-[11px] tracking-wide">
-            Аналіз у реальному часі
-          </span>
+
           <span className="text-slate-400 font-mono text-[11px]">
             (${formatCryptoPrice(analysis.cur)})
           </span>

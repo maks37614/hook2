@@ -93,6 +93,7 @@ export interface ScannedCoin {
   highPrice24h: number;
   lowPrice24h: number;
   volume24hUsd: number;
+  volumeUsd?: number;
   formations: DetectedFormation[];
   timeframe: Timeframe;
   lastUpdated: number;
@@ -247,6 +248,7 @@ export interface MarketCoin {
   distanceToHighPct: number;
   distanceToLowPct: number;
   volatility24hPct: number;
+  volatility5mPct?: number;
   isNearHigh: boolean;
   isNearLow: boolean;
   isActiveCoin: boolean;
@@ -594,6 +596,8 @@ export interface SurveillanceState {
   swingLow4h: number;
   localHigh1h: number;
   localLow1h: number;
+  localHigh15m: number;
+  localLow15m: number;
   rangePositionPct: number; // 0 - 100% position in 4H range
   resistance4h: number;
   support4h: number;

@@ -2,6 +2,7 @@ import React from 'react';
 import { ExternalLink, Star, BarChart2, TrendingUp, TrendingDown, Zap, Send } from 'lucide-react';
 import { ScannedCoin, DetectedFormation } from '../types';
 import { formatCryptoPrice, formatVolume } from '../utils/formatters';
+import { useLanguage } from '../context/LanguageContext';
 
 interface ScreenerTableProps {
   items: { coin: ScannedCoin; formation: DetectedFormation }[];
@@ -22,6 +23,7 @@ export const ScreenerTable: React.FC<ScreenerTableProps> = ({
   metaScalpBinding = '001',
   onOpenAlert,
 }) => {
+  const { t } = useLanguage();
   const formatPrice = (price: number) => formatCryptoPrice(price);
 
   return (
@@ -30,18 +32,18 @@ export const ScreenerTable: React.FC<ScreenerTableProps> = ({
         <thead className="bg-slate-950/80 text-[11px] text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-800">
           <tr>
             <th className="py-3 px-2 sm:px-3 w-8 sm:w-10 text-center">★</th>
-            <th className="py-3 px-3 sm:px-4">Монета</th>
-            <th className="py-3 px-3 hidden sm:table-cell">Біржа</th>
-            <th className="py-3 px-3 sm:px-4">Формація</th>
-            <th className="py-3 px-2 sm:px-3 text-center">Напрямок</th>
-            <th className="py-3 px-3 text-center hidden md:table-cell">Статус</th>
-            <th className="py-3 px-3 text-center hidden lg:table-cell">Впевненість</th>
-            <th className="py-3 px-3 sm:px-4 text-right">Ціна</th>
-            <th className="py-3 px-2 sm:px-3 text-right">24г Зміна</th>
-            <th className="py-3 px-3 sm:px-4 text-right hidden md:table-cell">Обсяг 24г</th>
-            <th className="py-3 px-3 text-center hidden xl:table-cell">Рівні (Вхід / TP / SL)</th>
+            <th className="py-3 px-3 sm:px-4">{t('coin')}</th>
+            <th className="py-3 px-3 hidden sm:table-cell">{t('exchange')}</th>
+            <th className="py-3 px-3 sm:px-4">{t('patterns')}</th>
+            <th className="py-3 px-2 sm:px-3 text-center">{t('direction')}</th>
+            <th className="py-3 px-3 text-center hidden md:table-cell">{t('formationStatus')}</th>
+            <th className="py-3 px-3 text-center hidden lg:table-cell">{t('confidence')}</th>
+            <th className="py-3 px-3 sm:px-4 text-right">{t('price')}</th>
+            <th className="py-3 px-2 sm:px-3 text-right">{t('change24h')}</th>
+            <th className="py-3 px-3 sm:px-4 text-right hidden md:table-cell">{t('volume')}</th>
+            <th className="py-3 px-3 text-center hidden xl:table-cell">Рівні (Entry / TP / SL)</th>
             <th className="py-3 px-3 text-center hidden 2xl:table-cell">R:R</th>
-            <th className="py-3 px-3 sm:px-4 text-center">Дії</th>
+            <th className="py-3 px-3 sm:px-4 text-center">{t('action')}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-800/60 font-sans">

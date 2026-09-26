@@ -19,7 +19,6 @@ import {
   Expand,
   FolderArchive,
   CheckCircle2,
-  Crosshair,
 } from 'lucide-react';
 import { Kline, DetectedFormation, Timeframe, ExchangeId, MarketType, ChartMarkerInfo, ChartRestoreParams } from '../types';
 import { getChartPriceFormat, formatCryptoPrice } from '../utils/formatters';
@@ -736,8 +735,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     };
   }, [symbol, timeframe, exchange, marketType, handleLiveTick]);
 
-  const historyOptions = [150, 300, 500, 1000];
-
   return (
     <div className={`relative w-full rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-xl flex flex-col ${fullHeight ? 'h-full flex-1 min-h-0' : ''}`}>
       {/* Top Header Bar */}
@@ -815,41 +812,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         </div>
 
   
-        {/* Right: History Depth Selector & View Controls */}
+        {/* Right: View Controls */}
         <div className="flex items-center flex-wrap gap-1.5 sm:gap-2 text-slate-300 text-[10px] sm:text-[11px]">
-          {/* History Depth Selector */}
-          {onHistoryLimitChange && (
-            <div className="flex items-center gap-0.5 sm:gap-1 bg-slate-950 px-1 sm:px-1.5 py-0.5 rounded-lg border border-slate-800">
-              <span className="text-[10px] text-slate-400 font-medium hidden md:inline">Історія:</span>
-              {historyOptions.map((opt) => (
-                <button
-                  key={opt}
-                  onClick={() => onHistoryLimitChange(opt)}
-                  className={`px-1 sm:px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-mono transition-colors cursor-pointer ${
-                    historyLimit === opt
-                      ? 'bg-cyan-600 text-white font-bold shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                  title={`Завантажити ${opt} свічок в історію`}
-                >
-                  {opt}
-                </button>
-              ))}
-              <span className="text-[10px] text-slate-500 font-mono hidden sm:inline">бар</span>
-            </div>
-          )}
-
-             {/* Zoom Recent Buttons */}
+          {/* Zoom Recent Buttons */}
           <div className="flex items-center gap-1">
-            <button
-              onClick={centerChartOnScreen}
-              className="flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 text-[10px] sm:text-[11px] cursor-pointer active:scale-95"
-              title="Авто фокус на центр графіка (відцентрувати свічки та формацію)"
-            >
-              <Crosshair className="w-3 h-3 text-cyan-400" />
-              <span className="hidden sm:inline">Центрувати</span>
-            </button>
-
             <button
               onClick={handleZoomRecent}
               className="flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 text-[10px] sm:text-[11px] cursor-pointer active:scale-95"

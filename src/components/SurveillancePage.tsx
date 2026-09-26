@@ -157,7 +157,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
     return list.filter((c) => {
       const matchSearch = !coinSearchTerm.trim() || c.symbol.toLowerCase().includes(coinSearchTerm.toLowerCase());
-      const matchVol = addMinVolume === 0 || (c.volumeUsd !== undefined ? c.volumeUsd >= addMinVolume : true);
+      const vol = (c as any).volumeUsd ?? (c as any).volume24hUsd ?? 0;
+      const matchVol = addMinVolume === 0 || vol >= addMinVolume;
       const matchEx = c.exchange === selectedExchange;
       const matchMarket = c.marketType === selectedMarketType;
       return matchSearch && matchVol && matchEx && matchMarket;
@@ -812,7 +813,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-white">{c.symbol}</span>
                           <span className="text-[10px] text-slate-400">
-                            {c.volumeUsd ? `$${(c.volumeUsd / 1000).toFixed(0)}k` : ''}
+                            {((c as any).volumeUsd || (c as any).volume24hUsd) ? `$${(((c as any).volumeUsd || (c as any).volume24hUsd) / 1000).toFixed(0)}k` : ''}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">

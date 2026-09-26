@@ -38,6 +38,7 @@ import {
 import { formatCryptoPrice, formatVolume, formatPercent } from '../utils/formatters';
 import { getStoredPreferences, useAppPreferences } from '../utils/userPreferences';
 import { MarketSentimentWidget } from './MarketSentimentWidget';
+import { useLanguage } from '../context/LanguageContext';
 import {
   fetchDirectBinanceTickers,
   fetchDirectBybitTickers,
@@ -65,6 +66,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   onOpenWatchlist,
   formationsCoins = [],
 }) => {
+  const { t } = useLanguage();
   const [coins, setCoins] = useState<MarketCoin[]>(() =>
     TOP_POPULAR_PAIRS.map((p, idx) => ({
       symbol: p.symbol,
@@ -285,7 +287,9 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
       } else if (sortBy === 'price') {
         comparison = b.price - a.price;
       } else if (sortBy === 'volatility') {
-        comparison = b.volatility24hPct - a.volatility24hPct;
+        const valA = a.volatility5mPct !== undefined ? a.volatility5mPct : (a.volatility24hPct * 0.12);
+        const valB = b.volatility5mPct !== undefined ? b.volatility5mPct : (b.volatility24hPct * 0.12);
+        comparison = valB - valA;
       } else if (sortBy === 'distanceToHigh') {
         comparison = a.distanceToHighPct - b.distanceToHighPct;
       } else if (sortBy === 'distanceToLow') {
@@ -443,6 +447,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
           <span>{surveillanceToast}</span>
         </div>
       )}
+
       {/* Market Sentiment Block ("Настрій Ринку") */}
       <MarketSentimentWidget coins={coins} />
 
@@ -464,7 +469,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
         <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar pb-1 sm:pb-0 sm:flex-wrap">
           <span className="text-xs text-slate-400 font-semibold mr-1 flex items-center gap-1 shrink-0">
             <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden xs:inline">Фільтри:</span>
+            <span className="hidden xs:inline">{t('filters')}</span>
           </span>
 
           <button
@@ -475,7 +480,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white border border-slate-700/50'
             }`}
           >
-            Усі
+            {t('all')}
           </button>
 
           <button
@@ -487,7 +492,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
             }`}
           >
             <Flame className="w-3.5 h-3.5 fill-current" />
-            <span>Активні</span>
+            <span>{t('activeCoins')}</span>
             <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-950/80 text-amber-200 border border-amber-800/50 font-mono">
               {marketStats.activeCount}
             </span>
@@ -502,7 +507,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>Топ ріст 24г</span>
+            <span>{t('topGainers')}</span>
           </button>
 
           <button
@@ -514,7 +519,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
             }`}
           >
             <TrendingDown className="w-3.5 h-3.5" />
-            <span>Топ спад 24г</span>
+            <span>{t('topLosers')}</span>
           </button>
 
           <button
@@ -526,7 +531,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
             }`}
           >
             <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>На хаях</span>
+            <span>{t('nearHighs')}</span>
             <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-purple-950/80 text-purple-200 border border-purple-800/50 font-mono">
               {marketStats.nearHighCount}
             </span>
@@ -541,7 +546,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
             }`}
           >
             <ArrowDownRight className="w-3.5 h-3.5" />
-            <span>На лоях</span>
+            <span>{t('nearLows')}</span>
             <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-950/80 text-blue-200 border border-blue-800/50 font-mono">
               {marketStats.nearLowCount}
             </span>
@@ -557,7 +562,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Пошук монети"
+                placeholder={t('search')}
                 className="w-full pl-9 pr-8 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors font-mono"
               />
               {searchQuery && (
@@ -580,7 +585,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   exchange === 'all' ? 'bg-slate-800 text-white font-semibold' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Всі
+                {t('all')}
               </button>
               <button
                 onClick={() => setExchange('binance')}
@@ -608,7 +613,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   marketType === 'all' ? 'bg-slate-800 text-white font-semibold' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Всі ринки
+                {t('allMarkets')}
               </button>
               <button
                 onClick={() => setMarketType('futures')}
@@ -616,7 +621,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   marketType === 'futures' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' : 'text-slate-400 hover:text-indigo-400'
                 }`}
               >
-                Futures
+                {t('futures')}
               </button>
               <button
                 onClick={() => setMarketType('spot')}
@@ -624,7 +629,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   marketType === 'spot' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'text-slate-400 hover:text-emerald-400'
                 }`}
               >
-                Spot
+                {t('spot')}
               </button>
             </div>
 
@@ -639,7 +644,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 className={`p-1.5 rounded-lg transition-colors ${
                   viewMode === 'table' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500 hover:text-slate-300'
                 }`}
-                title="Табличний вигляд"
+                title={t('viewTable')}
               >
                 <List className="w-3.5 h-3.5" />
               </button>
@@ -648,7 +653,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 className={`p-1.5 rounded-lg transition-colors ${
                   viewMode === 'cards' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500 hover:text-slate-300'
                 }`}
-                title="Вигляд карток"
+                title={t('viewCards')}
               >
                 <LayoutGrid className="w-3.5 h-3.5" />
               </button>
@@ -680,7 +685,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 <option value="volume" className="bg-slate-900 text-white">Об'єм 24г</option>
                 <option value="priceChange" className="bg-slate-900 text-white">Зміна 24г (%)</option>
                 <option value="price" className="bg-slate-900 text-white">Ціна ($)</option>
-                <option value="volatility" className="bg-slate-900 text-white">Волатильність</option>
+                <option value="volatility" className="bg-slate-900 text-white">Волатильність (5m)</option>
                 <option value="distanceToHigh" className="bg-slate-900 text-white">Близькість до High</option>
                 <option value="distanceToLow" className="bg-slate-900 text-white">Близькість до Low</option>
               </select>
@@ -815,7 +820,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   className="py-3 px-3.5 font-semibold cursor-pointer hover:text-white transition-colors"
                 >
                   <div className="flex items-center gap-1">
-                    <span>Монета</span>
+                    <span>{t('coin')}</span>
                   </div>
                 </th>
                 <th
@@ -823,7 +828,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors"
                 >
                   <div className="flex items-center justify-end gap-1">
-                    <span>Ціна ($)</span>
+                    <span>{t('price')} ($)</span>
                     {sortBy === 'price' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
                   </div>
                 </th>
@@ -832,19 +837,19 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors"
                 >
                   <div className="flex items-center justify-end gap-1">
-                    <span>24г Зміна (%)</span>
+                    <span>{t('change24h')} (%)</span>
                     {sortBy === 'priceChange' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
                   </div>
                 </th>
                 <th className="py-3 px-3.5 font-semibold text-center hidden md:table-cell">
-                  24г Діапазон (Low - High)
+                  24h Range (Low - High)
                 </th>
                 <th
                   onClick={() => handleHeaderSort('distanceToHigh')}
                   className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors hidden lg:table-cell"
                 >
                   <div className="flex items-center justify-end gap-1">
-                    <span>До High 24г</span>
+                    <span>{t('distToHigh')}</span>
                     {sortBy === 'distanceToHigh' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
                   </div>
                 </th>
@@ -853,7 +858,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors hidden lg:table-cell"
                 >
                   <div className="flex items-center justify-end gap-1">
-                    <span>До Low 24г</span>
+                    <span>{t('distToLow')}</span>
                     {sortBy === 'distanceToLow' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
                   </div>
                 </th>
@@ -862,7 +867,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors"
                 >
                   <div className="flex items-center justify-end gap-1">
-                    <span>Об'єм 24г</span>
+                    <span>{t('volume')}</span>
                     {sortBy === 'volume' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
                   </div>
                 </th>
@@ -870,8 +875,11 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   onClick={() => handleHeaderSort('volatility')}
                   className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors hidden sm:table-cell"
                 >
-                  <div className="flex items-center justify-end gap-1">
-                    <span>Волатильність</span>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span>{t('volatility')}</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 font-bold tracking-wider">
+                      5m
+                    </span>
                     {sortBy === 'volatility' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
                   </div>
                 </th>
@@ -1073,19 +1081,27 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                       {formatVolume(coin.volumeUsd)}
                     </td>
 
-                    {/* Volatility */}
+                    {/* Volatility (5m timeframe) */}
                     <td className="py-3 px-3.5 text-right hidden sm:table-cell">
-                      <span
-                        className={`text-xs ${
-                          coin.volatility24hPct >= 8
-                            ? 'text-amber-400 font-bold'
-                            : coin.volatility24hPct >= 4
-                            ? 'text-slate-300 font-medium'
-                            : 'text-slate-500'
-                        }`}
-                      >
-                        {coin.volatility24hPct.toFixed(1)}%
-                      </span>
+                      {(() => {
+                        const vol = coin.volatility5mPct !== undefined ? coin.volatility5mPct : (coin.volatility24hPct * 0.12);
+                        return (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <span
+                              className={`text-xs font-mono ${
+                                vol >= 1.5
+                                  ? 'text-amber-400 font-bold'
+                                  : vol >= 0.6
+                                  ? 'text-emerald-400 font-medium'
+                                  : 'text-slate-400'
+                              }`}
+                            >
+                              {vol.toFixed(2)}%
+                            </span>
+                            <span className="text-[9px] text-slate-500 font-sans">5m</span>
+                          </div>
+                        );
+                      })()}
                     </td>
 
 
@@ -1211,13 +1227,27 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   </div>
                 </div>
 
-                {/* Card Footer: Volume + Action Buttons */}
+                {/* Card Footer: Volume + Volatility 5m + Action Buttons */}
                 <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs">
                   <div>
                     <span className="text-[10px] text-slate-500 block">Оборот 24г</span>
                     <span className="font-bold font-mono text-slate-300">
                       {formatVolume(coin.volumeUsd)}
                     </span>
+                  </div>
+
+                  <div className="text-center">
+                    <span className="text-[10px] text-slate-500 block">Волатильність 5m</span>
+                    {(() => {
+                      const vol = coin.volatility5mPct !== undefined ? coin.volatility5mPct : (coin.volatility24hPct * 0.12);
+                      return (
+                        <span className={`font-bold font-mono text-xs ${
+                          vol >= 1.5 ? 'text-amber-400' : vol >= 0.6 ? 'text-emerald-400' : 'text-slate-400'
+                        }`}>
+                          {vol.toFixed(2)}%
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   <div className="flex items-center gap-1">

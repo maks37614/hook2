@@ -20,6 +20,7 @@ import { useAlerts } from './context/AlertsContext';
 import { useAuth } from './context/AuthContext';
 import { useArchive } from './context/ArchiveContext';
 import { useSurveillance } from './context/SurveillanceContext';
+import { useLanguage } from './context/LanguageContext';
 import {
   MetaScalpSettings,
   getStoredMetaScalpSettings,
@@ -61,6 +62,7 @@ const DEFAULT_FILTERS: ScreenerFilterState = {
 
 export default function App() {
   const { preferences } = useAppPreferences();
+  const { t } = useLanguage();
   const [coins, setCoins] = useState<ScannedCoin[]>(() => getFallbackScannedCoins());
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -798,7 +800,7 @@ export default function App() {
                     onClick={() => setFilters(DEFAULT_FILTERS)}
                     className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-colors"
                   >
-                    Скинути фільтри
+                    {t('resetFilters')}
                   </button>
                 </div>
               )
