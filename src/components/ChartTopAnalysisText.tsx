@@ -414,6 +414,66 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
               (+{analysis.supplyDistPct.toFixed(2)}%)
             </span>
           </div>
+
+          <div>
+            <span className="text-slate-400">OI Binance: </span>
+            {loadingOI && !binanceOI ? (
+              <span className="font-mono text-slate-500 text-[11px] animate-pulse">оновлення...</span>
+            ) : binanceOI ? (
+              <>
+                <span className="font-mono font-bold text-amber-300">
+                  {formatOI(binanceOI.valueUsd)}
+                </span>
+                {binanceOI.change5mPct !== null && (
+                  <span
+                    className={`font-mono text-[11px] ml-1 font-semibold ${
+                      binanceOI.change5mPct >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                  >
+                    ({binanceOI.change5mPct >= 0 ? '+' : ''}{binanceOI.change5mPct.toFixed(2)}%)
+                  </span>
+                )}
+                <span
+                  className={`inline-block w-1.5 h-1.5 rounded-full ml-1.5 transition-all duration-300 ${
+                    oiPulse ? 'bg-amber-400 scale-125' : 'bg-emerald-500/70'
+                  }`}
+                  title="Авто-оновлення кожні 10 сек"
+                />
+              </>
+            ) : (
+              <span className="font-mono text-slate-500 text-[11px]">—</span>
+            )}
+          </div>
+
+          <div>
+            <span className="text-slate-400">OI Bybit: </span>
+            {loadingOI && !bybitOI ? (
+              <span className="font-mono text-slate-500 text-[11px] animate-pulse">оновлення...</span>
+            ) : bybitOI ? (
+              <>
+                <span className="font-mono font-bold text-orange-300">
+                  {formatOI(bybitOI.valueUsd)}
+                </span>
+                {bybitOI.change5mPct !== null && (
+                  <span
+                    className={`font-mono text-[11px] ml-1 font-semibold ${
+                      bybitOI.change5mPct >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                  >
+                    ({bybitOI.change5mPct >= 0 ? '+' : ''}{bybitOI.change5mPct.toFixed(2)}%)
+                  </span>
+                )}
+                <span
+                  className={`inline-block w-1.5 h-1.5 rounded-full ml-1.5 transition-all duration-300 ${
+                    oiPulse ? 'bg-orange-400 scale-125' : 'bg-emerald-500/70'
+                  }`}
+                  title="Авто-оновлення кожні 10 сек"
+                />
+              </>
+            ) : (
+              <span className="font-mono text-slate-500 text-[11px]">—</span>
+            )}
+          </div>
         </div>
 
         {/* Section 3: Найбільші ліквідації */}

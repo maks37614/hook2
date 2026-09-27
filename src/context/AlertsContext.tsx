@@ -17,12 +17,15 @@ import { useAuth } from './AuthContext';
 import { PriceAlert, AlertHistoryItem } from '../types';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { cleanForFirestore } from '../lib/firestoreUtils';
+import { playAlertChime } from '../utils/domSound';
 
 interface AlertsContextType {
   alerts: PriceAlert[];
   history: AlertHistoryItem[];
   loading: boolean;
   loadingHistory: boolean;
+  notificationPermission: NotificationPermission;
+  requestNotificationPermission: () => Promise<NotificationPermission>;
   addAlert: (
     data: Omit<PriceAlert, 'id' | 'createdAt' | 'triggered' | 'isActive'> & { isActive?: boolean }
   ) => Promise<PriceAlert>;
@@ -51,6 +54,55 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [history, setHistory] = useState<AlertHistoryItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'default';
+  });
+
+  const requestNotificationPermission = useCallback(async (): Promise<NotificationPermission> => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const perm = await Notification.requestPermission();
+        setNotificationPermission(perm);
+        return perm;
+      } catch {
+        return 'denied';
+      }
+    }
+    return 'denied';
+  }, []);
+
+  const handleServerAlertTriggered = useCallback((serverAlert: PriceAlert) => {
+    playAlertChime();
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('signalhook:alert-triggered', {
+          detail: {
+            symbol: serverAlert.symbol,
+            targetPrice: serverAlert.targetPrice,
+            condition: serverAlert.condition,
+            triggeredPrice: serverAlert.triggeredPrice,
+            message: serverAlert.note || serverAlert.formationName || 'Цільову ціну досягнуто!',
+          },
+        })
+      );
+
+      if ('Notification' in window && Notification.permission === 'granted') {
+        try {
+          const conditionSign = serverAlert.condition === 'gte' ? '≥' : '≤';
+          new Notification(`🚨 SIGNALHOOK: ${serverAlert.symbol}`, {
+            body: `Ціна: $${serverAlert.triggeredPrice} ${conditionSign} Ціль: $${serverAlert.targetPrice}\n${serverAlert.note || serverAlert.formationName || 'Ціль досягнута!'}`,
+            icon: '/favicon.ico',
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }, []);
 
   // Fetch notification history from server & Firestore
   const fetchHistory = useCallback(async () => {
@@ -228,6 +280,78 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     return () => unsubscribe();
   }, [user, profile?.telegramBotToken, profile?.telegramChatId, fetchHistory]);
+
+  // Active client-side CRON polling to sync with server alerts monitor every 5 seconds
+  useEffect(() => {
+    if (!user) return;
+
+    const pollSync = async () => {
+      try {
+        const isLocal = Boolean((user as any).isLocalUser);
+        let currentAlertsList = alerts;
+        if (isLocal) {
+          const saved = localStorage.getItem(`signalhook_user_alerts_${user.uid}`);
+          if (saved) {
+            try { currentAlertsList = JSON.parse(saved); } catch {}
+          }
+        }
+
+        const res = await fetch('/api/alerts/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: user.uid,
+            telegramBotToken: profile?.telegramBotToken,
+            telegramChatId: profile?.telegramChatId,
+            alerts: currentAlertsList,
+          }),
+        });
+
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.success && Array.isArray(data.alerts)) {
+          let hasNewlyTriggered = false;
+
+          data.alerts.forEach((serverAlert: PriceAlert) => {
+            const localMatch = currentAlertsList.find((a) => a.id === serverAlert.id);
+            if (localMatch && serverAlert.triggered && !localMatch.triggered) {
+              hasNewlyTriggered = true;
+              handleServerAlertTriggered(serverAlert);
+
+              if (!isLocal) {
+                const docRef = doc(db, 'users', user.uid, 'alerts', serverAlert.id);
+                updateDoc(
+                  docRef,
+                  cleanForFirestore({
+                    isActive: false,
+                    triggered: true,
+                    triggeredAt: serverAlert.triggeredAt || Date.now(),
+                    triggeredPrice: serverAlert.triggeredPrice || 0,
+                  })
+                ).catch(() => {});
+              }
+            }
+          });
+
+          if (isLocal) {
+            setAlerts(data.alerts);
+            try {
+              localStorage.setItem(`signalhook_user_alerts_${user.uid}`, JSON.stringify(data.alerts));
+            } catch {}
+          }
+
+          if (hasNewlyTriggered) {
+            fetchHistory();
+          }
+        }
+      } catch {
+        // silent fail
+      }
+    };
+
+    const interval = setInterval(pollSync, 5000);
+    return () => clearInterval(interval);
+  }, [user, profile?.telegramBotToken, profile?.telegramChatId, alerts, handleServerAlertTriggered, fetchHistory]);
 
   // Migrate local alerts to user profile on first login if any
   useEffect(() => {
@@ -668,6 +792,8 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         history,
         loading,
         loadingHistory,
+        notificationPermission,
+        requestNotificationPermission,
         addAlert,
         addAlertsBatch,
         deleteAlert,

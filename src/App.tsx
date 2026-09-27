@@ -259,6 +259,25 @@ export default function App() {
     }
   }, [alertToast]);
 
+  // Listen for background alert triggered events from AlertsContext CRON
+  useEffect(() => {
+    const handleTriggered = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent?.detail) {
+        setAlertToast({
+          id: Date.now(),
+          symbol: customEvent.detail.symbol,
+          targetPrice: customEvent.detail.targetPrice,
+          condition: customEvent.detail.condition,
+          message: customEvent.detail.message || 'Цільову ціну досягнуто!',
+        });
+      }
+    };
+
+    window.addEventListener('signalhook:alert-triggered', handleTriggered);
+    return () => window.removeEventListener('signalhook:alert-triggered', handleTriggered);
+  }, []);
+
   const handleOpenTelegramAlerts = useCallback((prefill?: any) => {
     setTelegramPrefill(prefill || null);
     setIsTelegramModalOpen(true);

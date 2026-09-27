@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   createChart,
   CandlestickSeries,
@@ -19,10 +19,12 @@ import {
   Expand,
   FolderArchive,
   CheckCircle2,
+  BarChart3,
 } from 'lucide-react';
 import { Kline, DetectedFormation, Timeframe, ExchangeId, MarketType, ChartMarkerInfo, ChartRestoreParams } from '../types';
 import { getChartPriceFormat, formatCryptoPrice } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
+import { ScalperDOMWidget } from './terminal/ScalperDOMWidget';
 
 interface TradingViewChartProps {
   klines: Kline[];
@@ -183,6 +185,33 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const klinesLengthRef = useRef<number>(klines.length);
   const hasInitiallyCenteredRef = useRef<boolean>(false);
   const prevSymbolRef = useRef<string>(symbol);
+
+  // View mode: 'chart' (Candlesticks) or 'dom' (Scalper Order Book)
+  const [chartViewMode, setChartViewMode] = useState<'chart' | 'dom'>('chart');
+
+  const baseAsset = useMemo(() => {
+    return symbol.replace(/(USDT|BUSD|USDC|EUR|BTC)$/, '') || symbol;
+  }, [symbol]);
+
+  const quoteAsset = useMemo(() => {
+    const match = symbol.match(/(USDT|BUSD|USDC|EUR|BTC)$/);
+    return match ? match[1] : 'USDT';
+  }, [symbol]);
+
+  // When switching back to chart, resize lightweight-charts smoothly
+  useEffect(() => {
+    if (chartViewMode === 'chart') {
+      const timer = setTimeout(() => {
+        if (chartContainerRef.current && chartRef.current) {
+          const { clientWidth, clientHeight } = chartContainerRef.current;
+          if (clientWidth > 0 && clientHeight > 0) {
+            chartRef.current.resize(clientWidth, clientHeight);
+          }
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [chartViewMode]);
 
   useEffect(() => {
     if (prevSymbolRef.current !== symbol) {
@@ -879,6 +908,30 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
           {/* Right: View Controls */}
           <div className="flex items-center gap-1 sm:gap-1.5 text-slate-300 text-[10px] sm:text-[11px] flex-nowrap shrink-0 ml-auto">
+            {/* Toggle Button: Стакан / Графік */}
+            <button
+              type="button"
+              onClick={() => setChartViewMode(chartViewMode === 'chart' ? 'dom' : 'chart')}
+              className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all border cursor-pointer active:scale-95 shrink-0 whitespace-nowrap ${
+                chartViewMode === 'dom'
+                  ? 'bg-cyan-500/25 text-cyan-200 border-cyan-400/60 shadow-sm shadow-cyan-900/40'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700'
+              }`}
+              title={chartViewMode === 'chart' ? 'Перемкнути на стакан DOM замість графіка' : 'Повернутися до графіка'}
+            >
+              {chartViewMode === 'chart' ? (
+                <>
+                  <Layers className="w-3 h-3 text-cyan-400" />
+                  <span>Стакан</span>
+                </>
+              ) : (
+                <>
+                  <BarChart3 className="w-3 h-3 text-indigo-400" />
+                  <span>Графік</span>
+                </>
+              )}
+            </button>
+
             {/* Zoom Recent Buttons */}
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -950,53 +1003,94 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         </div>
       )}
 
-      {/* Chart Canvas with Bottom-Right Bar Close Countdown */}
+      {/* Chart Canvas or Scalper DOM */}
       <div className={`relative w-full overflow-hidden ${fullHeight ? "flex-1 min-h-0" : "h-[220px] xs:h-[260px] sm:h-[300px] md:h-[350px] lg:h-[390px] xl:h-[430px]"}`}>
+        {/* TradingView Chart Container */}
         <div
           ref={chartContainerRef}
-          className="w-full h-full relative"
+          className={`w-full h-full relative transition-opacity duration-150 ${chartViewMode === 'chart' ? 'opacity-100 block' : 'opacity-0 pointer-events-none hidden'}`}
         />
 
-        {/* Right-Bottom: Time to Bar Close Countdown with Ticking */}
-        <div
-          className={`absolute right-14 sm:right-16 bottom-7 sm:bottom-8 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono font-bold select-none transition-all duration-300 backdrop-blur-md shadow-lg ${
-            barCountdown.isUrgent
-              ? `bg-rose-950/90 text-rose-300 border border-rose-500 shadow-rose-950/50 ${
-                  tickPulse ? 'scale-105 opacity-100 border-rose-400 shadow-rose-500/40' : 'scale-100 opacity-90'
-                }`
-              : 'bg-slate-950/85 text-slate-200 border border-slate-800/90 hover:border-slate-700'
-          }`}
-          title={`Час до закриття поточної ${timeframe} свічки: ${barCountdown.formatted}`}
-        >
-          <Clock
-            className={`w-3.5 h-3.5 ${
-              barCountdown.isUrgent
-                ? 'text-rose-400 animate-spin'
-                : 'text-cyan-400'
-            }`}
-            style={{ animationDuration: barCountdown.isUrgent ? '3s' : '10s' }}
-          />
+        {/* Scalper DOM View (Order Book + Trades Tape + Clusters) */}
+        {chartViewMode === 'dom' && (
+          <div className="absolute inset-0 w-full h-full z-10 animate-in fade-in zoom-in-95 duration-200">
+            <ScalperDOMWidget
+              symbol={symbol}
+              baseAsset={baseAsset}
+              quoteAsset={quoteAsset}
+              exchange={exchange}
+              marketType={marketType}
+              currentPrice={currentPrice || (klines.length > 0 ? klines[klines.length - 1].close : 0)}
+              priceChange24h={formation?.potentialProfitPct || 0}
+              initialTimeframe={timeframe as Timeframe}
+              onToggleView={() => setChartViewMode('chart')}
+            />
+          </div>
+        )}
 
-          <span className="text-[10px] font-sans text-slate-400 uppercase tracking-tight">
-           
-          </span>
-
-          <span
-            className={`tracking-wider ${
+        {/* Right-Bottom: Time to Bar Close Countdown + Button "Стакан" / "Графік" */}
+        <div className="absolute right-2.5 sm:right-3 bottom-2.5 sm:bottom-3 z-30 flex items-center gap-1.5 sm:gap-2 select-none pointer-events-auto">
+          {/* Time to Bar Close Countdown with Ticking */}
+          <div
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono font-bold select-none transition-all duration-300 backdrop-blur-md shadow-lg ${
               barCountdown.isUrgent
-                ? 'text-rose-300 font-extrabold text-[12px]'
-                : 'text-white'
+                ? `bg-rose-950/90 text-rose-300 border border-rose-500 shadow-rose-950/50 ${
+                    tickPulse ? 'scale-105 opacity-100 border-rose-400 shadow-rose-500/40' : 'scale-100 opacity-90'
+                  }`
+                : 'bg-slate-950/85 text-slate-200 border border-slate-800/90 hover:border-slate-700'
             }`}
+            title={`Час до закриття поточної ${timeframe} свічки: ${barCountdown.formatted}`}
           >
-            {barCountdown.formatted}
-          </span>
+            <Clock
+              className={`w-3.5 h-3.5 ${
+                barCountdown.isUrgent
+                  ? 'text-rose-400 animate-spin'
+                  : 'text-cyan-400'
+              }`}
+              style={{ animationDuration: barCountdown.isUrgent ? '3s' : '10s' }}
+            />
 
-          {barCountdown.isUrgent && (
-            <span className="relative flex h-2 w-2 ml-0.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+            <span
+              className={`tracking-wider ${
+                barCountdown.isUrgent
+                  ? 'text-rose-300 font-extrabold text-[12px]'
+                  : 'text-white'
+              }`}
+            >
+              {barCountdown.formatted}
             </span>
-          )}
+
+            {barCountdown.isUrgent && (
+              <span className="relative flex h-2 w-2 ml-0.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+              </span>
+            )}
+          </div>
+
+          {/* Button "Стакан" / "Графік" */}
+          <button
+            type="button"
+            onClick={() => setChartViewMode(chartViewMode === 'chart' ? 'dom' : 'chart')}
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-bold shadow-lg backdrop-blur-md transition-all active:scale-95 cursor-pointer border ${
+              chartViewMode === 'chart'
+                ? 'bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white border-cyan-400/50 shadow-cyan-950/70 hover:shadow-cyan-500/25'
+                : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 hover:from-indigo-500 hover:to-purple-500 text-white border-indigo-400/50 shadow-indigo-950/70'
+            }`}
+            title={chartViewMode === 'chart' ? 'Відкрити біржовий стакан DOM замість графіка' : 'Повернутися до графіка'}
+          >
+            {chartViewMode === 'chart' ? (
+              <>
+                <Layers className="w-3.5 h-3.5 text-cyan-200" />
+                <span>Стакан</span>
+              </>
+            ) : (
+              <>
+                <BarChart3 className="w-3.5 h-3.5 text-indigo-200" />
+                <span>Графік</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
     </div>

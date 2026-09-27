@@ -11,6 +11,8 @@ import {
   Info,
   Sliders,
   BellRing,
+  BarChart3,
+  LineChart,
 } from 'lucide-react';
 import { ExchangeId, MarketType, Timeframe } from '../../types';
 import { formatCryptoPrice, formatVolume } from '../../utils/formatters';
@@ -26,17 +28,18 @@ interface ScalperDOMWidgetProps {
   priceChange24h?: number;
   initialTimeframe?: Timeframe;
   initialCompression?: number;
-  initialDepth?: 'small' | 'medium' | 'deep';
+  initialDepth?: 'all' | 'deep' | 'medium' | 'small';
   initialDensityThreshold?: number;
   initialSoundAlert?: boolean;
   onUpdateSettings?: (settings: {
     compression?: number;
-    depth?: 'small' | 'medium' | 'deep';
+    depth?: 'all' | 'deep' | 'medium' | 'small';
     densityThresholdUsd?: number;
     soundAlertEnabled?: boolean;
     clusterTimeframe?: Timeframe;
   }) => void;
   height?: string | number;
+  onToggleView?: () => void;
 }
 
 interface OrderBookRow {
@@ -81,17 +84,18 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   currentPrice: propPrice,
   priceChange24h = 0,
   initialTimeframe = '5m',
-  initialCompression = 10,
-  initialDepth = 'medium',
+  initialCompression = 1,
+  initialDepth = 'all',
   initialDensityThreshold = 50000, // $50K default
   initialSoundAlert = true,
   onUpdateSettings,
   height,
+  onToggleView,
 }) => {
   // DOM settings state
   const [clusterTf, setClusterTf] = useState<Timeframe>(initialTimeframe);
   const [compression, setCompression] = useState<number>(initialCompression); // 1, 2, 5, 10, 20, 50, 100
-  const [depthPreset, setDepthPreset] = useState<'small' | 'medium' | 'deep'>(initialDepth); // 20, 50, 100
+  const [depthPreset, setDepthPreset] = useState<'all' | 'deep' | 'medium' | 'small'>(initialDepth);
   const [densityThresholdUsd, setDensityThresholdUsd] = useState<number>(initialDensityThreshold);
   const [soundAlertEnabled, setSoundAlertEnabled] = useState<boolean>(initialSoundAlert);
 
@@ -100,11 +104,15 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   const [isTfDropdownOpen, setIsTfDropdownOpen] = useState(false);
   const [isCompressionDropdownOpen, setIsCompressionDropdownOpen] = useState(false);
 
-  // Live orderbook state
+  // Live orderbook state (persistent full book maintained in memory)
+  const bidsBookRef = useRef<Map<number, number>>(new Map());
+  const asksBookRef = useRef<Map<number, number>>(new Map());
+  const flushPendingRef = useRef<boolean>(false);
+
   const [rawBids, setRawBids] = useState<[number, number][]>([]);
   const [rawAsks, setRawAsks] = useState<[number, number][]>([]);
   const [livePrice, setLivePrice] = useState<number>(propPrice || 0);
-  const [latencyMs, setLatencyMs] = useState<number>(152);
+  const [latencyMs, setLatencyMs] = useState<number>(38);
   const [localChangePct, setLocalChangePct] = useState<number>(-0.06);
 
   // Live trades tape
@@ -129,9 +137,11 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   // Max levels based on depth preset
   const depthLevelCount = useMemo(() => {
     switch (depthPreset) {
-      case 'small': return 20;
-      case 'deep': return 100;
-      default: return 50;
+      case 'small': return 50;
+      case 'medium': return 100;
+      case 'deep': return 250;
+      case 'all': return 999999;
+      default: return 999999;
     }
   }, [depthPreset]);
 
@@ -150,27 +160,57 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     return baseTickSize * compression;
   }, [baseTickSize, compression]);
 
-  // 1. Initial snapshot fetch via REST proxy
+  // Flush in-memory map to react state (throttled via requestAnimationFrame)
+  const scheduleBookFlush = useCallback(() => {
+    if (flushPendingRef.current) return;
+    flushPendingRef.current = true;
+    requestAnimationFrame(() => {
+      flushPendingRef.current = false;
+      const sortedBids = Array.from(bidsBookRef.current.entries())
+        .filter(([, q]) => q > 0)
+        .sort((a, b) => b[0] - a[0]); // Bids descending (highest near spread)
+
+      const sortedAsks = Array.from(asksBookRef.current.entries())
+        .filter(([, q]) => q > 0)
+        .sort((a, b) => a[0] - b[0]); // Asks ascending (lowest near spread)
+
+      setRawBids(sortedBids);
+      setRawAsks(sortedAsks);
+
+      if (sortedBids[0] && sortedAsks[0]) {
+        const mid = (sortedBids[0][0] + sortedAsks[0][0]) / 2;
+        setLivePrice(mid);
+      }
+    });
+  }, []);
+
+  // 1. Initial snapshot fetch via REST proxy (full depth 500+ orders)
   useEffect(() => {
     let isMounted = true;
+    bidsBookRef.current.clear();
+    asksBookRef.current.clear();
+
     const fetchSnapshot = async () => {
       try {
         const start = Date.now();
         const res = await fetch(
-          `/api/orderbook?symbol=${cleanSymbol}&exchange=${exchange}&marketType=${marketType}&limit=${Math.max(depthLevelCount * 2, 100)}`
+          `/api/orderbook?symbol=${cleanSymbol}&exchange=${exchange}&marketType=${marketType}&limit=500`
         );
-        const elapsed = Math.max(12, Date.now() - start);
+        const elapsed = Math.max(10, Date.now() - start);
         if (isMounted) setLatencyMs(elapsed);
 
         if (!res.ok) return;
         const data = await res.json();
         if (isMounted && data.success && Array.isArray(data.bids) && Array.isArray(data.asks)) {
-          setRawBids(data.bids);
-          setRawAsks(data.asks);
-          if (data.bids[0] && data.asks[0]) {
-            const mid = (data.bids[0][0] + data.asks[0][0]) / 2;
-            setLivePrice(mid);
-          }
+          data.bids.forEach(([p, q]: [number, number]) => {
+            if (q > 0) bidsBookRef.current.set(p, q);
+            else bidsBookRef.current.delete(p);
+          });
+          data.asks.forEach(([p, q]: [number, number]) => {
+            if (q > 0) asksBookRef.current.set(p, q);
+            else asksBookRef.current.delete(p);
+          });
+          scheduleBookFlush();
         }
       } catch (err) {
         console.warn('DOM snapshot fetch error:', err);
@@ -178,13 +218,13 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     };
 
     fetchSnapshot();
-    const interval = setInterval(fetchSnapshot, 3000); // Polling backup
+    const interval = setInterval(fetchSnapshot, 3000); // Polling sync to ensure zero drift
 
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [cleanSymbol, exchange, marketType, depthLevelCount]);
+  }, [cleanSymbol, exchange, marketType, scheduleBookFlush]);
 
   // 2. Fetch Klines for Cluster History
   useEffect(() => {
@@ -268,55 +308,150 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     };
   }, [cleanSymbol, exchange, marketType, clusterTf]);
 
-  // 3. Connect to live Binance/Bybit WebSocket for instant depth & trades
+  // 3. Connect to live Binance/Bybit WebSocket for instant real depth & trades
   useEffect(() => {
     let ws: WebSocket | null = null;
     let isSubscribed = true;
 
     try {
-      const lower = cleanSymbol.toLowerCase();
-      // Binance Futures stream
-      const wsUrl = marketType === 'futures'
-        ? `wss://fstream.binance.com/stream?streams=${lower}@depth20@100ms/${lower}@aggTrade`
-        : `wss://stream.binance.com:9443/stream?streams=${lower}@depth20@100ms/${lower}@aggTrade`;
+      if (exchange === 'bybit') {
+        const bybitCategory = marketType === 'futures' ? 'linear' : 'spot';
+        const wsUrl = `wss://stream.bybit.com/v5/public/${bybitCategory}`;
+        ws = new WebSocket(wsUrl);
 
-      ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          if (!isSubscribed) return;
+          try {
+            ws?.send(
+              JSON.stringify({
+                op: 'subscribe',
+                args: [`orderbook.200.${cleanSymbol}`, `publicTrade.${cleanSymbol}`],
+              })
+            );
+          } catch {}
+        };
 
-      ws.onmessage = (event) => {
-        if (!isSubscribed) return;
-        try {
-          const msg = JSON.parse(event.data);
-          const stream = msg.stream || '';
-          const data = msg.data || msg;
+        ws.onmessage = (event) => {
+          if (!isSubscribed) return;
+          try {
+            const json = JSON.parse(event.data);
+            const topic = json.topic || '';
+            const data = json.data;
 
-          if (stream.includes('@depth') || data.e === 'depthUpdate') {
-            if (Array.isArray(data.b) && Array.isArray(data.a)) {
-              const bids: [number, number][] = data.b.map((x: [string, string]) => [parseFloat(x[0]), parseFloat(x[1])]);
-              const asks: [number, number][] = data.a.map((x: [string, string]) => [parseFloat(x[0]), parseFloat(x[1])]);
-              if (bids.length > 0) setRawBids(bids);
-              if (asks.length > 0) setRawAsks(asks);
+            if (topic.startsWith('orderbook') && data) {
+              if (json.type === 'snapshot') {
+                bidsBookRef.current.clear();
+                asksBookRef.current.clear();
+                (data.b || []).forEach(([pStr, qStr]: [string, string]) => {
+                  const p = parseFloat(pStr);
+                  const q = parseFloat(qStr);
+                  if (q > 0) bidsBookRef.current.set(p, q);
+                });
+                (data.a || []).forEach(([pStr, qStr]: [string, string]) => {
+                  const p = parseFloat(pStr);
+                  const q = parseFloat(qStr);
+                  if (q > 0) asksBookRef.current.set(p, q);
+                });
+              } else {
+                // Delta update: q = 0 means remove level
+                (data.b || []).forEach(([pStr, qStr]: [string, string]) => {
+                  const p = parseFloat(pStr);
+                  const q = parseFloat(qStr);
+                  if (q <= 0) bidsBookRef.current.delete(p);
+                  else bidsBookRef.current.set(p, q);
+                });
+                (data.a || []).forEach(([pStr, qStr]: [string, string]) => {
+                  const p = parseFloat(pStr);
+                  const q = parseFloat(qStr);
+                  if (q <= 0) asksBookRef.current.delete(p);
+                  else asksBookRef.current.set(p, q);
+                });
+              }
+              scheduleBookFlush();
+            } else if (topic.startsWith('publicTrade') && Array.isArray(data)) {
+              for (const t of data) {
+                const tradePrice = parseFloat(t.p);
+                const tradeQty = parseFloat(t.v);
+                const isBuyerMaker = t.S === 'Sell';
+                const volumeUsd = tradePrice * tradeQty;
+
+                setLivePrice(tradePrice);
+
+                const newTrade: RecentTrade = {
+                  id: `${t.i || Date.now()}-${Math.random()}`,
+                  price: tradePrice,
+                  qty: tradeQty,
+                  volumeUsd,
+                  isBuyerMaker,
+                  timestamp: t.T || Date.now(),
+                };
+
+                setTrades((prev) => [newTrade, ...prev.slice(0, 24)]);
+              }
             }
-          } else if (stream.includes('@aggTrade') || data.e === 'aggTrade') {
-            const tradePrice = parseFloat(data.p);
-            const tradeQty = parseFloat(data.q);
-            const isBuyerMaker = !!data.m; // true = sell, false = buy
-            const volumeUsd = tradePrice * tradeQty;
+          } catch {}
+        };
+      } else {
+        const lower = cleanSymbol.toLowerCase();
+        // Binance real depth stream (all changes) + aggTrade
+        const wsUrl = marketType === 'futures'
+          ? `wss://fstream.binance.com/stream?streams=${lower}@depth@100ms/${lower}@aggTrade`
+          : `wss://stream.binance.com:9443/stream?streams=${lower}@depth@100ms/${lower}@aggTrade`;
 
-            setLivePrice(tradePrice);
+        ws = new WebSocket(wsUrl);
 
-            const newTrade: RecentTrade = {
-              id: `${data.a || Date.now()}-${Math.random()}`,
-              price: tradePrice,
-              qty: tradeQty,
-              volumeUsd,
-              isBuyerMaker,
-              timestamp: data.T || Date.now(),
-            };
+        ws.onmessage = (event) => {
+          if (!isSubscribed) return;
+          try {
+            const msg = JSON.parse(event.data);
+            const stream = msg.stream || '';
+            const data = msg.data || msg;
 
-            setTrades((prev) => [newTrade, ...prev.slice(0, 18)]);
-          }
-        } catch (e) {}
-      };
+            if (stream.includes('@depth') || data.e === 'depthUpdate') {
+              let hasChanges = false;
+              if (Array.isArray(data.b)) {
+                data.b.forEach(([pStr, qStr]: [string, string]) => {
+                  const p = parseFloat(pStr);
+                  const q = parseFloat(qStr);
+                  if (q <= 0) bidsBookRef.current.delete(p);
+                  else bidsBookRef.current.set(p, q);
+                });
+                hasChanges = true;
+              }
+              if (Array.isArray(data.a)) {
+                data.a.forEach(([pStr, qStr]: [string, string]) => {
+                  const p = parseFloat(pStr);
+                  const q = parseFloat(qStr);
+                  if (q <= 0) asksBookRef.current.delete(p);
+                  else asksBookRef.current.set(p, q);
+                });
+                hasChanges = true;
+              }
+              if (hasChanges) {
+                scheduleBookFlush();
+              }
+            } else if (stream.includes('@aggTrade') || data.e === 'aggTrade') {
+              const tradePrice = parseFloat(data.p);
+              const tradeQty = parseFloat(data.q);
+              const isBuyerMaker = !!data.m; // true = sell, false = buy
+              const volumeUsd = tradePrice * tradeQty;
+
+              setLivePrice(tradePrice);
+
+              const newTrade: RecentTrade = {
+                id: `${data.a || Date.now()}-${Math.random()}`,
+                price: tradePrice,
+                qty: tradeQty,
+                volumeUsd,
+                isBuyerMaker,
+                timestamp: data.T || Date.now(),
+              };
+
+              setTrades((prev) => [newTrade, ...prev.slice(0, 24)]);
+            }
+          } catch (e) {}
+        };
+      }
 
       ws.onerror = () => {};
     } catch (e) {}
@@ -329,79 +464,103 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         } catch (e) {}
       }
     };
-  }, [cleanSymbol, marketType]);
+  }, [cleanSymbol, marketType, exchange, scheduleBookFlush]);
 
-  // 4. Aggregate Order Book according to Compression and Depth
-  const { aggregatedAsks, aggregatedBids, maxVolumeUsd, bestAsk, bestBid, spreadUsd, spreadPct } = useMemo(() => {
-    const roundToStep = (price: number) => {
-      if (effectiveStep <= 0) return price;
-      return Math.round(price / effectiveStep) * effectiveStep;
-    };
+  // 4. Aggregate Order Book according to Compression (1x - 100x) and Depth
+  const { aggregatedAsks, aggregatedBids, maxVolumeUsd, bestAsk, bestBid, spreadUsd, spreadPct, totalRealOrdersCount } = useMemo(() => {
+    let asksList: OrderBookRow[] = [];
+    let bidsList: OrderBookRow[] = [];
 
-    // Aggregate asks
-    const asksMap = new Map<number, { qty: number; volumeUsd: number }>();
-    rawAsks.forEach(([p, q]) => {
-      const rounded = roundToStep(p);
-      const curr = asksMap.get(rounded) || { qty: 0, volumeUsd: 0 };
-      asksMap.set(rounded, {
-        qty: curr.qty + q,
-        volumeUsd: curr.volumeUsd + p * q,
-      });
-    });
-
-    // Aggregate bids
-    const bidsMap = new Map<number, { qty: number; volumeUsd: number }>();
-    rawBids.forEach(([p, q]) => {
-      const rounded = roundToStep(p);
-      const curr = bidsMap.get(rounded) || { qty: 0, volumeUsd: 0 };
-      bidsMap.set(rounded, {
-        qty: curr.qty + q,
-        volumeUsd: curr.volumeUsd + p * q,
-      });
-    });
-
-    const asksList: OrderBookRow[] = Array.from(asksMap.entries())
-      .map(([price, val]) => ({
-        price,
-        qty: val.qty,
-        volumeUsd: val.volumeUsd,
+    if (compression === 1) {
+      // 1x: Show ALL real orders directly with exact prices and quantities from exchange
+      asksList = rawAsks.map(([p, q]) => ({
+        price: p,
+        qty: q,
+        volumeUsd: p * q,
         isAsk: true,
-        isDensity: val.volumeUsd >= densityThresholdUsd,
-      }))
-      .sort((a, b) => b.price - a.price) // Highest ask on top, lowest ask near spread
-      .slice(-depthLevelCount);
+        isDensity: (p * q) >= densityThresholdUsd,
+      })).sort((a, b) => b.price - a.price); // Highest ask on top, lowest near spread
 
-    const bidsList: OrderBookRow[] = Array.from(bidsMap.entries())
-      .map(([price, val]) => ({
-        price,
-        qty: val.qty,
-        volumeUsd: val.volumeUsd,
+      bidsList = rawBids.map(([p, q]) => ({
+        price: p,
+        qty: q,
+        volumeUsd: p * q,
         isAsk: false,
-        isDensity: val.volumeUsd >= densityThresholdUsd,
-      }))
-      .sort((a, b) => b.price - a.price) // Highest bid near spread, lowest bid at bottom
-      .slice(0, depthLevelCount);
+        isDensity: (p * q) >= densityThresholdUsd,
+      })).sort((a, b) => b.price - a.price); // Highest bid near spread, lowest at bottom
+    } else {
+      // > 1x: Aggregate real orders into price compression buckets (step = baseTickSize * compression)
+      const roundToStep = (price: number) => {
+        if (effectiveStep <= 0) return price;
+        return Number((Math.round(price / effectiveStep) * effectiveStep).toFixed(8));
+      };
+
+      const asksMap = new Map<number, { qty: number; volumeUsd: number }>();
+      rawAsks.forEach(([p, q]) => {
+        const rounded = roundToStep(p);
+        const curr = asksMap.get(rounded) || { qty: 0, volumeUsd: 0 };
+        asksMap.set(rounded, {
+          qty: curr.qty + q,
+          volumeUsd: curr.volumeUsd + p * q,
+        });
+      });
+
+      const bidsMap = new Map<number, { qty: number; volumeUsd: number }>();
+      rawBids.forEach(([p, q]) => {
+        const rounded = roundToStep(p);
+        const curr = bidsMap.get(rounded) || { qty: 0, volumeUsd: 0 };
+        bidsMap.set(rounded, {
+          qty: curr.qty + q,
+          volumeUsd: curr.volumeUsd + p * q,
+        });
+      });
+
+      asksList = Array.from(asksMap.entries())
+        .map(([price, val]) => ({
+          price,
+          qty: val.qty,
+          volumeUsd: val.volumeUsd,
+          isAsk: true,
+          isDensity: val.volumeUsd >= densityThresholdUsd,
+        }))
+        .sort((a, b) => b.price - a.price);
+
+      bidsList = Array.from(bidsMap.entries())
+        .map(([price, val]) => ({
+          price,
+          qty: val.qty,
+          volumeUsd: val.volumeUsd,
+          isAsk: false,
+          isDensity: val.volumeUsd >= densityThresholdUsd,
+        }))
+        .sort((a, b) => b.price - a.price);
+    }
+
+    // Apply depth preset (if not 'all')
+    const finalAsks = depthLevelCount < 99999 ? asksList.slice(-depthLevelCount) : asksList;
+    const finalBids = depthLevelCount < 99999 ? bidsList.slice(0, depthLevelCount) : bidsList;
 
     // Find highest volume to scale horizontal bars
     let maxVol = 1000;
-    asksList.forEach((r) => { if (r.volumeUsd > maxVol) maxVol = r.volumeUsd; });
-    bidsList.forEach((r) => { if (r.volumeUsd > maxVol) maxVol = r.volumeUsd; });
+    finalAsks.forEach((r) => { if (r.volumeUsd > maxVol) maxVol = r.volumeUsd; });
+    finalBids.forEach((r) => { if (r.volumeUsd > maxVol) maxVol = r.volumeUsd; });
 
-    const bestA = asksList.length > 0 ? asksList[asksList.length - 1].price : 0;
-    const bestB = bidsList.length > 0 ? bidsList[0].price : 0;
+    const bestA = finalAsks.length > 0 ? finalAsks[finalAsks.length - 1].price : 0;
+    const bestB = finalBids.length > 0 ? finalBids[0].price : 0;
     const sUsd = bestA && bestB ? Math.max(0, bestA - bestB) : 0;
     const sPct = bestB > 0 ? (sUsd / bestB) * 100 : 0;
 
     return {
-      aggregatedAsks: asksList,
-      aggregatedBids: bidsList,
+      aggregatedAsks: finalAsks,
+      aggregatedBids: finalBids,
       maxVolumeUsd: maxVol,
       bestAsk: bestA,
       bestBid: bestB,
       spreadUsd: sUsd,
       spreadPct: sPct,
+      totalRealOrdersCount: rawBids.length + rawAsks.length,
     };
-  }, [rawAsks, rawBids, effectiveStep, depthLevelCount, densityThresholdUsd]);
+  }, [rawAsks, rawBids, compression, effectiveStep, depthLevelCount, densityThresholdUsd]);
 
   // 5. Sound Alert detection for specified density
   useEffect(() => {
@@ -468,7 +627,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   };
 
   // Depth switch handler
-  const handleSelectDepth = (depth: 'small' | 'medium' | 'deep') => {
+  const handleSelectDepth = (depth: 'all' | 'deep' | 'medium' | 'small') => {
     setDepthPreset(depth);
     onUpdateSettings?.({ depth });
   };
@@ -614,25 +773,40 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             <span>{latencyMs}ms</span>
           </div>
 
-          {/* Local price tick change % */}
-          <span
-            className={`text-[9px] font-mono font-bold ${
-              localChangePct >= 0 ? 'text-emerald-400' : 'text-rose-400'
-            }`}
+          {/* Real orders count badge */}
+          <div
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 font-mono text-[9px] font-bold"
+            title={`Реальні активні заявки у стакані: ${rawAsks.length} Short (Asks) + ${rawBids.length} Long (Bids)`}
           >
-            {localChangePct >= 0 ? `+${localChangePct}%` : `${localChangePct}%`}
-          </span>
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+            <span>{totalRealOrdersCount} заявок</span>
+          </div>
 
           {/* Auto Center Button */}
           <button
             onClick={handleCenterDOM}
-            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white ml-0.5 transition-colors cursor-pointer"
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer text-[9px] font-bold border border-slate-700"
             title="Центрувати стакан на спреді"
           >
-            <Crosshair className="w-3 h-3 text-cyan-400" />
+            <Crosshair className="w-2.5 h-2.5 text-cyan-400" />
+            <span>Центр</span>
           </button>
         </div>
       </div>
+
+      {/* Top-Right Toggle to Chart Button */}
+      {onToggleView && (
+        <div className="absolute top-2 right-2.5 z-30 flex items-center gap-1.5 pointer-events-auto">
+          <button
+            onClick={onToggleView}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/90 hover:bg-indigo-500 text-white font-bold text-[11px] shadow-lg shadow-indigo-950/70 border border-indigo-400/40 transition-all active:scale-95 cursor-pointer backdrop-blur-md"
+            title="Повернутися до графіка"
+          >
+            <BarChart3 className="w-3.5 h-3.5 text-indigo-200" />
+            <span>Графік</span>
+          </button>
+        </div>
+      )}
 
       {/* ================= SETTINGS POPOVER DIALOG ================= */}
       {isSettingsOpen && (
@@ -743,19 +917,26 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             </div>
           </div>
 
-          {/* 4. Глибина стакану (Depth: малий, середній, глибокий) */}
+          {/* 4. Глибина стакану (Depth: 50, 100, 250, ВСІ 500+) */}
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-300 font-medium">Глибина стакану:</span>
-              <span className="text-slate-400 text-[10px] font-mono">
-                {depthPreset === 'small' ? '20 рівнів' : depthPreset === 'deep' ? '100 рівнів' : '50 рівнів'}
+              <span className="text-cyan-400 text-[10px] font-mono font-bold">
+                {depthPreset === 'small'
+                  ? '50 рівнів'
+                  : depthPreset === 'medium'
+                  ? '100 рівнів'
+                  : depthPreset === 'deep'
+                  ? '250 рівнів'
+                  : 'ВСІ реальні заявки (500+)'}
               </span>
             </div>
-            <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+            <div className="grid grid-cols-4 gap-1.5 text-[10px]">
               {[
-                { id: 'small', label: 'Малий (20)' },
-                { id: 'medium', label: 'Середній (50)' },
-                { id: 'deep', label: 'Глибокий (100)' },
+                { id: 'small', label: '50' },
+                { id: 'medium', label: '100' },
+                { id: 'deep', label: '250' },
+                { id: 'all', label: 'ВСІ (500+)' },
               ].map((d) => (
                 <button
                   key={d.id}
@@ -810,11 +991,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       </div>
 
       {/* ================= MAIN SCALPER CANVAS (Clusters + Tape + DOM) ================= */}
-      <div
-        ref={domScrollContainerRef}
-        className="flex-1 w-full overflow-y-auto no-scrollbar relative flex divide-x divide-transparent"
-        style={{ scrollBehavior: 'smooth' }}
-      >
+      <div className="flex-1 w-full overflow-hidden relative flex divide-x divide-transparent">
         {/* Subtle Horizontal Price Grid Lines across canvas */}
         <div className="absolute inset-0 pointer-events-none z-0">
           <div
@@ -827,9 +1004,9 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         </div>
 
         {/* 1. LEFT SECTION: Cluster History ("історія кластерів") */}
-        <div className="flex-1 min-w-[120px] max-w-[280px] h-full flex flex-col justify-center py-2 px-1 relative z-10 select-none">
+        <div className="flex-1 min-w-[120px] max-w-[280px] h-full flex flex-col justify-center py-2 px-1 relative z-10 select-none overflow-hidden">
           <div className="flex items-center justify-around h-full gap-2">
-            {clusters.map((col, cIdx) => (
+            {clusters.map((col) => (
               <div
                 key={col.candleTime}
                 className="flex-1 flex flex-col h-full items-center justify-center relative group"
@@ -856,7 +1033,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                           }`}
                         >
                           <span className="text-[8px] text-slate-500">
-                            {isPOC ? '90' : lvl.sellVol > 1000 ? `${(lvl.sellVol / 1000).toFixed(0)}k` : ''}
+                            {isPOC ? 'POC' : lvl.sellVol > 1000 ? `${(lvl.sellVol / 1000).toFixed(0)}k` : ''}
                           </span>
                           <span className={isPOC ? 'text-amber-300 font-bold' : 'text-slate-300'}>
                             {formatVolume(lvl.totalVol)}
@@ -912,17 +1089,24 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           </div>
         </div>
 
-        {/* 3. RIGHT SECTION: Order Book ("Стакан") */}
-        <div className="w-44 sm:w-56 shrink-0 h-full flex flex-col relative z-10 border-l border-slate-900/60 bg-[#090d16]/40">
+        {/* 3. RIGHT SECTION: Order Book ("Стакан") with full scroll of all real orders */}
+        <div
+          ref={domScrollContainerRef}
+          className="w-52 sm:w-64 shrink-0 h-full overflow-y-auto no-scrollbar relative flex flex-col border-l border-slate-900/60 bg-[#090d16]/40"
+          style={{ scrollBehavior: 'smooth' }}
+        >
           {/* Header columns: Об'єм (ліворуч) | Ціна (праворуч) */}
-          <div className="flex items-center justify-between px-2.5 py-1 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800/80 shrink-0 bg-slate-950/60">
-            <span>Об'єм</span>
+          <div className="sticky top-0 z-20 flex items-center justify-between px-2.5 py-1 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800/80 shrink-0 bg-slate-950/90 backdrop-blur-sm">
+            <span className="flex items-center gap-1">
+              <span>Об'єм</span>
+              <span className="text-cyan-400/80 font-mono text-[8px]">({aggregatedAsks.length + aggregatedBids.length})</span>
+            </span>
             <span>Ціна</span>
           </div>
 
           {/* Rows container */}
-          <div className="flex-1 flex flex-col justify-center">
-            {/* ASKS (TOP) */}
+          <div className="flex flex-col py-1">
+            {/* ASKS (TOP, Shorts) */}
             <div className="flex flex-col justify-end">
               {aggregatedAsks.map((row) => {
                 const fillPct = Math.min(100, Math.max(3, (row.volumeUsd / maxVolumeUsd) * 100));
@@ -972,10 +1156,10 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             */}
             <div
               ref={spreadRowRef}
-              className="flex items-center justify-between px-2.5 h-[22px] bg-slate-900/30 text-slate-400 font-mono text-[10px]"
+              className="flex items-center justify-between px-2.5 h-[22px] bg-slate-900/50 text-slate-400 font-mono text-[10px] my-0.5"
             >
               <div className="flex items-center gap-1.5">
-                <span className="text-[9px] text-slate-500 uppercase">Спред</span>
+                <span className="text-[9px] text-slate-500 uppercase font-bold">Спред</span>
                 <span className="text-slate-300 font-bold">{formatCryptoPrice(spreadUsd)}</span>
                 <span className="text-[9px] text-slate-500">({spreadPct.toFixed(2)}%)</span>
               </div>
@@ -984,7 +1168,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
               </span>
             </div>
 
-            {/* BIDS (BOTTOM) */}
+            {/* BIDS (BOTTOM, Longs) */}
             <div className="flex flex-col justify-start">
               {aggregatedBids.map((row) => {
                 const fillPct = Math.min(100, Math.max(3, (row.volumeUsd / maxVolumeUsd) * 100));

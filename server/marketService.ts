@@ -686,16 +686,16 @@ export async function fetchOrderBook(
   exchange: ExchangeId = 'binance',
   market: MarketType = 'futures',
   symbol: string = 'BTCUSDT',
-  limit: number = 100
+  limit: number = 500
 ): Promise<OrderBookData> {
   const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-  const safeLimit = Math.min(Math.max(limit, 20), 500);
+  const safeLimit = Math.min(Math.max(limit, 20), 1000);
 
   if (exchange === 'bybit') {
     const category = market === 'futures' ? 'linear' : 'spot';
     const mirrors = [
-      `https://api.bybit.com/v5/market/orderbook?category=${category}&symbol=${cleanSymbol}&limit=${Math.min(safeLimit, 200)}`,
-      `https://api.bytick.com/v5/market/orderbook?category=${category}&symbol=${cleanSymbol}&limit=${Math.min(safeLimit, 200)}`,
+      `https://api.bybit.com/v5/market/orderbook?category=${category}&symbol=${cleanSymbol}&limit=${Math.min(safeLimit, 500)}`,
+      `https://api.bytick.com/v5/market/orderbook?category=${category}&symbol=${cleanSymbol}&limit=${Math.min(safeLimit, 500)}`,
     ];
 
     for (const url of mirrors) {

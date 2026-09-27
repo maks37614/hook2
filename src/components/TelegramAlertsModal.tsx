@@ -66,6 +66,8 @@ export const TelegramAlertsModal: React.FC<TelegramAlertsModalProps> = ({
     history,
     loading: loadingAlerts,
     loadingHistory,
+    notificationPermission,
+    requestNotificationPermission,
     fetchHistory,
     clearHistory,
     deleteHistoryItem,
@@ -81,6 +83,8 @@ export const TelegramAlertsModal: React.FC<TelegramAlertsModalProps> = ({
   const [clearingHistory, setClearingHistory] = useState<boolean>(false);
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
+  const [cronStatus, setCronStatus] = useState<any>(null);
+  const [testingCron, setTestingCron] = useState<boolean>(false);
 
   // New Alert Form State
   const [formSymbol, setFormSymbol] = useState<string>('BTCUSDT');
@@ -388,6 +392,63 @@ export const TelegramAlertsModal: React.FC<TelegramAlertsModalProps> = ({
     }
   };
 
+  const fetchCronStatus = async () => {
+    try {
+      const res = await fetch('/api/cron/status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setCronStatus(data);
+        }
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchCronStatus();
+      const interval = setInterval(fetchCronStatus, 8000);
+      return () => clearInterval(interval);
+    }
+  }, [isOpen]);
+
+  const handleTestCronPipeline = async () => {
+    setTestingCron(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/cron/test-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.uid,
+          symbol: formSymbol || 'BTCUSDT',
+          note: 'Перевірка фонової системи CRON та доставки сповіщень',
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({
+          success: true,
+          message: '✅ Сповіщення успішно надіслано в Telegram та підтверджено системою CRON!',
+        });
+        fetchHistory();
+        fetchCronStatus();
+      } else {
+        setTestResult({
+          success: false,
+          message: data.error || 'Помилка надсилання тестового сповіщення CRON',
+        });
+      }
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        message: err?.message || 'Не вдалося виконати запит до CRON',
+      });
+    } finally {
+      setTestingCron(false);
+    }
+  };
+
   // Create New Price Alert
   const handleCreateAlert = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -548,19 +609,45 @@ export const TelegramAlertsModal: React.FC<TelegramAlertsModalProps> = ({
           </div>
         )}
 
-        {/* Telegram Status Banner */}
+        {/* Telegram & CRON Status Banner */}
         <div className="px-5 py-2.5 bg-slate-950/50 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">Статус Telegram:</span>
-            {tgStatus?.isConfigured ? (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Підключено {tgStatus.botUsername ? `@${tgStatus.botUsername}` : ''}
-              </span>
+          <div className="flex items-center flex-wrap gap-2 sm:gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-400">Telegram:</span>
+              {tgStatus?.isConfigured ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 font-medium text-[11px]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Підключено {tgStatus.botUsername ? `@${tgStatus.botUsername}` : ''}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/30 text-amber-300 font-medium text-[11px]">
+                  <AlertCircle className="w-3 h-3" />
+                  Не налаштовано
+                </span>
+              )}
+            </div>
+
+            {/* CRON Live Indicator */}
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 font-mono text-[11px]" title="Фоновий CRON активний: перевірка кожні 5 секунд">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+              <span>CRON: 24/7 (5s)</span>
+            </div>
+
+            {/* Desktop Notification Prompt */}
+            {notificationPermission !== 'granted' ? (
+              <button
+                type="button"
+                onClick={requestNotificationPermission}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 text-[11px] font-medium transition-all cursor-pointer"
+                title="Отримувати сповіщення на робочий стіл навіть коли вкладка згорнута"
+              >
+                <Bell className="w-3 h-3 text-indigo-400" />
+                <span>Увімкнути Push браузера</span>
+              </button>
             ) : (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/30 text-amber-300 font-medium">
-                <AlertCircle className="w-3 h-3" />
-                Не налаштовано
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700 text-slate-300 text-[11px]" title="Сповіщення браузера дозволено">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span>Push: Активно</span>
               </span>
             )}
           </div>
@@ -1304,9 +1391,73 @@ export const TelegramAlertsModal: React.FC<TelegramAlertsModalProps> = ({
         </div>
       )}
 
-      {/* TAB 2: TELEGRAM BOT SETUP */}
+      {/* TAB 2: TELEGRAM BOT SETUP & CRON SYSTEM */}
           {activeTab === 'settings' && (
             <div className="space-y-4">
+              {/* Unified CRON Status & Diagnostic Card */}
+              <div className="p-4 rounded-xl bg-slate-950/90 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                    </span>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Фоновий CRON-моніторинг 24/7
+                    </h3>
+                  </div>
+                  <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold">
+                    АКТИВНИЙ • 24/7
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Серверні завдання cron автоматично контролюють ринок, аналізують ціни Binance і Bybit кожні 5 секунд та доставляють сповіщення навіть коли вкладку сайту закрито.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] font-mono">
+                  <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800">
+                    <span className="text-slate-400 block text-[10px]">Цінові алерти:</span>
+                    <span className="text-cyan-400 font-bold">кожні 5 сек (24/7)</span>
+                    <span className="text-[10px] text-slate-500 block">Binance + Bybit</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800">
+                    <span className="text-slate-400 block text-[10px]">Нагляд за монетами:</span>
+                    <span className="text-indigo-400 font-bold">кожні 15 сек</span>
+                    <span className="text-[10px] text-slate-500 block">Імпульси, сплески</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800">
+                    <span className="text-slate-400 block text-[10px]">Скринер патернів:</span>
+                    <span className="text-amber-400 font-bold">кожні 60 сек</span>
+                    <span className="text-[10px] text-slate-500 block">≥88% впевненість</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                  <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>
+                      Активних сповіщень: <strong className="text-white">{alerts.filter((a) => a.isActive && !a.triggered).length}</strong>
+                    </span>
+                    {cronStatus?.uptimeSeconds !== undefined && (
+                      <span className="text-slate-500 ml-1">
+                        • Аптайм: {Math.floor(cronStatus.uptimeSeconds / 60)} хв
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleTestCronPipeline}
+                    disabled={testingCron}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-emerald-600/20 via-cyan-600/20 to-emerald-600/20 hover:from-emerald-600/30 hover:to-cyan-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer shadow-sm active:scale-95"
+                  >
+                    <Zap className={`w-3.5 h-3.5 text-emerald-400 ${testingCron ? 'animate-spin' : 'fill-emerald-400'}`} />
+                    <span>{testingCron ? 'Перевіряємо CRON...' : '⚡ Запустити тест CRON та сповіщень'}</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Instructions Guide */}
               <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">

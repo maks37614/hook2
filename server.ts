@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { runScreenerScan, fetchKlines, fetchMarketCoins } from './server/marketService';
+import { runScreenerScan, fetchKlines, fetchMarketCoins, fetchOrderBook } from './server/marketService';
 import { analyzeFormationWithAI } from './server/geminiService';
 import { generateSmartAnalysis } from './server/smartAnalysisService';
 import { calculateMarketSentiment } from './server/sentimentService';
@@ -11,6 +11,7 @@ import {
   saveTelegramConfig,
   testTelegramConnection,
   detectChatIdFromUpdates,
+  sendTelegramMessage,
 } from './server/telegramService';
 import {
   getAllAlerts,
@@ -37,6 +38,7 @@ import {
   findSurveillanceCoinById,
 } from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
+import { cronManager } from './server/cronService';
 
 async function startServer() {
   const app = express();
@@ -47,6 +49,70 @@ async function startServer() {
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: Date.now() });
+  });
+
+  // Unified Cron Status & Diagnostics
+  app.get('/api/cron/status', (req, res) => {
+    try {
+      const status = cronManager.getStatus();
+      res.json({ success: true, ...status });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to get cron status' });
+    }
+  });
+
+  // Manual Trigger for Cron Jobs (e.g. from external cron services or user test button)
+  app.post('/api/cron/run', async (req, res) => {
+    try {
+      const jobId = (req.body?.job || 'all').toString();
+      const result = await cronManager.triggerJob(jobId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to trigger cron job' });
+    }
+  });
+
+  // Test notification dispatch pipeline (Telegram + in-app)
+  app.post('/api/cron/test-alert', async (req, res) => {
+    try {
+      const { userId, symbol, note } = req.body;
+      const testSymbol = (symbol || 'BTCUSDT').toUpperCase();
+      const userTg = getUserTelegram(userId);
+      const globalCfg = getEffectiveTelegramConfig();
+      const effectiveToken = userTg?.botToken || globalCfg.botToken;
+      const effectiveChat = userTg?.chatId || globalCfg.chatId;
+
+      if (!effectiveToken || !effectiveChat) {
+        return res.status(400).json({
+          success: false,
+          error: 'Telegram не налаштовано. Вкажіть Bot Token та Chat ID у налаштуваннях сповіщень.',
+        });
+      }
+
+      const timeStr = new Date().toLocaleTimeString('uk-UA', { timeZone: 'Europe/Kyiv' });
+      const testMsg = `🔔 <b>ТЕСТОВЕ СПОВІЩЕННЯ СИСТЕМИ CRON</b>\n\n` +
+        `🪙 Монета: <b>${testSymbol}</b>\n` +
+        `⚡ Статус: <b>Всі системи сповіщень та фоновий CRON активні!</b>\n` +
+        `📊 Перевірка: <i>Усі цінові алерти та нагляд функціонують у режимі 24/7</i>\n` +
+        (note ? `📝 Примітка: <i>${note}</i>\n` : '') +
+        `\n⏰ <i>Час тесту: ${timeStr} (Київ)</i>`;
+
+      const tgResult = await sendTelegramMessage(testMsg, {
+        botToken: effectiveToken,
+        chatId: effectiveChat,
+      });
+
+      res.json({
+        success: tgResult.success,
+        telegramSent: tgResult.success,
+        error: tgResult.error,
+        message: tgResult.success
+          ? 'Тестове сповіщення успішно надіслано у ваш Telegram!'
+          : `Помилка доставки в Telegram: ${tgResult.error}`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Помилка надсилання тесту' });
+    }
   });
 
   // Verify access code for registration
@@ -181,6 +247,22 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error fetching klines:', err);
       res.status(500).json({ success: false, error: err.message || 'Failed to fetch klines' });
+    }
+  });
+
+  // Orderbook depth endpoint for Scalper DOM
+  app.get('/api/orderbook', async (req, res) => {
+    try {
+      const exchange = (req.query.exchange as ExchangeId) || 'binance';
+      const market = (req.query.marketType as MarketType) || (req.query.market as MarketType) || 'futures';
+      const symbol = (req.query.symbol as string) || 'BTCUSDT';
+      const limit = req.query.limit ? Math.min(Math.max(parseInt(req.query.limit as string, 10) || 500, 20), 1000) : 500;
+
+      const orderbook = await fetchOrderBook(exchange, market, symbol, limit);
+      res.json({ success: true, ...orderbook });
+    } catch (err: any) {
+      console.error('Error fetching orderbook:', err);
+      res.status(500).json({ success: false, error: err.message || 'Failed to fetch orderbook' });
     }
   });
 
@@ -630,9 +712,8 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Crypto Pattern Screener server running on http://0.0.0.0:${PORT}`);
-    // Start background Telegram price alerts monitor and surveillance monitor
-    startAlertMonitor(6000);
-    startSurveillanceMonitor(6000);
+    // Start unified background CRON for all notifications (Price Alerts 5s, Surveillance 15s, Screener 60s)
+    cronManager.init();
   });
 }
 
