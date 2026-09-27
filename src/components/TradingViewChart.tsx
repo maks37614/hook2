@@ -20,6 +20,8 @@ import {
   FolderArchive,
   CheckCircle2,
   BarChart3,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { Kline, DetectedFormation, Timeframe, ExchangeId, MarketType, ChartMarkerInfo, ChartRestoreParams } from '../types';
 import { getChartPriceFormat, formatCryptoPrice } from '../utils/formatters';
@@ -186,8 +188,18 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const hasInitiallyCenteredRef = useRef<boolean>(false);
   const prevSymbolRef = useRef<string>(symbol);
 
-  // View mode: 'chart' (Candlesticks) or 'dom' (Scalper Order Book)
-  const [chartViewMode, setChartViewMode] = useState<'chart' | 'dom'>('chart');
+  // DOM view state: order book slides out in a dedicated block under the chart
+  const [isDomOpen, setIsDomOpen] = useState<boolean>(false);
+  const [domHeightPreset, setDomHeightPreset] = useState<'md' | 'lg' | 'xl'>('lg');
+
+  const domHeightClass = useMemo(() => {
+    switch (domHeightPreset) {
+      case 'md': return 'h-[600px]';
+      case 'xl': return 'h-[950px]';
+      case 'lg':
+      default: return 'h-[780px]';
+    }
+  }, [domHeightPreset]);
 
   const baseAsset = useMemo(() => {
     return symbol.replace(/(USDT|BUSD|USDC|EUR|BTC)$/, '') || symbol;
@@ -198,20 +210,18 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     return match ? match[1] : 'USDT';
   }, [symbol]);
 
-  // When switching back to chart, resize lightweight-charts smoothly
+  // When DOM block slides out or collapses, smoothly resize lightweight-charts
   useEffect(() => {
-    if (chartViewMode === 'chart') {
-      const timer = setTimeout(() => {
-        if (chartContainerRef.current && chartRef.current) {
-          const { clientWidth, clientHeight } = chartContainerRef.current;
-          if (clientWidth > 0 && clientHeight > 0) {
-            chartRef.current.resize(clientWidth, clientHeight);
-          }
+    const timer = setTimeout(() => {
+      if (chartContainerRef.current && chartRef.current) {
+        const { clientWidth, clientHeight } = chartContainerRef.current;
+        if (clientWidth > 0 && clientHeight > 0) {
+          chartRef.current.resize(clientWidth, clientHeight);
         }
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [chartViewMode]);
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [isDomOpen]);
 
   useEffect(() => {
     if (prevSymbolRef.current !== symbol) {
@@ -908,28 +918,20 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
           {/* Right: View Controls */}
           <div className="flex items-center gap-1 sm:gap-1.5 text-slate-300 text-[10px] sm:text-[11px] flex-nowrap shrink-0 ml-auto">
-            {/* Toggle Button: Стакан / Графік */}
+            {/* Toggle Button: Висувний стакан під графіком */}
             <button
               type="button"
-              onClick={() => setChartViewMode(chartViewMode === 'chart' ? 'dom' : 'chart')}
-              className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all border cursor-pointer active:scale-95 shrink-0 whitespace-nowrap ${
-                chartViewMode === 'dom'
-                  ? 'bg-cyan-500/25 text-cyan-200 border-cyan-400/60 shadow-sm shadow-cyan-900/40'
+              onClick={() => setIsDomOpen((prev) => !prev)}
+              className={`flex items-center gap-1.5 px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all border cursor-pointer active:scale-95 shrink-0 whitespace-nowrap ${
+                isDomOpen
+                  ? 'bg-cyan-500/25 text-cyan-200 border-cyan-400/70 shadow-sm shadow-cyan-900/50'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700'
               }`}
-              title={chartViewMode === 'chart' ? 'Перемкнути на стакан DOM замість графіка' : 'Повернутися до графіка'}
+              title={isDomOpen ? 'Сховати біржовий стакан під графіком' : 'Висунути біржовий стакан під графіком'}
             >
-              {chartViewMode === 'chart' ? (
-                <>
-                  <Layers className="w-3 h-3 text-cyan-400" />
-                  <span>Стакан</span>
-                </>
-              ) : (
-                <>
-                  <BarChart3 className="w-3 h-3 text-indigo-400" />
-                  <span>Графік</span>
-                </>
-              )}
+              <Layers className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Стакан</span>
+              <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isDomOpen ? 'rotate-180 text-cyan-300' : 'text-slate-400'}`} />
             </button>
 
             {/* Zoom Recent Buttons */}
@@ -1003,32 +1005,15 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         </div>
       )}
 
-      {/* Chart Canvas or Scalper DOM */}
-      <div className={`relative w-full overflow-hidden ${fullHeight ? "flex-1 min-h-0" : "h-[220px] xs:h-[260px] sm:h-[300px] md:h-[350px] lg:h-[390px] xl:h-[430px]"}`}>
+      {/* Chart Canvas */}
+      <div className={`relative w-full overflow-hidden ${fullHeight ? "flex-1 min-h-[220px]" : "h-[220px] xs:h-[260px] sm:h-[300px] md:h-[350px] lg:h-[390px] xl:h-[430px]"}`}>
         {/* TradingView Chart Container */}
         <div
           ref={chartContainerRef}
-          className={`w-full h-full relative transition-opacity duration-150 ${chartViewMode === 'chart' ? 'opacity-100 block' : 'opacity-0 pointer-events-none hidden'}`}
+          className="w-full h-full relative"
         />
 
-        {/* Scalper DOM View (Order Book + Trades Tape + Clusters) */}
-        {chartViewMode === 'dom' && (
-          <div className="absolute inset-0 w-full h-full z-10 animate-in fade-in zoom-in-95 duration-200">
-            <ScalperDOMWidget
-              symbol={symbol}
-              baseAsset={baseAsset}
-              quoteAsset={quoteAsset}
-              exchange={exchange}
-              marketType={marketType}
-              currentPrice={currentPrice || (klines.length > 0 ? klines[klines.length - 1].close : 0)}
-              priceChange24h={formation?.potentialProfitPct || 0}
-              initialTimeframe={timeframe as Timeframe}
-              onToggleView={() => setChartViewMode('chart')}
-            />
-          </div>
-        )}
-
-        {/* Right-Bottom: Time to Bar Close Countdown + Button "Стакан" / "Графік" */}
+        {/* Right-Bottom: Time to Bar Close Countdown + Button "Стакан" */}
         <div className="absolute right-2.5 sm:right-3 bottom-2.5 sm:bottom-3 z-30 flex items-center gap-1.5 sm:gap-2 select-none pointer-events-auto">
           {/* Time to Bar Close Countdown with Ticking */}
           <div
@@ -1068,30 +1053,103 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             )}
           </div>
 
-          {/* Button "Стакан" / "Графік" */}
-          <button
-            type="button"
-            onClick={() => setChartViewMode(chartViewMode === 'chart' ? 'dom' : 'chart')}
-            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-bold shadow-lg backdrop-blur-md transition-all active:scale-95 cursor-pointer border ${
-              chartViewMode === 'chart'
-                ? 'bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white border-cyan-400/50 shadow-cyan-950/70 hover:shadow-cyan-500/25'
-                : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 hover:from-indigo-500 hover:to-purple-500 text-white border-indigo-400/50 shadow-indigo-950/70'
-            }`}
-            title={chartViewMode === 'chart' ? 'Відкрити біржовий стакан DOM замість графіка' : 'Повернутися до графіка'}
-          >
-            {chartViewMode === 'chart' ? (
-              <>
-                <Layers className="w-3.5 h-3.5 text-cyan-200" />
-                <span>Стакан</span>
-              </>
-            ) : (
-              <>
-                <BarChart3 className="w-3.5 h-3.5 text-indigo-200" />
-                <span>Графік</span>
-              </>
-            )}
-          </button>
+          {/* Button "Стакан" */}
+          {showNavigationControls && (
+            <button
+              type="button"
+              onClick={() => setIsDomOpen((prev) => !prev)}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-bold shadow-lg backdrop-blur-md transition-all active:scale-95 cursor-pointer border ${
+                isDomOpen
+                  ? 'bg-gradient-to-r from-cyan-600 via-sky-600 to-blue-600 text-white border-cyan-400/80 shadow-cyan-950/80'
+                  : 'bg-slate-950/85 hover:bg-slate-900 text-slate-200 hover:text-white border-slate-800/90 hover:border-slate-700'
+              }`}
+              title={isDomOpen ? 'Сховати біржовий стакан під графіком' : 'Висунути біржовий стакан під графіком'}
+            >
+              <Layers className={`w-3.5 h-3.5 ${isDomOpen ? 'text-cyan-200' : 'text-cyan-400'}`} />
+              <span>{isDomOpen ? 'Стакан відкрито' : 'Стакан'}</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${isDomOpen ? 'rotate-180 text-cyan-200' : 'text-slate-400'}`} />
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* Slide-out Scalper DOM Block Under the Chart */}
+      <div
+        className={`w-full overflow-hidden transition-all duration-300 ease-in-out border-t bg-[#090d16] ${
+          isDomOpen
+            ? 'max-h-[1400px] opacity-100 border-slate-800/90 shadow-2xl'
+            : 'max-h-0 opacity-0 pointer-events-none border-transparent'
+        }`}
+      >
+        {isDomOpen && (
+          <div className={`flex flex-col w-full ${domHeightClass} transition-all duration-200`}>
+            {/* DOM Block Header */}
+            <div className="flex items-center justify-between px-3 py-2 bg-slate-950/95 border-b border-slate-800/90 text-xs shrink-0 select-none">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5 font-bold text-slate-100">
+                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Біржовий стакан (Scalper DOM)</span>
+                </span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-800 font-semibold">
+                  {symbol} • {exchange.toUpperCase()} {marketType === 'futures' ? 'PERP' : 'SPOT'}
+                </span>
+                <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-900/70 font-mono font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  LIVE DOM
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Height Presets Selector */}
+                <div className="flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-[10px] font-mono">
+                  {(['md', 'lg', 'xl'] as const).map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => setDomHeightPreset(size)}
+                      className={`px-2 py-0.5 rounded transition-all font-semibold cursor-pointer ${
+                        domHeightPreset === size
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-xs'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      title={`Висота стакану: ${size === 'md' ? '600px' : size === 'lg' ? '780px (довгий)' : '950px (максимальний)'}`}
+                    >
+                      {size === 'md' ? '600px' : size === 'lg' ? '780px' : '950px'}
+                    </button>
+                  ))}
+                </div>
+
+                <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
+                  Кластери • Стрічка угод • Щільності
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsDomOpen(false)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 hover:border-slate-700 text-[11px] font-semibold transition-all cursor-pointer active:scale-95 shadow-sm"
+                  title="Згорнути стакан"
+                >
+                  <ChevronUp className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Згорнути</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Scalper DOM Widget */}
+            <div className="flex-1 w-full min-h-0 relative">
+              <ScalperDOMWidget
+                symbol={symbol}
+                baseAsset={baseAsset}
+                quoteAsset={quoteAsset}
+                exchange={exchange}
+                marketType={marketType}
+                currentPrice={currentPrice || (klines.length > 0 ? klines[klines.length - 1].close : 0)}
+                priceChange24h={formation?.potentialProfitPct || 0}
+                initialTimeframe={timeframe as Timeframe}
+                onToggleView={() => setIsDomOpen(false)}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

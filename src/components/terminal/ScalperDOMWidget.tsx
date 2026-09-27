@@ -13,10 +13,21 @@ import {
   BellRing,
   BarChart3,
   LineChart,
+  ChevronUp,
+  CircleDot,
+  Filter,
 } from 'lucide-react';
 import { ExchangeId, MarketType, Timeframe } from '../../types';
 import { formatCryptoPrice, formatVolume } from '../../utils/formatters';
 import { playDensityChime } from '../../utils/domSound';
+
+function formatTradeTime(ts: number): string {
+  const d = new Date(ts);
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
 
 interface ScalperDOMWidgetProps {
   symbol: string;
@@ -30,11 +41,13 @@ interface ScalperDOMWidgetProps {
   initialCompression?: number;
   initialDepth?: 'all' | 'deep' | 'medium' | 'small';
   initialDensityThreshold?: number;
+  initialBubbleThreshold?: number;
   initialSoundAlert?: boolean;
   onUpdateSettings?: (settings: {
     compression?: number;
     depth?: 'all' | 'deep' | 'medium' | 'small';
     densityThresholdUsd?: number;
+    bubbleThresholdUsd?: number;
     soundAlertEnabled?: boolean;
     clusterTimeframe?: Timeframe;
   }) => void;
@@ -86,7 +99,8 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   initialTimeframe = '5m',
   initialCompression = 1,
   initialDepth = 'all',
-  initialDensityThreshold = 50000, // $50K default
+  initialDensityThreshold = 100000, // $100K default
+  initialBubbleThreshold = 1000, // $1K default
   initialSoundAlert = true,
   onUpdateSettings,
   height,
@@ -96,7 +110,16 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   const [clusterTf, setClusterTf] = useState<Timeframe>(initialTimeframe);
   const [compression, setCompression] = useState<number>(initialCompression); // 1, 2, 5, 10, 20, 50, 100
   const [depthPreset, setDepthPreset] = useState<'all' | 'deep' | 'medium' | 'small'>(initialDepth);
-  const [densityThresholdUsd, setDensityThresholdUsd] = useState<number>(initialDensityThreshold);
+  const [densityThresholdUsd, setDensityThresholdUsd] = useState<number>(() => {
+    const saved = localStorage.getItem('scalper_dom_density_threshold');
+    if (saved && !isNaN(Number(saved)) && Number(saved) > 0) return Number(saved);
+    return initialDensityThreshold;
+  });
+  const [bubbleThresholdUsd, setBubbleThresholdUsd] = useState<number>(() => {
+    const saved = localStorage.getItem('scalper_dom_bubble_threshold');
+    if (saved !== null && !isNaN(Number(saved))) return Number(saved);
+    return initialBubbleThreshold;
+  });
   const [soundAlertEnabled, setSoundAlertEnabled] = useState<boolean>(initialSoundAlert);
 
   // Settings popover toggle
@@ -225,6 +248,39 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       clearInterval(interval);
     };
   }, [cleanSymbol, exchange, marketType, scheduleBookFlush]);
+
+  // 1b. Fetch recent trades snapshot on mount & periodic sync
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchTradesSnapshot = async () => {
+      try {
+        const res = await fetch(
+          `/api/trades?symbol=${cleanSymbol}&exchange=${exchange}&marketType=${marketType}&limit=60`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (isMounted && data.success && Array.isArray(data.trades) && data.trades.length > 0) {
+          setTrades((prev) => {
+            const existingIds = new Set(prev.map((t) => t.id));
+            const newOnes = data.trades.filter((t: RecentTrade) => !existingIds.has(t.id));
+            if (newOnes.length === 0) return prev;
+            return [...newOnes, ...prev].slice(0, 150);
+          });
+        }
+      } catch (err) {
+        console.warn('Trades fetch error:', err);
+      }
+    };
+
+    fetchTradesSnapshot();
+    const interval = setInterval(fetchTradesSnapshot, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [cleanSymbol, exchange, marketType]);
 
   // 2. Fetch Klines for Cluster History
   useEffect(() => {
@@ -378,15 +434,18 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                 setLivePrice(tradePrice);
 
                 const newTrade: RecentTrade = {
-                  id: `${t.i || Date.now()}-${Math.random()}`,
+                  id: String(t.i || `${t.T || Date.now()}-${tradePrice}-${tradeQty}`),
                   price: tradePrice,
                   qty: tradeQty,
                   volumeUsd,
                   isBuyerMaker,
-                  timestamp: t.T || Date.now(),
+                  timestamp: parseInt(t.T, 10) || Date.now(),
                 };
 
-                setTrades((prev) => [newTrade, ...prev.slice(0, 24)]);
+                setTrades((prev) => {
+                  if (prev.some((p) => p.id === newTrade.id)) return prev;
+                  return [newTrade, ...prev].slice(0, 150);
+                });
               }
             }
           } catch {}
@@ -439,7 +498,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
               setLivePrice(tradePrice);
 
               const newTrade: RecentTrade = {
-                id: `${data.a || Date.now()}-${Math.random()}`,
+                id: String(data.a || `${data.T || Date.now()}-${tradePrice}-${tradeQty}`),
                 price: tradePrice,
                 qty: tradeQty,
                 volumeUsd,
@@ -447,7 +506,10 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                 timestamp: data.T || Date.now(),
               };
 
-              setTrades((prev) => [newTrade, ...prev.slice(0, 24)]);
+              setTrades((prev) => {
+                if (prev.some((p) => p.id === newTrade.id)) return prev;
+                return [newTrade, ...prev].slice(0, 150);
+              });
             }
           } catch (e) {}
         };
@@ -635,7 +697,19 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   // Density threshold handler
   const handleSetDensityThreshold = (val: number) => {
     setDensityThresholdUsd(val);
+    try {
+      localStorage.setItem('scalper_dom_density_threshold', String(val));
+    } catch {}
     onUpdateSettings?.({ densityThresholdUsd: val });
+  };
+
+  // Trade bubbles threshold handler
+  const handleSetBubbleThreshold = (val: number) => {
+    setBubbleThresholdUsd(val);
+    try {
+      localStorage.setItem('scalper_dom_bubble_threshold', String(val));
+    } catch {}
+    onUpdateSettings?.({ bubbleThresholdUsd: val });
   };
 
   // Sound toggle handler
@@ -646,18 +720,22 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     onUpdateSettings?.({ soundAlertEnabled: next });
   };
 
-  // Calculate recent trade bubbles placed next to the price ladder
+  // Calculate recent trade bubbles placed next to the price ladder (filtered by volume threshold)
   const tradeBubbles = useMemo(() => {
-    return trades.slice(0, 10).map((t, idx) => {
-      // Scale bubble diameter from 18px to 44px based on volume
-      const sizePx = Math.min(44, Math.max(20, Math.round(Math.log10(Math.max(t.volumeUsd, 10)) * 9)));
+    const filtered = bubbleThresholdUsd > 0
+      ? trades.filter((t) => t.volumeUsd >= bubbleThresholdUsd)
+      : trades;
+
+    return filtered.slice(0, 50).map((t, idx) => {
+      // Scale bubble diameter from 20px to 38px based on volume
+      const sizePx = Math.min(38, Math.max(20, Math.round(Math.log10(Math.max(t.volumeUsd, 10)) * 7.5)));
       return {
         ...t,
         sizePx,
-        opacity: Math.max(0.2, 1 - idx * 0.1),
+        opacity: Math.max(0.4, 1 - idx * 0.015),
       };
     });
-  }, [trades]);
+  }, [trades, bubbleThresholdUsd]);
 
   return (
     <div
@@ -794,16 +872,16 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         </div>
       </div>
 
-      {/* Top-Right Toggle to Chart Button */}
+      {/* Top-Right Toggle to Chart / Collapse Button */}
       {onToggleView && (
         <div className="absolute top-2 right-2.5 z-30 flex items-center gap-1.5 pointer-events-auto">
           <button
             onClick={onToggleView}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/90 hover:bg-indigo-500 text-white font-bold text-[11px] shadow-lg shadow-indigo-950/70 border border-indigo-400/40 transition-all active:scale-95 cursor-pointer backdrop-blur-md"
-            title="Повернутися до графіка"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-[11px] shadow-lg shadow-black/50 border border-slate-700/60 transition-all active:scale-95 cursor-pointer backdrop-blur-md"
+            title="Згорнути стакан"
           >
-            <BarChart3 className="w-3.5 h-3.5 text-indigo-200" />
-            <span>Графік</span>
+            <ChevronUp className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Згорнути</span>
           </button>
         </div>
       )}
@@ -811,7 +889,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       {/* ================= SETTINGS POPOVER DIALOG ================= */}
       {isSettingsOpen && (
         <div
-          className="absolute top-14 left-2.5 z-50 w-80 bg-slate-900/98 border border-slate-700 rounded-2xl shadow-2xl p-3.5 backdrop-blur-md animate-in fade-in zoom-in-95 duration-150"
+          className="absolute top-14 left-2.5 z-50 w-80 max-h-[85vh] overflow-y-auto no-scrollbar bg-slate-900/98 border border-slate-700 rounded-2xl shadow-2xl p-3.5 backdrop-blur-md animate-in fade-in zoom-in-95 duration-150"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800">
@@ -821,13 +899,13 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             </span>
             <button
               onClick={() => setIsSettingsOpen(false)}
-              className="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded hover:bg-slate-800"
+              className="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded hover:bg-slate-800 cursor-pointer"
             >
               ✕
             </button>
           </div>
 
-          {/* 1. Плотність у стакані (Threshold) */}
+          {/* 1. Плотність у стакані (Threshold) - від 100к, 300к, 500к, 1М */}
           <div className="mb-3 space-y-1.5">
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-300 font-medium">Поріг плотності (USD):</span>
@@ -836,29 +914,106 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
               </span>
             </div>
             <div className="grid grid-cols-4 gap-1 text-[10px]">
-              {[10000, 25000, 50000, 100000].map((amt) => (
+              {[
+                { amt: 100000, label: '100к' },
+                { amt: 300000, label: '300к' },
+                { amt: 500000, label: '500к' },
+                { amt: 1000000, label: '1М' },
+              ].map(({ amt, label }) => (
                 <button
                   key={amt}
+                  type="button"
                   onClick={() => handleSetDensityThreshold(amt)}
-                  className={`py-1 rounded border text-center font-bold transition-all cursor-pointer ${
+                  className={`py-1.5 rounded-lg border text-center font-bold transition-all cursor-pointer ${
                     densityThresholdUsd === amt
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                      ? 'bg-amber-500/25 border-amber-500 text-amber-300 shadow-sm shadow-amber-950/60'
                       : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-600'
                   }`}
                 >
-                  ${formatVolume(amt)}
+                  {label}
                 </button>
               ))}
             </div>
-            <input
-              type="range"
-              min={5000}
-              max={250000}
-              step={5000}
-              value={densityThresholdUsd}
-              onChange={(e) => handleSetDensityThreshold(Number(e.target.value))}
-              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mt-1"
-            />
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                type="range"
+                min={50000}
+                max={2000000}
+                step={25000}
+                value={densityThresholdUsd}
+                onChange={(e) => handleSetDensityThreshold(Number(e.target.value))}
+                className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+              />
+              <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] font-mono shrink-0">
+                <span className="text-slate-500">$</span>
+                <input
+                  type="number"
+                  min={10000}
+                  step={25000}
+                  value={densityThresholdUsd}
+                  onChange={(e) => handleSetDensityThreshold(Math.max(10000, Number(e.target.value)))}
+                  className="w-18 bg-transparent text-white text-right focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 2. Сума показу кружечків у стрічці угод (Trade Bubbles Minimum Volume) */}
+          <div className="mb-3 space-y-1.5 p-2 rounded-xl bg-slate-950/80 border border-slate-800/90">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-300 font-medium flex items-center gap-1.5">
+                <CircleDot className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Сума кружечків у стрічці:</span>
+              </span>
+              <span className="text-cyan-400 font-bold font-mono">
+                {bubbleThresholdUsd === 0 ? 'Всі угоди' : `≥ $${formatVolume(bubbleThresholdUsd)}`}
+              </span>
+            </div>
+            <div className="grid grid-cols-6 gap-1 text-[10px]">
+              {[
+                { val: 0, label: 'Всі' },
+                { val: 1000, label: '1к' },
+                { val: 5000, label: '5к' },
+                { val: 10000, label: '10к' },
+                { val: 25000, label: '25к' },
+                { val: 50000, label: '50к' },
+              ].map((item) => (
+                <button
+                  key={item.val}
+                  type="button"
+                  onClick={() => handleSetBubbleThreshold(item.val)}
+                  className={`py-1 rounded border text-center font-bold transition-all cursor-pointer ${
+                    bubbleThresholdUsd === item.val
+                      ? 'bg-cyan-500/25 border-cyan-500 text-cyan-300 shadow-sm shadow-cyan-950/60'
+                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-600'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                type="range"
+                min={0}
+                max={100000}
+                step={500}
+                value={bubbleThresholdUsd}
+                onChange={(e) => handleSetBubbleThreshold(Number(e.target.value))}
+                className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+              />
+              <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] font-mono shrink-0">
+                <span className="text-slate-500">$</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={500}
+                  value={bubbleThresholdUsd}
+                  onChange={(e) => handleSetBubbleThreshold(Math.max(0, Number(e.target.value)))}
+                  className="w-16 bg-transparent text-white text-right focus:outline-none"
+                />
+              </div>
+            </div>
           </div>
 
           {/* 2. Звукове сповіщення при появі плотності */}
@@ -1052,40 +1207,120 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           </div>
         </div>
 
-        {/* 2. MIDDLE SECTION: Trades Tape ("лента зделок") */}
-        <div className="w-16 sm:w-24 shrink-0 h-full relative z-10 flex flex-col items-center justify-center overflow-hidden border-l border-slate-900/50">
-          <div className="absolute top-1 text-[8px] text-slate-500 uppercase tracking-wider">
-            Стрічка
+        {/* 2. MIDDLE SECTION: Trades Tape ("Стрічка угод / Лента сделок") */}
+        <div className="w-36 xs:w-44 sm:w-52 shrink-0 h-full relative z-10 flex flex-col border-l border-slate-900/70 bg-[#070a10]/85 select-none">
+          {/* Tape Sticky Header */}
+          <div className="sticky top-0 z-20 flex flex-col px-2 py-1 bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md shrink-0">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider">
+                  Стрічка
+                </span>
+                <span className="flex h-1.5 w-1.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                </span>
+              </div>
+
+              {/* Clickable threshold filter */}
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(true)}
+                className="flex items-center gap-1 text-[8.5px] font-mono px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 hover:border-cyan-500/50 transition-colors cursor-pointer"
+                title="Змінити поріг показу кружечків"
+              >
+                <CircleDot className="w-2.5 h-2.5 text-cyan-400" />
+                <span>{bubbleThresholdUsd === 0 ? 'Всі' : `≥$${formatVolume(bubbleThresholdUsd)}`}</span>
+              </button>
+            </div>
+
+            {/* Column labels */}
+            <div className="flex items-center justify-between text-[8px] text-slate-500 font-mono mt-0.5 pt-0.5 border-t border-slate-900/80">
+              <span>Кружечок / Об'єм</span>
+              <span className="text-right">Ціна • Час</span>
+            </div>
           </div>
 
-          {/* Trade bubbles placed at vertical positions */}
-          <div className="relative w-full h-[85%] flex flex-col items-center justify-center gap-1.5 overflow-hidden">
-            {tradeBubbles.map((tb) => {
-              const isBuy = !tb.isBuyerMaker;
-              return (
-                <div
-                  key={tb.id}
-                  className={`flex items-center justify-center rounded-full text-white font-extrabold font-mono transition-all duration-300 animate-in zoom-in-50 ${
-                    isBuy
-                      ? 'bg-emerald-600/90 border border-emerald-400/80 shadow-md shadow-emerald-950/60'
-                      : 'bg-rose-600/90 border border-rose-400/80 shadow-md shadow-rose-950/60'
-                  }`}
-                  style={{
-                    width: `${tb.sizePx}px`,
-                    height: `${tb.sizePx}px`,
-                    minWidth: `${tb.sizePx}px`,
-                    minHeight: `${tb.sizePx}px`,
-                    fontSize: tb.sizePx > 30 ? '9px' : '7.5px',
-                    opacity: tb.opacity,
-                  }}
-                  title={`${isBuy ? 'BUY' : 'SELL'} ${tb.qty} @ ${tb.price} ($${formatVolume(tb.volumeUsd)})`}
-                >
-                  <span className="truncate px-0.5">
-                    {tb.qty >= 1000 ? `${(tb.qty / 1000).toFixed(0)}k` : tb.qty > 10 ? Math.round(tb.qty) : tb.qty.toFixed(1)}
-                  </span>
-                </div>
-              );
-            })}
+          {/* Trade bubbles / Tape live scroll */}
+          <div className="flex-1 w-full overflow-y-auto no-scrollbar p-1 flex flex-col gap-1">
+            {tradeBubbles.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-2 text-center px-2 text-slate-500 my-auto">
+                <CircleDot className="w-6 h-6 text-slate-700 animate-pulse" />
+                <span className="text-[10px] font-mono leading-tight">
+                  Немає угод {bubbleThresholdUsd > 0 ? `≥ $${formatVolume(bubbleThresholdUsd)}` : ''}
+                </span>
+                {bubbleThresholdUsd > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleSetBubbleThreshold(0)}
+                    className="text-[9px] text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                  >
+                    Показати всі угоди
+                  </button>
+                )}
+              </div>
+            ) : (
+              tradeBubbles.map((tb) => {
+                const isBuy = !tb.isBuyerMaker;
+                const isWhale = tb.volumeUsd >= densityThresholdUsd;
+                return (
+                  <div
+                    key={tb.id}
+                    className={`flex items-center justify-between px-1.5 py-1 rounded-md border text-xs font-mono transition-all duration-150 animate-in fade-in slide-in-from-top-1 hover:brightness-125 cursor-default ${
+                      isWhale
+                        ? isBuy
+                          ? 'bg-emerald-950/70 border-emerald-400/90 shadow-sm shadow-emerald-500/20'
+                          : 'bg-rose-950/70 border-rose-400/90 shadow-sm shadow-rose-500/20'
+                        : isBuy
+                        ? 'bg-emerald-950/30 border-emerald-800/40 hover:border-emerald-500/60'
+                        : 'bg-rose-950/30 border-rose-800/40 hover:border-rose-500/60'
+                    }`}
+                    title={`${isBuy ? 'BUY (Купівля)' : 'SELL (Продаж)'}: ${tb.qty} ${baseAsset} ($${formatVolume(tb.volumeUsd)}) @ $${formatCryptoPrice(tb.price)} о ${formatTradeTime(tb.timestamp)}`}
+                  >
+                    {/* Left: Volume Bubble / Badge */}
+                    <div className="flex items-center gap-1 min-w-0">
+                      <div
+                        className={`flex items-center justify-center rounded-full font-extrabold shrink-0 shadow-sm ${
+                          isBuy
+                            ? 'bg-emerald-500 text-slate-950 shadow-emerald-900/50'
+                            : 'bg-rose-500 text-white shadow-rose-900/50'
+                        }`}
+                        style={{
+                          width: `${tb.sizePx}px`,
+                          height: `${tb.sizePx}px`,
+                          minWidth: `${tb.sizePx}px`,
+                          minHeight: `${tb.sizePx}px`,
+                          fontSize: tb.sizePx >= 30 ? '8.5px' : '7.5px',
+                        }}
+                      >
+                        <span className="truncate px-0.5">
+                          {tb.volumeUsd >= 1000
+                            ? `$${(tb.volumeUsd / 1000).toFixed(0)}k`
+                            : tb.qty >= 100
+                            ? Math.round(tb.qty)
+                            : tb.qty >= 1
+                            ? tb.qty.toFixed(1)
+                            : tb.qty.toFixed(2)}
+                        </span>
+                      </div>
+                      <span className={`text-[8.5px] font-bold ${isBuy ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {isBuy ? 'B' : 'S'}
+                      </span>
+                    </div>
+
+                    {/* Right: Price & Time */}
+                    <div className="flex flex-col items-end min-w-0">
+                      <span className={`text-[10px] font-bold leading-tight ${isBuy ? 'text-emerald-300' : 'text-rose-300'}`}>
+                        ${formatCryptoPrice(tb.price)}
+                      </span>
+                      <span className="text-[8px] text-slate-500 leading-none">
+                        {formatTradeTime(tb.timestamp)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
 

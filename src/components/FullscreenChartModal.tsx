@@ -680,7 +680,7 @@ export const FullscreenChartModal: React.FC<FullscreenChartModalProps> = ({
             </div>
           </div>
         ) : (
-          <div className="w-full h-full flex flex-col p-2 sm:p-4 overflow-hidden">
+          <div className="w-full h-full flex flex-col p-2 sm:p-4 overflow-y-auto">
             <TradingViewChart
               klines={klines}
               formation={formation}
