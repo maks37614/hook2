@@ -109,10 +109,10 @@ export const ScreenerTable: React.FC<ScreenerTableProps> = ({
                               ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
                               : 'bg-slate-800/80 border-slate-700 text-slate-300'
                           }`}
-                          title={`Волатильність за 5 хвилин: ${vol5m.toFixed(2)}%`}
+                          title={`Волатильність: ${vol5m.toFixed(2)}%`}
                         >
                           <Zap className="w-2 h-2 text-cyan-400 shrink-0" />
-                          <span>5м: {vol5m.toFixed(2)}%</span>
+                          <span>5: {vol5m.toFixed(2)}%</span>
                         </span>
 
                         <span

@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { runScreenerScan, fetchKlines, fetchMarketCoins, fetchOrderBook, fetchRecentTrades } from './server/marketService';
+import { runScreenerScan, fetchKlines, fetchMarketCoins, fetchOrderBook, fetchRecentTrades, fetchDualExchangeOI } from './server/marketService';
 import { analyzeFormationWithAI } from './server/geminiService';
 import { generateSmartAnalysis } from './server/smartAnalysisService';
 import { calculateMarketSentiment } from './server/sentimentService';
@@ -280,6 +280,21 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error fetching trades:', err);
       res.status(500).json({ success: false, error: err.message || 'Failed to fetch trades' });
+    }
+  });
+
+  // Dual Exchange Open Interest (Binance & Bybit)
+  app.get('/api/derivatives/oi', async (req, res) => {
+    try {
+      const symbol = (req.query.symbol as string) || 'BTCUSDT';
+      const baseAsset = (req.query.baseAsset as string) || undefined;
+      const price = req.query.price ? parseFloat(req.query.price as string) : undefined;
+
+      const oi = await fetchDualExchangeOI(symbol, baseAsset, price);
+      res.json({ success: true, ...oi });
+    } catch (err: any) {
+      console.error('Error in /api/derivatives/oi:', err);
+      res.status(500).json({ success: false, error: err.message || 'Failed to fetch OI' });
     }
   });
 

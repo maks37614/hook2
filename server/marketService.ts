@@ -871,3 +871,286 @@ export async function fetchRecentTrades(
   return [];
 }
 
+// ----------------------------------------------------
+// DUAL EXCHANGE OPEN INTEREST (Binance Futures & Bybit Linear)
+// ----------------------------------------------------
+
+export interface ExchangeOIData {
+  exchange: 'binance' | 'bybit';
+  symbol: string;
+  valueUsd: number;
+  amountCoins: number;
+  change5mPct: number | null;
+  lastUpdated: number;
+}
+
+let binanceSymbolsSet = new Set<string>();
+let bybitSymbolsSet = new Set<string>();
+let lastOiSymbolsFetchTime = 0;
+const OI_SYMBOLS_CACHE_TTL = 30 * 60 * 1000;
+
+const oiResultCache = new Map<string, { timestamp: number; data: { binance: ExchangeOIData | null; bybit: ExchangeOIData | null; totalOIUsd: number } }>();
+const OI_RESULT_CACHE_TTL = 6000;
+
+async function refreshOiExchangeSymbols(): Promise<void> {
+  const now = Date.now();
+  if (binanceSymbolsSet.size > 0 && bybitSymbolsSet.size > 0 && (now - lastOiSymbolsFetchTime) < OI_SYMBOLS_CACHE_TTL) {
+    return;
+  }
+
+  try {
+    const [binanceRes, bybitRes] = await Promise.allSettled([
+      fetch('https://fapi.binance.com/fapi/v1/ticker/price', {
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(4000),
+      }).then((r) => (r.ok ? r.json() : [])),
+      fetch('https://api.bybit.com/v5/market/tickers?category=linear', {
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(4000),
+      }).then((r) => (r.ok ? r.json() : {})),
+    ]);
+
+    if (binanceRes.status === 'fulfilled' && Array.isArray(binanceRes.value)) {
+      const bSet = new Set<string>();
+      for (const item of binanceRes.value) {
+        if (item.symbol) bSet.add(item.symbol);
+      }
+      if (bSet.size > 0) binanceSymbolsSet = bSet;
+    }
+
+    if (bybitRes.status === 'fulfilled') {
+      const bybitData = bybitRes.value as any;
+      if (Array.isArray(bybitData?.result?.list)) {
+        const bySet = new Set<string>();
+        for (const item of bybitData.result.list) {
+          if (item.symbol) bySet.add(item.symbol);
+        }
+        if (bySet.size > 0) bybitSymbolsSet = bySet;
+      }
+    }
+
+    lastOiSymbolsFetchTime = now;
+  } catch (err) {
+    console.warn('Failed to refresh exchange symbols cache:', err);
+  }
+}
+
+refreshOiExchangeSymbols().catch(() => {});
+
+function resolveOiSymbols(
+  rawSymbol: string,
+  baseAsset?: string
+): { binanceSymbol: string | null; bybitSymbol: string | null } {
+  let clean = (rawSymbol || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[-_:](SWAP|PERP|USDT|USDC)$/i, '')
+    .replace(/[-_:\/]/g, '')
+    .replace(/(SWAP|PERP)$/i, '');
+
+  if (clean.endsWith('USDT')) {
+    clean = clean.replace(/USDT$/, '');
+  } else if (clean.endsWith('USDC')) {
+    clean = clean.replace(/USDC$/, '');
+  }
+
+  let core = (baseAsset || clean)
+    .toUpperCase()
+    .replace(/[-_:\/]/g, '')
+    .replace(/(USDT|USDC|BUSD|PERP|SWAP)$/i, '')
+    .replace(/^(10000000|1000000|100000|10000|1000|1M|K)/i, '')
+    .replace(/(10000000|1000000|100000|10000|1000|1M|K)$/i, '');
+
+  if (core.endsWith('CTO')) {
+    core = core.replace(/CTO$/, '');
+  }
+
+  const candidates = [
+    `${clean}USDT`,
+    `${core}USDT`,
+    `1000${core}USDT`,
+    `10000${core}USDT`,
+    `1000000${core}USDT`,
+    `1M${core}USDT`,
+    `${core}1000USDT`,
+    `1000${core}CTOUSDT`,
+    `${clean}USDC`,
+    `${core}USDC`,
+  ];
+
+  let binanceSymbol: string | null = null;
+  let bybitSymbol: string | null = null;
+
+  if (binanceSymbolsSet.size > 0) {
+    for (const cand of candidates) {
+      if (binanceSymbolsSet.has(cand)) {
+        binanceSymbol = cand;
+        break;
+      }
+    }
+  } else {
+    binanceSymbol = candidates[0];
+  }
+
+  if (bybitSymbolsSet.size > 0) {
+    for (const cand of candidates) {
+      if (bybitSymbolsSet.has(cand)) {
+        bybitSymbol = cand;
+        break;
+      }
+    }
+  } else {
+    bybitSymbol = candidates[0];
+  }
+
+  return { binanceSymbol, bybitSymbol };
+}
+
+async function fetchBinanceOiSingle(symbol: string, fallbackPrice: number): Promise<ExchangeOIData | null> {
+  const histUrls = [
+    `https://fapi.binance.com/futures/data/openInterestHist?symbol=${symbol}&period=5m&limit=2`,
+    `https://data-api.binance.vision/futures/data/openInterestHist?symbol=${symbol}&period=5m&limit=2`,
+  ];
+
+  for (const url of histUrls) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(2500) });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const latest = data[data.length - 1];
+          const val = parseFloat(latest.sumOpenInterestValue) || 0;
+          const coins = parseFloat(latest.sumOpenInterest) || 0;
+
+          let change5mPct: number | null = null;
+          if (data.length > 1) {
+            const prevVal = parseFloat(data[0].sumOpenInterestValue) || 0;
+            if (prevVal > 0 && val > 0) {
+              change5mPct = Number((((val - prevVal) / prevVal) * 100).toFixed(2));
+            }
+          }
+
+          if (val > 0 || coins > 0) {
+            const finalVal = val > 0 ? val : coins * fallbackPrice;
+            return {
+              exchange: 'binance',
+              symbol,
+              valueUsd: finalVal,
+              amountCoins: coins,
+              change5mPct,
+              lastUpdated: Date.now(),
+            };
+          }
+        }
+      }
+    } catch {}
+  }
+
+  try {
+    const res = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`, {
+      headers: BROWSER_HEADERS,
+      signal: AbortSignal.timeout(2000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const coins = parseFloat(data?.openInterest) || 0;
+      if (coins > 0) {
+        return {
+          exchange: 'binance',
+          symbol,
+          valueUsd: coins * fallbackPrice,
+          amountCoins: coins,
+          change5mPct: null,
+          lastUpdated: Date.now(),
+        };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+async function fetchBybitOiSingle(symbol: string, fallbackPrice: number): Promise<ExchangeOIData | null> {
+  const mirrors = [
+    `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`,
+    `https://api.bytick.com/v5/market/tickers?category=linear&symbol=${symbol}`,
+  ];
+
+  for (const url of mirrors) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(2500) });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const item = json?.result?.list?.[0];
+      if (item) {
+        const val = parseFloat(item.openInterestValue) || 0;
+        const coins = parseFloat(item.openInterest) || 0;
+        const lastPrice = parseFloat(item.lastPrice) || fallbackPrice;
+
+        if (val > 0 || coins > 0) {
+          let change5mPct: number | null = null;
+          try {
+            const hRes = await fetch(
+              `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min&limit=2`,
+              { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(2000) }
+            );
+            if (hRes.ok) {
+              const hJson = await hRes.json();
+              const list = hJson?.result?.list;
+              if (Array.isArray(list) && list.length >= 2) {
+                const latestOi = parseFloat(list[0].openInterest) || 0;
+                const prevOi = parseFloat(list[1].openInterest) || 0;
+                if (prevOi > 0 && latestOi > 0) {
+                  change5mPct = Number((((latestOi - prevOi) / prevOi) * 100).toFixed(2));
+                }
+              }
+            }
+          } catch {}
+
+          const finalVal = val > 0 ? val : coins * lastPrice;
+          return {
+            exchange: 'bybit',
+            symbol,
+            valueUsd: finalVal,
+            amountCoins: coins,
+            change5mPct,
+            lastUpdated: Date.now(),
+          };
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+export async function fetchDualExchangeOI(
+  rawSymbol: string,
+  baseAsset?: string,
+  curPrice?: number
+): Promise<{ binance: ExchangeOIData | null; bybit: ExchangeOIData | null; totalOIUsd: number }> {
+  const cacheKey = `${rawSymbol}_${baseAsset || ''}`.toUpperCase();
+  const cached = oiResultCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < OI_RESULT_CACHE_TTL) {
+    return cached.data;
+  }
+
+  await refreshOiExchangeSymbols();
+
+  const price = curPrice && curPrice > 0 ? curPrice : 1;
+  const { binanceSymbol, bybitSymbol } = resolveOiSymbols(rawSymbol, baseAsset);
+
+  const [binanceResult, bybitResult] = await Promise.allSettled([
+    binanceSymbol ? fetchBinanceOiSingle(binanceSymbol, price) : Promise.resolve(null),
+    bybitSymbol ? fetchBybitOiSingle(bybitSymbol, price) : Promise.resolve(null),
+  ]);
+
+  const binance = binanceResult.status === 'fulfilled' ? binanceResult.value : null;
+  const bybit = bybitResult.status === 'fulfilled' ? bybitResult.value : null;
+  const totalOIUsd = (binance?.valueUsd || 0) + (bybit?.valueUsd || 0);
+
+  const result = { binance, bybit, totalOIUsd };
+  oiResultCache.set(cacheKey, { timestamp: Date.now(), data: result });
+  return result;
+}
+

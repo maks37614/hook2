@@ -744,15 +744,15 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 className="bg-slate-950/80 border border-slate-800 rounded-xl px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 cursor-pointer"
               >
                 <option value={0}>Показати всі</option>
-                <option value={50_000}>До $50K</option>
-                <option value={100_000}>До $100K</option>
-                <option value={500_000}>До $500K</option>
-                <option value={2_000_000}>До $2M</option>
-                <option value={10_000_000}>До $10M</option>
-                <option value={50_000_000}>До $50M</option>
-                <option value={100_000_000}>До $100M</option>
-                <option value={500_000_000}>До $500M</option>
-                <option value={1_000_000_000}>До $1B</option>
+                <option value={50_000}>$50K</option>
+                <option value={100_000}>$100K</option>
+                <option value={500_000}>$500K</option>
+                <option value={2_000_000}>$2M</option>
+                <option value={10_000_000}>$10M</option>
+                <option value={50_000_000}>$50M</option>
+                <option value={100_000_000}>$100M</option>
+                <option value={500_000_000}>$500M</option>
+                <option value={1_000_000_000}>$1B</option>
               </select>
             </div>
           </div>
@@ -878,24 +878,6 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   24h Range (Low - High)
                 </th>
                 <th
-                  onClick={() => handleHeaderSort('distanceToHigh')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
-                >
-                  <div className="flex items-center justify-end gap-1">
-                    <span>{t('distToHigh')}</span>
-                    {sortBy === 'distanceToHigh' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
-                  </div>
-                </th>
-                <th
-                  onClick={() => handleHeaderSort('distanceToLow')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
-                >
-                  <div className="flex items-center justify-end gap-1">
-                    <span>{t('distToLow')}</span>
-                    {sortBy === 'distanceToLow' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
-                  </div>
-                </th>
-                <th
                   onClick={() => handleHeaderSort('volume')}
                   className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
@@ -923,8 +905,6 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 const isWatchlisted = watchlist.includes(coin.symbol);
                 const isPositive = coin.change24h >= 0;
                 const vol5m = getCoinVol5m(coin);
-                const distHigh = getCoinDistanceToHigh(coin);
-                const distLow = getCoinDistanceToLow(coin);
 
                 // Calculate where price is positioned between 24h low and high (0 to 100%)
                 const rangeDiff = coin.high24h - coin.low24h;
@@ -1084,32 +1064,6 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                           />
                         </div>
                       </div>
-                    </td>
-
-                    {/* Distance to 24h High */}
-                    <td className="py-3 px-3.5 text-right whitespace-nowrap">
-                      <span
-                        className={`text-xs font-semibold ${
-                          coin.isNearHigh
-                            ? 'text-purple-400 font-bold bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20'
-                            : 'text-slate-400'
-                        }`}
-                      >
-                        -{distHigh.toFixed(1)}%
-                      </span>
-                    </td>
-
-                    {/* Distance to 24h Low */}
-                    <td className="py-3 px-3.5 text-right whitespace-nowrap">
-                      <span
-                        className={`text-xs font-semibold ${
-                          coin.isNearLow
-                            ? 'text-blue-400 font-bold bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20'
-                            : 'text-slate-400'
-                        }`}
-                      >
-                        +{distLow.toFixed(1)}%
-                      </span>
                     </td>
 
                     {/* 24h Volume */}

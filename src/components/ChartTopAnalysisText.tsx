@@ -26,23 +26,46 @@ function formatOI(val: number): string {
 }
 
 function getCandidateSymbols(symbol: string, baseAsset?: string): string[] {
-  const clean = symbol.replace(/[\/\-_]/g, '').toUpperCase();
-  const candidates: string[] = [clean];
-  if (!clean.startsWith('1000') && (
-    clean.startsWith('PEPE') || clean.startsWith('SHIB') || clean.startsWith('FLOKI') ||
-    clean.startsWith('BONK') || clean.startsWith('LUNC') || clean.startsWith('SATS') ||
-    clean.startsWith('RATS') || clean.startsWith('CAT') || clean.startsWith('MOG')
-  )) {
-    candidates.unshift('1000' + clean);
+  let clean = (symbol || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[-_:](SWAP|PERP|USDT|USDC)$/i, '')
+    .replace(/[-_:\/]/g, '')
+    .replace(/(SWAP|PERP)$/i, '');
+
+  if (clean.endsWith('USDT')) {
+    clean = clean.replace(/USDT$/, '');
+  } else if (clean.endsWith('USDC')) {
+    clean = clean.replace(/USDC$/, '');
   }
-  if (baseAsset) {
-    const baseClean = baseAsset.toUpperCase();
-    candidates.push(`${baseClean}USDT`);
-    if (!baseClean.startsWith('1000')) {
-      candidates.push(`1000${baseClean}USDT`);
-    }
+
+  let core = (baseAsset || clean)
+    .toUpperCase()
+    .replace(/[-_:\/]/g, '')
+    .replace(/(USDT|USDC|BUSD|PERP|SWAP)$/i, '')
+    .replace(/^(10000000|1000000|100000|10000|1000|1M|K)/i, '')
+    .replace(/(10000000|1000000|100000|10000|1000|1M|K)$/i, '');
+
+  if (core.endsWith('CTO')) {
+    core = core.replace(/CTO$/, '');
   }
-  return Array.from(new Set(candidates));
+
+  const list: string[] = [
+    `${clean}USDT`,
+    `${core}USDT`,
+    `1000${core}USDT`,
+    `10000${core}USDT`,
+    `1000000${core}USDT`,
+    `1M${core}USDT`,
+    `${core}1000USDT`,
+    `1000${core}CTOUSDT`,
+    `${clean}USDC`,
+    `${core}USDC`,
+    clean,
+    core,
+  ];
+
+  return Array.from(new Set(list));
 }
 
 export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
@@ -55,6 +78,12 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
 }) => {
   const timeframes: Timeframe[] = ['5m', '15m', '1h', '4h', '1d'];
 
+  // Keep livePrice in ref to avoid recreation of fetchOI on every live price tick
+  const livePriceRef = useRef<number>(livePrice);
+  useEffect(() => {
+    livePriceRef.current = livePrice;
+  }, [livePrice]);
+
   // Open Interest state for Binance and Bybit with auto-updating
   const [binanceOI, setBinanceOI] = useState<OpenInterestData | null>(null);
   const [bybitOI, setBybitOI] = useState<OpenInterestData | null>(null);
@@ -63,69 +92,47 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
   const pulseTimerRef = useRef<any>(null);
 
   const fetchOI = useCallback(async (isAuto = false) => {
-    const curPrice = livePrice > 0 ? livePrice : coin.currentPrice || 1;
+    const curPrice = livePriceRef.current > 0 ? livePriceRef.current : coin.currentPrice || 1;
     const candidates = getCandidateSymbols(coin.symbol, coin.baseAsset);
 
-    // Fetch Binance OI
-    const fetchBinance = async (): Promise<OpenInterestData | null> => {
-      for (const sym of candidates) {
-        try {
-          const resHist = await fetch(
-            `https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=5m&limit=2`,
-            { signal: AbortSignal.timeout(4000) }
-          );
-          if (resHist.ok) {
-            const data = await resHist.json();
-            if (Array.isArray(data) && data.length > 0) {
-              const latest = data[data.length - 1];
-              const val = parseFloat(latest.sumOpenInterestValue) || 0;
-              const coins = parseFloat(latest.sumOpenInterest) || 0;
-              let change5m: number | null = null;
-              if (data.length > 1) {
-                const prevVal = parseFloat(data[0].sumOpenInterestValue) || 0;
-                if (prevVal > 0) {
-                  change5m = ((val - prevVal) / prevVal) * 100;
-                }
-              }
-              if (val > 0 || coins > 0) {
-                return {
-                  valueUsd: val > 0 ? val : coins * curPrice,
-                  amountCoins: coins,
-                  change5mPct: change5m !== null ? Number(change5m.toFixed(2)) : null,
-                  lastUpdated: Date.now(),
-                };
-              }
-            }
-          }
-        } catch {
-          // fallback to standard endpoint
-        }
+    let fetchedBinance: OpenInterestData | null = null;
+    let fetchedBybit: OpenInterestData | null = null;
+    let serverOk = false;
 
-        try {
-          const res = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`, {
-            signal: AbortSignal.timeout(4000),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            const coins = parseFloat(data.openInterest) || 0;
-            if (coins > 0) {
-              return {
-                valueUsd: coins * curPrice,
-                amountCoins: coins,
-                change5mPct: null,
-                lastUpdated: Date.now(),
-              };
-            }
+    // 1. Primary: Fast server proxy (queries Binance Futures & Bybit Linear in parallel without CORS limitations)
+    try {
+      const serverRes = await fetch(
+        `/api/derivatives/oi?symbol=${encodeURIComponent(coin.symbol)}&baseAsset=${encodeURIComponent(coin.baseAsset || '')}&price=${curPrice}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (serverRes.ok) {
+        const sData = await serverRes.json();
+        if (sData.success) {
+          serverOk = true;
+          if (sData.binance && (sData.binance.valueUsd > 0 || sData.binance.amountCoins > 0)) {
+            fetchedBinance = {
+              valueUsd: sData.binance.valueUsd,
+              amountCoins: sData.binance.amountCoins,
+              change5mPct: sData.binance.change5mPct,
+              lastUpdated: sData.binance.lastUpdated || Date.now(),
+            };
           }
-        } catch {
-          // next candidate
+          if (sData.bybit && (sData.bybit.valueUsd > 0 || sData.bybit.amountCoins > 0)) {
+            fetchedBybit = {
+              valueUsd: sData.bybit.valueUsd,
+              amountCoins: sData.bybit.amountCoins,
+              change5mPct: sData.bybit.change5mPct,
+              lastUpdated: sData.bybit.lastUpdated || Date.now(),
+            };
+          }
         }
       }
-      return null;
-    };
+    } catch {
+      // Server fallback if unreachable
+    }
 
-    // Fetch Bybit OI
-    const fetchBybit = async (): Promise<OpenInterestData | null> => {
+    // 2. Direct browser fallback for Bybit only if server proxy was unreachable
+    if (!serverOk && !fetchedBybit) {
       for (const sym of candidates) {
         const mirrors = [
           `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${sym}`,
@@ -134,7 +141,7 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
 
         for (const url of mirrors) {
           try {
-            const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+            const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
             if (!res.ok) continue;
             const json = await res.json();
             const item = json?.result?.list?.[0];
@@ -146,7 +153,7 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
                 try {
                   const histRes = await fetch(
                     `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${sym}&intervalTime=5min&limit=2`,
-                    { signal: AbortSignal.timeout(3000) }
+                    { signal: AbortSignal.timeout(2000) }
                   );
                   if (histRes.ok) {
                     const histJson = await histRes.json();
@@ -159,47 +166,39 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
                       }
                     }
                   }
-                } catch {
-                  // ignore
-                }
+                } catch {}
 
-                return {
+                fetchedBybit = {
                   valueUsd: val > 0 ? val : coins * curPrice,
                   amountCoins: coins,
                   change5mPct: change5m !== null ? Number(change5m.toFixed(2)) : null,
                   lastUpdated: Date.now(),
                 };
+                break;
               }
             }
-          } catch {
-            // next mirror
-          }
+          } catch {}
         }
+        if (fetchedBybit) break;
       }
-      return null;
-    };
-
-    try {
-      const [resB, resBy] = await Promise.allSettled([fetchBinance(), fetchBybit()]);
-      if (resB.status === 'fulfilled' && resB.value) {
-        setBinanceOI(resB.value);
-      }
-      if (resBy.status === 'fulfilled' && resBy.value) {
-        setBybitOI(resBy.value);
-      }
-      if (isAuto) {
-        setOiPulse(true);
-        if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
-        pulseTimerRef.current = setTimeout(() => setOiPulse(false), 900);
-      }
-    } finally {
-      setLoadingOI(false);
     }
-  }, [coin.symbol, coin.baseAsset, coin.currentPrice, livePrice]);
+
+    setBinanceOI(fetchedBinance);
+    setBybitOI(fetchedBybit);
+
+    if (isAuto && (fetchedBinance || fetchedBybit)) {
+      setOiPulse(true);
+      if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
+      pulseTimerRef.current = setTimeout(() => setOiPulse(false), 900);
+    }
+    setLoadingOI(false);
+  }, [coin.symbol, coin.baseAsset, coin.currentPrice]);
 
   // Initial fetch and auto-update every 10 seconds
   useEffect(() => {
     setLoadingOI(true);
+    setBinanceOI(null);
+    setBybitOI(null);
     fetchOI(false);
 
     const interval = setInterval(() => {
