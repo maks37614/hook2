@@ -23,6 +23,7 @@ import {
 import { Kline, DetectedFormation, Timeframe, ExchangeId, MarketType, ChartMarkerInfo, ChartRestoreParams, ScannedCoin } from '../types';
 import { TradingViewChart } from './TradingViewChart';
 import { formatCryptoPrice } from '../utils/formatters';
+import { fetchDirectKlines } from '../utils/directExchangeClient';
 
 interface FullscreenChartModalProps {
   isOpen: boolean;
@@ -99,8 +100,55 @@ export const FullscreenChartModal: React.FC<FullscreenChartModalProps> = ({
     setActiveCoin(coin);
   }, [coin.symbol]);
 
+  const [activeKlines, setActiveKlines] = useState<Kline[]>(klines);
+
+  // Sync activeKlines with parent klines prop
+  useEffect(() => {
+    if (klines && klines.length > 0) {
+      setActiveKlines(klines);
+    }
+  }, [klines]);
+
   const [activeMode, setActiveMode] = useState<'tradingview' | 'pattern'>('tradingview');
   const [timeframe, setTimeframe] = useState<string>(currentTimeframe || '15m');
+
+  // Auto-fetch 1000 klines for pattern chart mode if coin or timeframe changes
+  useEffect(() => {
+    if (!isOpen || activeMode !== 'pattern') return;
+    let isCancelled = false;
+
+    async function fetchPatternKlines() {
+      const cleanSym = activeCoin.symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      try {
+        const res = await fetch(
+          `/api/klines?exchange=${activeCoin.exchange}&market=${activeCoin.marketType}&symbol=${cleanSym}&timeframe=${timeframe}&limit=1000`
+        );
+        const json = await res.json();
+        if (!isCancelled && json.success && Array.isArray(json.data) && json.data.length > 0) {
+          setActiveKlines(json.data);
+          return;
+        }
+
+        const direct = await fetchDirectKlines(activeCoin.exchange, activeCoin.marketType, cleanSym, timeframe as Timeframe, 1000);
+        if (!isCancelled && direct.length > 0) {
+          setActiveKlines(direct);
+        }
+      } catch {
+        try {
+          const direct = await fetchDirectKlines(activeCoin.exchange, activeCoin.marketType, cleanSym, timeframe as Timeframe, 1000);
+          if (!isCancelled && direct.length > 0) {
+            setActiveKlines(direct);
+          }
+        } catch {}
+      }
+    }
+
+    fetchPatternKlines();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isOpen, activeMode, activeCoin.symbol, activeCoin.exchange, activeCoin.marketType, timeframe]);
   const [iframeLoading, setIframeLoading] = useState<boolean>(true);
   const [showDrawingToolbar, setShowDrawingToolbar] = useState<boolean>(() => {
     try {
@@ -682,7 +730,7 @@ export const FullscreenChartModal: React.FC<FullscreenChartModalProps> = ({
         ) : (
           <div className="w-full h-full flex flex-col p-2 sm:p-4 overflow-y-auto">
             <TradingViewChart
-              klines={klines}
+              klines={activeKlines}
               formation={formation}
               symbol={activeCoin.symbol}
               timeframe={timeframe}

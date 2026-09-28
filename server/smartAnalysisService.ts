@@ -114,22 +114,36 @@ function calculatePOC(klines: Kline[], currentPrice: number): { pocPrice: number
 // Analyze Multi-Timeframe BTC Structure
 async function analyzeBTCStructure(): Promise<SmartAnalysisData['btcContext']> {
   try {
+    const fetchWithMirrors = async (path: string) => {
+      const mirrors = [
+        `https://fapi.binance.com${path}`,
+        `https://data-api.binance.vision${path.replace('/fapi/v1', '/api/v3')}`,
+        `https://api.binance.com${path.replace('/fapi/v1', '/api/v3')}`,
+      ];
+      for (const url of mirrors) {
+        try {
+          const res = await fetch(url, {
+            headers: { 'User-Agent': 'CryptoPatternScreener/1.0' },
+            signal: AbortSignal.timeout(3000),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data) && data.length > 0) return data;
+            if (!Array.isArray(data) && data && Object.keys(data).length > 0) return data;
+          }
+        } catch {}
+      }
+      return [];
+    };
+
     const [res15m, res5m, res1m, resTicker] = await Promise.all([
-      fetch('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=25', {
-        headers: { 'User-Agent': 'CryptoPatternScreener/1.0' },
-      }).then((r) => (r.ok ? r.json() : [])),
-      fetch('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=25', {
-        headers: { 'User-Agent': 'CryptoPatternScreener/1.0' },
-      }).then((r) => (r.ok ? r.json() : [])),
-      fetch('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=25', {
-        headers: { 'User-Agent': 'CryptoPatternScreener/1.0' },
-      }).then((r) => (r.ok ? r.json() : [])),
-      fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT', {
-        headers: { 'User-Agent': 'CryptoPatternScreener/1.0' },
-      }).then((r) => (r.ok ? r.json() : ({} as any))),
+      fetchWithMirrors('/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=25'),
+      fetchWithMirrors('/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=25'),
+      fetchWithMirrors('/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=25'),
+      fetchWithMirrors('/fapi/v1/ticker/24hr?symbol=BTCUSDT'),
     ]);
 
-    const tickerObj = resTicker as { lastPrice?: string; priceChangePercent?: string };
+    const tickerObj = (Array.isArray(resTicker) ? resTicker[0] : resTicker) || {} as any;
     const btcPrice = parseFloat(tickerObj?.lastPrice || '') || 85000;
     const change24h = parseFloat(tickerObj?.priceChangePercent || '') || 1.2;
 
@@ -385,6 +399,11 @@ async function fetchOrderbookAnalysis(symbol: string, currentPrice: number): Pro
   }
 }
 
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+};
+
 // Fetch Derivatives: Open Interest & Funding Rate for Binance and Bybit
 async function fetchDerivatives(symbol: string, currentPrice: number): Promise<SmartAnalysisData['derivatives']> {
   let binanceOIUsd = 0;
@@ -392,39 +411,80 @@ async function fetchDerivatives(symbol: string, currentPrice: number): Promise<S
   let fundingRate = 0.01;
   let predictedFundingRate = 0.01;
 
-  try {
-    const [binanceOiRes, binanceFundingRes] = await Promise.all([
-      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`).then((r) => (r.ok ? r.json() : null)),
-      fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`).then((r) => (r.ok ? r.json() : null)),
-    ]);
-
-    if (binanceOiRes?.openInterest) {
-      binanceOIUsd = parseFloat(binanceOiRes.openInterest) * currentPrice;
-    }
-    if (binanceFundingRes?.lastFundingRate) {
-      fundingRate = parseFloat(binanceFundingRes.lastFundingRate) * 100;
-    }
-  } catch (err) {
-    console.warn('Binance derivatives fetch error:', err);
+  // Binance OI fetch with mirrors
+  const binanceOiUrls = [
+    `https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`,
+    `https://data-api.binance.vision/fapi/v1/openInterest?symbol=${symbol}`,
+  ];
+  for (const url of binanceOiUrls) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.openInterest) {
+          binanceOIUsd = parseFloat(data.openInterest) * currentPrice;
+          break;
+        }
+      }
+    } catch {}
   }
 
-  try {
-    const [bybitOiRes, bybitTickerRes] = await Promise.all([
-      fetch(`https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min`).then((r) => (r.ok ? r.json() : null)),
-      fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`).then((r) => (r.ok ? r.json() : null)),
-    ]);
+  // Binance Funding fetch with mirrors
+  const binanceFundingUrls = [
+    `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`,
+    `https://data-api.binance.vision/fapi/v1/premiumIndex?symbol=${symbol}`,
+  ];
+  for (const url of binanceFundingUrls) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.lastFundingRate) {
+          fundingRate = parseFloat(data.lastFundingRate) * 100;
+          break;
+        }
+      }
+    } catch {}
+  }
 
-    const bybitList = bybitOiRes?.result?.list;
-    if (Array.isArray(bybitList) && bybitList.length > 0) {
-      bybitOIUsd = parseFloat(bybitList[0].openInterest) * currentPrice;
-    }
-    const bybitTickers = bybitTickerRes?.result?.list;
-    if (Array.isArray(bybitTickers) && bybitTickers.length > 0) {
-      const pred = parseFloat(bybitTickers[0].predictedFundingRate || bybitTickers[0].fundingRate);
-      if (!isNaN(pred)) predictedFundingRate = pred * 100;
-    }
-  } catch (err) {
-    console.warn('Bybit derivatives fetch error:', err);
+  // Bybit OI and Tickers fetch with mirrors
+  const bybitOiUrls = [
+    `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min&limit=1`,
+    `https://api.bytick.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min&limit=1`,
+  ];
+  for (const url of bybitOiUrls) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const json = await res.json();
+        const list = json?.result?.list;
+        if (Array.isArray(list) && list.length > 0 && list[0].openInterest) {
+          bybitOIUsd = parseFloat(list[0].openInterest) * currentPrice;
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  const bybitTickerUrls = [
+    `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`,
+    `https://api.bytick.com/v5/market/tickers?category=linear&symbol=${symbol}`,
+  ];
+  for (const url of bybitTickerUrls) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const json = await res.json();
+        const list = json?.result?.list;
+        if (Array.isArray(list) && list.length > 0) {
+          const pred = parseFloat(list[0].predictedFundingRate || list[0].fundingRate);
+          if (!isNaN(pred)) {
+            predictedFundingRate = pred * 100;
+            break;
+          }
+        }
+      }
+    } catch {}
   }
 
   // If no perpetual info from direct endpoints, generate sensible realistic values

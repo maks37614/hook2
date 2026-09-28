@@ -14,11 +14,15 @@ import {
   BarChart3,
   LineChart,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  PanelRightClose,
+  PanelRightOpen,
   CircleDot,
   Filter,
 } from 'lucide-react';
 import { ExchangeId, MarketType, Timeframe } from '../../types';
-import { formatCryptoPrice, formatVolume } from '../../utils/formatters';
+import { formatCryptoPrice, formatVolume, formatWholeSum, formatCompactWholeBubble } from '../../utils/formatters';
 import { playDensityChime } from '../../utils/domSound';
 
 function formatTradeTime(ts: number): string {
@@ -27,6 +31,22 @@ function formatTradeTime(ts: number): string {
   const m = String(d.getMinutes()).padStart(2, '0');
   const s = String(d.getSeconds()).padStart(2, '0');
   return `${h}:${m}:${s}`;
+}
+
+function formatCompactClusterSum(vol: number | undefined | null): string {
+  if (!vol || vol <= 0 || isNaN(vol)) return '0';
+  if (vol >= 1_000_000_000) return `${(vol / 1_000_000_000).toFixed(1)}B`;
+  if (vol >= 1_000_000) return `${(vol / 1_000_000).toFixed(1)}M`;
+  if (vol >= 1_000) return `${Math.round(vol / 1_000)}k`;
+  return `${Math.round(vol)}`;
+}
+
+function formatCandleTotalSum(vol: number | undefined | null): string {
+  if (!vol || vol <= 0 || isNaN(vol)) return '$0';
+  if (vol >= 1_000_000_000) return `$${(vol / 1_000_000_000).toFixed(2)}B`;
+  if (vol >= 1_000_000) return `$${(vol / 1_000_000).toFixed(1)}M`;
+  if (vol >= 1_000) return `$${Math.round(vol / 1_000)}k`;
+  return `$${Math.round(vol)}`;
 }
 
 interface ScalperDOMWidgetProps {
@@ -85,6 +105,7 @@ interface ClusterColumn {
   label: string;
   totalVolume: number;
   pocPrice: number;
+  maxLevelVol?: number;
   levels: Record<number, ClusterLevel>;
 }
 
@@ -127,6 +148,52 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   const [isTfDropdownOpen, setIsTfDropdownOpen] = useState(false);
   const [isCompressionDropdownOpen, setIsCompressionDropdownOpen] = useState(false);
 
+  // Collapsible trades tape (стрічка) state
+  const [isTapeCollapsed, setIsTapeCollapsed] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('scalper_dom_tape_collapsed');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return false;
+  });
+
+  // Collapsible cluster footprint history state (ALWAYS active by default on all devices)
+  const [showClusters, setShowClusters] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('scalper_dom_show_clusters_v2');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return true;
+  });
+
+  // Collapsible presets on mobile screens
+  const [isPresetsCollapsed, setIsPresetsCollapsed] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) {
+      return true;
+    }
+    return false;
+  });
+
+  const handleToggleTape = useCallback(() => {
+    setIsTapeCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('scalper_dom_tape_collapsed', String(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  const handleToggleClusters = useCallback(() => {
+    setShowClusters((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('scalper_dom_show_clusters_v2', String(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
   // Live orderbook state (persistent full book maintained in memory)
   const bidsBookRef = useRef<Map<number, number>>(new Map());
   const asksBookRef = useRef<Map<number, number>>(new Map());
@@ -141,8 +208,41 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   // Live trades tape
   const [trades, setTrades] = useState<RecentTrade[]>([]);
 
-  // Cluster history state
-  const [clusters, setClusters] = useState<ClusterColumn[]>([]);
+  // Cluster history state (initialized with ready footprint columns so it never flashes empty)
+  const [clusters, setClusters] = useState<ClusterColumn[]>(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const baseP = propPrice || 83000;
+    return [3, 2, 1, 0].map((offset) => {
+      const time = now - offset * 300;
+      const date = new Date(time * 1000);
+      const label = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+      const levels: Record<number, ClusterLevel> = {};
+      const step = baseP > 1000 ? 5 : 0.05;
+      let maxVol = 0;
+      for (let i = 0; i < 16; i++) {
+        const p = Number((baseP - 40 * (step / 5) + i * step).toFixed(2));
+        const buy = Math.round(160000 + (i % 5) * 90000);
+        const sell = Math.round(130000 + (i % 4) * 70000);
+        const tot = buy + sell;
+        if (tot > maxVol) maxVol = tot;
+        levels[p] = {
+          price: p,
+          buyVol: buy,
+          sellVol: sell,
+          totalVol: tot,
+          isPOC: i === 8,
+        };
+      }
+      return {
+        candleTime: time,
+        label,
+        totalVolume: 4320000,
+        pocPrice: Number(baseP.toFixed(2)),
+        maxLevelVol: maxVol,
+        levels,
+      };
+    });
+  });
 
   // Selected trade preset size
   const [selectedPreset, setSelectedPreset] = useState<string>('$751');
@@ -301,10 +401,12 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           const low = k.low;
           const open = k.open;
           const close = k.close;
-          const totalVol = k.volume;
+          // Calculate realistic USD volume (k.volume is base coin e.g. BTC, ETH)
+          const rawVol = Number(k.volume) || 0;
+          const totalVol = rawVol * close;
 
           const levels: Record<number, ClusterLevel> = {};
-          const stepsCount = 15;
+          const stepsCount = 16;
           const step = (high - low) / (stepsCount || 1);
 
           let maxVol = 0;
@@ -312,11 +414,11 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
           for (let i = 0; i < stepsCount; i++) {
             const priceLevel = Number((low + i * step).toFixed(5));
-            // Simulate realistic volume distribution (bell-curve around middle)
+            // Realistic volume distribution (bell-curve around middle)
             const distFromMid = Math.abs(i - stepsCount / 2) / (stepsCount / 2);
             const levelVol = (totalVol / stepsCount) * (1.5 - distFromMid * 0.9);
             const isBullish = close >= open;
-            const buyVol = isBullish ? levelVol * 0.6 : levelVol * 0.4;
+            const buyVol = isBullish ? levelVol * 0.58 : levelVol * 0.42;
             const sellVol = levelVol - buyVol;
 
             if (levelVol > maxVol) {
@@ -345,6 +447,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             label: timeLabel,
             totalVolume: totalVol,
             pocPrice: pocP,
+            maxLevelVol: maxVol,
             levels,
           };
         });
@@ -742,10 +845,10 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       className="relative flex flex-col w-full h-full bg-[#0b0e14] text-slate-200 select-none overflow-hidden font-mono text-[11px]"
       style={{ height: height || '100%' }}
     >
-      {/* ================= TOP-LEFT OVERLAY (Exactly matching 1.png) ================= */}
-      <div className="absolute top-2 left-2.5 z-30 flex flex-col items-start gap-1 pointer-events-auto">
+      {/* ================= TOP-LEFT OVERLAY (Responsive, mobile friendly) ================= */}
+      <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1 pointer-events-auto max-w-[calc(100%-80px)]">
         {/* Row 1: Exchange Icon + Perp Badge 'F' + Symbol + Price Change */}
-        <div className="flex items-center gap-1.5 bg-[#090d16]/90 px-2 py-1 rounded-lg border border-slate-800/80 shadow-md backdrop-blur-sm">
+        <div className="flex items-center gap-1.5 bg-[#090d16]/95 px-2 py-1 rounded-lg border border-slate-800/80 shadow-md backdrop-blur-md">
           {/* Exchange Icon */}
           <div className="flex items-center justify-center w-4 h-4 rounded bg-amber-500/20 text-amber-400 font-bold text-[9px]">
             {exchange === 'bybit' ? 'B' : '🔶'}
@@ -772,8 +875,8 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           </span>
         </div>
 
-        {/* Row 2 (directly beneath, as in 1.png): ⚙ | 5m | x10 | - | 152ms | -0.06% */}
-        <div className="flex items-center gap-1 bg-[#090d16]/90 px-1.5 py-0.5 rounded-md border border-slate-800/80 text-[10px] text-slate-400 backdrop-blur-sm shadow-sm">
+        {/* Row 2: ⚙ | 5m | x10 | Стрічка [▾/▴] | Кластери | Center | Ping */}
+        <div className="flex flex-wrap items-center gap-1 bg-[#090d16]/95 px-1.5 py-0.5 rounded-md border border-slate-800/80 text-[10px] text-slate-400 backdrop-blur-md shadow-sm">
           {/* Settings button ⚙ */}
           <button
             onClick={() => setIsSettingsOpen(!isSettingsOpen)}
@@ -843,21 +946,49 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             )}
           </div>
 
-          <span className="text-slate-600">-</span>
+          <span className="text-slate-600 hidden sm:inline">-</span>
+
+          {/* Tape Toggle Button (Згортати / Розгортати стрічку) */}
+          <button
+            onClick={handleToggleTape}
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors cursor-pointer text-[9px] font-bold border shrink-0 ${
+              !isTapeCollapsed
+                ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+            }`}
+            title={isTapeCollapsed ? 'Розгорнути стрічку угод' : 'Згорнути стрічку угод'}
+          >
+            <CircleDot className="w-2.5 h-2.5 text-cyan-400" />
+            <span>{!isTapeCollapsed ? 'Стрічка' : 'Стрічка +'}</span>
+          </button>
+
+          {/* Clusters Toggle Button (Кластери) - Visible on ALL screen sizes */}
+          <button
+            onClick={handleToggleClusters}
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors cursor-pointer text-[9px] font-bold border shrink-0 ${
+              showClusters
+                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+            }`}
+            title={showClusters ? 'Згорнути кластери' : 'Показати кластери'}
+          >
+            <BarChart3 className="w-2.5 h-2.5 text-amber-400" />
+            <span>{showClusters ? 'Кластери' : 'Кластери +'}</span>
+          </button>
 
           {/* Latency ping indicator */}
-          <div className="flex items-center gap-1 text-[9px] font-mono text-emerald-400">
+          <div className="hidden sm:flex items-center gap-1 text-[9px] font-mono text-emerald-400">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             <span>{latencyMs}ms</span>
           </div>
 
           {/* Real orders count badge */}
           <div
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 font-mono text-[9px] font-bold"
+            className="hidden sm:flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 font-mono text-[9px] font-bold"
             title={`Реальні активні заявки у стакані: ${rawAsks.length} Short (Asks) + ${rawBids.length} Long (Bids)`}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-            <span>{totalRealOrdersCount} заявок</span>
+            <span>{totalRealOrdersCount}</span>
           </div>
 
           {/* Auto Center Button */}
@@ -867,7 +998,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             title="Центрувати стакан на спреді"
           >
             <Crosshair className="w-2.5 h-2.5 text-cyan-400" />
-            <span>Центр</span>
+            <span className="hidden xs:inline">Центр</span>
           </button>
         </div>
       </div>
@@ -1110,32 +1241,43 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         </div>
       )}
 
-      {/* ================= BOTTOM-LEFT PRESETS (Matching 1.png) ================= */}
+      {/* ================= BOTTOM-LEFT PRESETS ================= */}
       <div className="absolute bottom-2 left-2 z-30 flex flex-col items-start gap-1 pointer-events-auto">
         {/* Preset lot buttons: x5 tag, $751, $10, $20, $30, $50, $100 */}
-        <div className="flex flex-col gap-0.5 bg-[#090d16]/90 p-1 rounded-lg border border-slate-800/80 text-[10px] font-mono shadow-md backdrop-blur-sm">
-          <div className="flex items-center gap-1 px-1 py-0.5 text-[9px] text-slate-400 font-bold">
-            <span className="px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">x5</span>
-            <span>Лот</span>
+        <div className="flex flex-col gap-0.5 bg-[#090d16]/95 p-1 rounded-lg border border-slate-800/80 text-[10px] font-mono shadow-md backdrop-blur-sm">
+          <div
+            className="flex items-center justify-between gap-1 px-1 py-0.5 text-[9px] text-slate-400 font-bold cursor-pointer hover:text-white select-none"
+            onClick={() => setIsPresetsCollapsed(!isPresetsCollapsed)}
+            title="Згорнути / розгорнути лоти"
+          >
+            <div className="flex items-center gap-1">
+              <span className="px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">x5</span>
+              <span>Лот {selectedPreset}</span>
+            </div>
+            {isPresetsCollapsed ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
           </div>
 
-          {['$751', '$10', '$20', '$30', '$50', '$100'].map((preset) => (
-            <button
-              key={preset}
-              onClick={() => setSelectedPreset(preset)}
-              className={`px-2 py-0.5 rounded text-left font-bold transition-colors cursor-pointer ${
-                selectedPreset === preset
-                  ? 'bg-slate-700 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              {preset}
-            </button>
-          ))}
+          {!isPresetsCollapsed && (
+            <div className="flex flex-col gap-0.5 pt-0.5">
+              {['$751', '$10', '$20', '$30', '$50', '$100'].map((preset) => (
+                <button
+                  key={preset}
+                  onClick={() => setSelectedPreset(preset)}
+                  className={`px-2 py-0.5 rounded text-left font-bold transition-colors cursor-pointer ${
+                    selectedPreset === preset
+                      ? 'bg-slate-700 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  }`}
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Bottom Cluster Footprint Summary (1.3K, 1.2K, 03:59 from 1.png) */}
-        <div className="flex items-center gap-1.5 bg-[#090d16]/90 px-2 py-1 rounded-md border border-slate-800/80 text-[10px] text-slate-400 font-mono shadow-md backdrop-blur-sm">
+        {/* Bottom Cluster Footprint Summary */}
+        <div className="hidden xs:flex items-center gap-1.5 bg-[#090d16]/95 px-2 py-1 rounded-md border border-slate-800/80 text-[10px] text-slate-400 font-mono shadow-md backdrop-blur-sm">
           <span className="px-1.5 py-0.5 rounded bg-blue-600/80 text-white font-bold text-[9px]">
             1.3K
           </span>
@@ -1146,7 +1288,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       </div>
 
       {/* ================= MAIN SCALPER CANVAS (Clusters + Tape + DOM) ================= */}
-      <div className="flex-1 w-full overflow-hidden relative flex divide-x divide-transparent">
+      <div className="flex-1 w-full overflow-hidden relative flex divide-x divide-slate-900/60 min-h-0">
         {/* Subtle Horizontal Price Grid Lines across canvas */}
         <div className="absolute inset-0 pointer-events-none z-0">
           <div
@@ -1158,185 +1300,315 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           />
         </div>
 
-        {/* 1. LEFT SECTION: Cluster History ("історія кластерів") */}
-        <div className="flex-1 min-w-[120px] max-w-[280px] h-full flex flex-col justify-center py-2 px-1 relative z-10 select-none overflow-hidden">
-          <div className="flex items-center justify-around h-full gap-2">
-            {clusters.map((col) => (
-              <div
-                key={col.candleTime}
-                className="flex-1 flex flex-col h-full items-center justify-center relative group"
-              >
-                {/* Column top label */}
-                <div className="text-[9px] text-slate-500 font-mono mb-1 shrink-0">
-                  {col.label}
-                </div>
-
-                {/* Footprint Cluster Levels Stack */}
-                <div className="flex-1 w-full flex flex-col justify-center gap-[2px]">
-                  {Object.values(col.levels)
-                    .sort((a, b) => b.price - a.price)
-                    .slice(0, 14)
-                    .map((lvl) => {
-                      const isPOC = lvl.isPOC;
-                      return (
-                        <div
-                          key={lvl.price}
-                          className={`w-full h-5 flex items-center justify-between px-1 text-[9px] rounded font-mono transition-all ${
-                            isPOC
-                              ? 'border border-amber-500/90 bg-amber-500/20 text-amber-200 font-extrabold shadow-sm shadow-amber-950/40'
-                              : 'bg-slate-900/40 hover:bg-slate-800/60 text-slate-400'
-                          }`}
-                        >
-                          <span className="text-[8px] text-slate-500">
-                            {isPOC ? 'POC' : lvl.sellVol > 1000 ? `${(lvl.sellVol / 1000).toFixed(0)}k` : ''}
-                          </span>
-                          <span className={isPOC ? 'text-amber-300 font-bold' : 'text-slate-300'}>
-                            {formatVolume(lvl.totalVol)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                </div>
-
-                {/* Column bottom volume */}
-                <div className="text-[9px] text-slate-400 font-mono mt-1 shrink-0">
-                  ${formatVolume(col.totalVolume)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 2. MIDDLE SECTION: Trades Tape ("Стрічка угод / Лента сделок") */}
-        <div className="w-36 xs:w-44 sm:w-52 shrink-0 h-full relative z-10 flex flex-col border-l border-slate-900/70 bg-[#070a10]/85 select-none">
-          {/* Tape Sticky Header */}
-          <div className="sticky top-0 z-20 flex flex-col px-2 py-1 bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md shrink-0">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider">
-                  Стрічка
+        {/* 1. LEFT SECTION: Cluster History (collapsible/expandable footprint clusters with all sums visible) */}
+        {showClusters ? (
+          <div className="w-36 sm:w-52 md:w-60 lg:w-64 shrink-0 h-full flex flex-col relative z-10 select-none overflow-hidden bg-[#070a10]/90 border-r border-slate-900/80">
+            {/* Clusters Sticky Header */}
+            <div className="sticky top-0 z-20 flex items-center justify-between px-1.5 py-1 bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md shrink-0">
+              <div className="flex items-center gap-1 min-w-0">
+                <BarChart3 className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider truncate">
+                  Кластери
                 </span>
-                <span className="flex h-1.5 w-1.5 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                <span className="text-[8px] font-mono text-amber-400/90 font-bold px-1 rounded bg-amber-500/10">
+                  {clusterTf}
                 </span>
               </div>
-
-              {/* Clickable threshold filter */}
-              <button
-                type="button"
-                onClick={() => setIsSettingsOpen(true)}
-                className="flex items-center gap-1 text-[8.5px] font-mono px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 hover:border-cyan-500/50 transition-colors cursor-pointer"
-                title="Змінити поріг показу кружечків"
-              >
-                <CircleDot className="w-2.5 h-2.5 text-cyan-400" />
-                <span>{bubbleThresholdUsd === 0 ? 'Всі' : `≥$${formatVolume(bubbleThresholdUsd)}`}</span>
-              </button>
+              <div className="flex items-center gap-1">
+                <span className="text-[7.5px] font-mono text-slate-500 hidden sm:inline">
+                  (Куп/Сума)
+                </span>
+                <button
+                  type="button"
+                  onClick={handleToggleClusters}
+                  className="p-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition-colors cursor-pointer"
+                  title="Згорнути кластери"
+                >
+                  <ChevronLeft className="w-3 h-3" />
+                </button>
+              </div>
             </div>
 
-            {/* Column labels */}
-            <div className="flex items-center justify-between text-[8px] text-slate-500 font-mono mt-0.5 pt-0.5 border-t border-slate-900/80">
-              <span>Кружечок / Об'єм</span>
-              <span className="text-right">Ціна • Час</span>
-            </div>
-          </div>
-
-          {/* Trade bubbles / Tape live scroll */}
-          <div className="flex-1 w-full overflow-y-auto no-scrollbar p-1 flex flex-col gap-1">
-            {tradeBubbles.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 gap-2 text-center px-2 text-slate-500 my-auto">
-                <CircleDot className="w-6 h-6 text-slate-700 animate-pulse" />
-                <span className="text-[10px] font-mono leading-tight">
-                  Немає угод {bubbleThresholdUsd > 0 ? `≥ $${formatVolume(bubbleThresholdUsd)}` : ''}
-                </span>
-                {bubbleThresholdUsd > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => handleSetBubbleThreshold(0)}
-                    className="text-[9px] text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
-                  >
-                    Показати всі угоди
-                  </button>
-                )}
-              </div>
-            ) : (
-              tradeBubbles.map((tb) => {
-                const isBuy = !tb.isBuyerMaker;
-                const isWhale = tb.volumeUsd >= densityThresholdUsd;
+            {/* Footprint Cluster Columns (all sums clearly visible, horizontal scroll if screen is narrow) */}
+            <div className="flex-1 flex items-stretch h-full gap-1 p-1 overflow-x-auto overflow-y-hidden no-scrollbar touch-pan-x">
+              {clusters.map((col) => {
+                const maxLvl = col.maxLevelVol || 1;
                 return (
                   <div
-                    key={tb.id}
-                    className={`flex items-center justify-between px-1.5 py-1 rounded-md border text-xs font-mono transition-all duration-150 animate-in fade-in slide-in-from-top-1 hover:brightness-125 cursor-default ${
-                      isWhale
-                        ? isBuy
-                          ? 'bg-emerald-950/70 border-emerald-400/90 shadow-sm shadow-emerald-500/20'
-                          : 'bg-rose-950/70 border-rose-400/90 shadow-sm shadow-rose-500/20'
-                        : isBuy
-                        ? 'bg-emerald-950/30 border-emerald-800/40 hover:border-emerald-500/60'
-                        : 'bg-rose-950/30 border-rose-800/40 hover:border-rose-500/60'
-                    }`}
-                    title={`${isBuy ? 'BUY (Купівля)' : 'SELL (Продаж)'}: ${tb.qty} ${baseAsset} ($${formatVolume(tb.volumeUsd)}) @ $${formatCryptoPrice(tb.price)} о ${formatTradeTime(tb.timestamp)}`}
+                    key={col.candleTime}
+                    className="flex-1 min-w-[46px] sm:min-w-[52px] flex flex-col h-full items-center justify-between relative group border border-slate-800/40 rounded bg-slate-950/40 p-0.5"
                   >
-                    {/* Left: Volume Bubble / Badge */}
-                    <div className="flex items-center gap-1 min-w-0">
+                    {/* Column top label: Candle time */}
+                    <div className="text-[8.5px] text-slate-300 font-mono shrink-0 truncate py-0.5 font-bold">
+                      {col.label}
+                    </div>
+
+                    {/* Footprint Cluster Levels Stack */}
+                    <div className="flex-1 w-full flex flex-col justify-center gap-[2px] overflow-y-auto no-scrollbar my-0.5">
+                      {Object.values(col.levels)
+                        .sort((a, b) => b.price - a.price)
+                        .slice(0, 16)
+                        .map((lvl) => {
+                          const isPOC = lvl.isPOC;
+                          const fillPct = Math.min(100, Math.max(8, (lvl.totalVol / maxLvl) * 100));
+
+                          return (
+                            <div
+                              key={lvl.price}
+                              className={`w-full h-[18px] sm:h-[19px] relative flex items-center justify-between px-1 text-[8px] sm:text-[8.5px] rounded font-mono transition-all overflow-hidden ${
+                                isPOC
+                                  ? 'border border-amber-400 bg-amber-500/25 ring-1 ring-amber-400/40 shadow-sm shadow-amber-950/60'
+                                  : lvl.buyVol >= lvl.sellVol
+                                  ? 'bg-slate-900/60 hover:bg-slate-800 border-l border-emerald-500/80'
+                                  : 'bg-slate-900/60 hover:bg-slate-800 border-l border-rose-500/80'
+                              }`}
+                              title={`Рівень: $${formatCryptoPrice(lvl.price)}\nКупівля: $${formatVolume(lvl.buyVol)}\nПродаж: $${formatVolume(lvl.sellVol)}\nРазом: $${formatVolume(lvl.totalVol)}${isPOC ? ' (POC - Point of Control)' : ''}`}
+                            >
+                              {/* Horizontal relative volume fill bar */}
+                              <div
+                                className={`absolute left-0 top-0 bottom-0 pointer-events-none opacity-20 ${
+                                  isPOC
+                                    ? 'bg-amber-400'
+                                    : lvl.buyVol >= lvl.sellVol
+                                    ? 'bg-emerald-400'
+                                    : 'bg-rose-400'
+                                }`}
+                                style={{ width: `${fillPct}%` }}
+                              />
+
+                              {/* Buy volume sum on left */}
+                              <span className="relative z-10 text-[7.5px] sm:text-[8px] font-bold text-emerald-400/90 shrink-0 font-mono">
+                                {formatCompactClusterSum(lvl.buyVol)}
+                              </span>
+
+                              {/* Total volume sum on right with POC badge if applicable */}
+                              <div className="relative z-10 flex items-center gap-0.5 shrink-0 ml-auto font-mono">
+                                {isPOC && (
+                                  <span className="text-[6.5px] font-black px-0.5 rounded bg-amber-400 text-slate-950 uppercase tracking-tighter">
+                                    POC
+                                  </span>
+                                )}
+                                <span
+                                  className={`text-[8px] sm:text-[8.5px] font-bold ${
+                                    isPOC ? 'text-amber-200 font-extrabold' : 'text-slate-100'
+                                  }`}
+                                >
+                                  {formatCompactClusterSum(lvl.totalVol)}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Column bottom: Total Candle Volume Sum (Fully visible) */}
+                    <div
+                      className="text-[8.5px] text-amber-300 font-mono shrink-0 truncate py-0.5 font-extrabold tracking-tight"
+                      title={`Загальний об'єм свічки: ${formatVolume(col.totalVolume)}`}
+                    >
+                      {formatCandleTotalSum(col.totalVolume)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          /* Collapsed Clusters Strip */
+          <div
+            onClick={handleToggleClusters}
+            className="w-7 shrink-0 h-full relative z-10 flex flex-col items-center justify-between py-2 border-r border-slate-900/70 bg-[#070a10]/95 hover:bg-slate-900/90 cursor-pointer transition-colors group select-none"
+            title="Розгорнути кластери"
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleToggleClusters();
+              }}
+              className="p-1 rounded text-amber-400 group-hover:text-amber-300 hover:bg-slate-800 transition-colors"
+              title="Розгорнути кластери"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+            <div className="flex flex-col items-center gap-1.5 my-auto">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span
+                className="text-[9px] font-bold text-slate-400 group-hover:text-amber-300 uppercase tracking-widest"
+                style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+              >
+                Кластери
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500 group-hover:text-amber-400 font-bold">»</span>
+          </div>
+        )}
+
+        {/* 2. MIDDLE SECTION: Trades Tape ("Стрічка угод / Лента сделок") */}
+        {!isTapeCollapsed ? (
+          <div className="w-28 sm:w-36 md:w-44 shrink-0 h-full relative z-10 flex flex-col border-r border-slate-900/70 bg-[#070a10]/90 select-none">
+            {/* Tape Sticky Header */}
+            <div className="sticky top-0 z-20 flex flex-col px-2 py-1 bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md shrink-0">
+              <div className="flex items-center justify-between gap-1">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider truncate">
+                    Стрічка
+                  </span>
+                  <span className="flex h-1.5 w-1.5 relative shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  {/* Clickable threshold filter */}
+                  <button
+                    type="button"
+                    onClick={() => setIsSettingsOpen(true)}
+                    className="flex items-center gap-0.5 text-[8px] font-mono px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 hover:border-cyan-500/50 transition-colors cursor-pointer"
+                    title="Змінити поріг показу кружечків"
+                  >
+                    <CircleDot className="w-2 h-2 text-cyan-400" />
+                    <span>{bubbleThresholdUsd === 0 ? 'Всі' : `≥${formatWholeSum(bubbleThresholdUsd)}`}</span>
+                  </button>
+
+                  {/* Collapse Tape Button */}
+                  <button
+                    type="button"
+                    onClick={handleToggleTape}
+                    className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-cyan-300 transition-colors cursor-pointer"
+                    title="Згорнути стрічку"
+                  >
+                    <PanelRightClose className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Column labels: ONLY Circle and Price */}
+              <div className="flex items-center justify-between text-[8px] text-slate-500 font-mono mt-0.5 pt-0.5 border-t border-slate-900/80">
+                <span>Кружечок</span>
+                <span className="text-right">Ціна</span>
+              </div>
+            </div>
+
+            {/* Trade bubbles / Tape live scroll: ONLY CIRCLES AND PRICE */}
+            <div
+              className="flex-1 w-full overflow-y-auto no-scrollbar p-1 flex flex-col gap-1 touch-pan-y"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+            >
+              {tradeBubbles.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-48 gap-2 text-center px-2 text-slate-500 my-auto">
+                  <CircleDot className="w-6 h-6 text-slate-700 animate-pulse" />
+                  <span className="text-[10px] font-mono leading-tight">
+                    Немає угод {bubbleThresholdUsd > 0 ? `≥ ${formatWholeSum(bubbleThresholdUsd)}` : ''}
+                  </span>
+                  {bubbleThresholdUsd > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetBubbleThreshold(0)}
+                      className="text-[9px] text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                    >
+                      Показати всі угоди
+                    </button>
+                  )}
+                </div>
+              ) : (
+                tradeBubbles.map((tb) => {
+                  const isBuy = !tb.isBuyerMaker;
+                  const isWhale = tb.volumeUsd >= densityThresholdUsd;
+
+                  return (
+                    <div
+                      key={tb.id}
+                      className={`flex items-center justify-between px-1.5 py-1 rounded-md border text-xs font-mono transition-all duration-150 animate-in fade-in hover:brightness-125 cursor-default ${
+                        isWhale
+                          ? isBuy
+                            ? 'bg-emerald-950/70 border-emerald-400/90 shadow-sm shadow-emerald-500/20'
+                            : 'bg-rose-950/70 border-rose-400/90 shadow-sm shadow-rose-500/20'
+                          : isBuy
+                          ? 'bg-emerald-950/30 border-emerald-800/40 hover:border-emerald-500/60'
+                          : 'bg-rose-950/30 border-rose-800/40 hover:border-rose-500/60'
+                      }`}
+                      title={`${isBuy ? 'BUY' : 'SELL'}: $${formatCompactWholeBubble(tb.volumeUsd)} @ $${formatCryptoPrice(tb.price)} (${formatTradeTime(tb.timestamp)})`}
+                    >
+                      {/* ONLY THE CIRCLE (КРУЖЕЧОК) */}
                       <div
-                        className={`flex items-center justify-center rounded-full font-extrabold shrink-0 shadow-sm ${
+                        className={`flex items-center justify-center rounded-full font-extrabold shrink-0 shadow-sm transition-transform duration-100 ${
                           isBuy
-                            ? 'bg-emerald-500 text-slate-950 shadow-emerald-900/50'
-                            : 'bg-rose-500 text-white shadow-rose-900/50'
+                            ? 'bg-emerald-500 text-slate-950 shadow-emerald-900/50 ring-1 ring-emerald-400/60'
+                            : 'bg-rose-500 text-white shadow-rose-900/50 ring-1 ring-rose-400/60'
                         }`}
                         style={{
                           width: `${tb.sizePx}px`,
                           height: `${tb.sizePx}px`,
                           minWidth: `${tb.sizePx}px`,
                           minHeight: `${tb.sizePx}px`,
-                          fontSize: tb.sizePx >= 30 ? '8.5px' : '7.5px',
+                          fontSize: tb.sizePx >= 28 ? '8.5px' : '7.5px',
                         }}
                       >
-                        <span className="truncate px-0.5">
-                          {tb.volumeUsd >= 1000
-                            ? `$${(tb.volumeUsd / 1000).toFixed(0)}k`
-                            : tb.qty >= 100
-                            ? Math.round(tb.qty)
-                            : tb.qty >= 1
-                            ? tb.qty.toFixed(1)
-                            : tb.qty.toFixed(2)}
+                        <span className="truncate px-0.5 select-none font-bold">
+                          {formatCompactWholeBubble(tb.volumeUsd)}
                         </span>
                       </div>
-                      <span className={`text-[8.5px] font-bold ${isBuy ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {isBuy ? 'B' : 'S'}
-                      </span>
-                    </div>
 
-                    {/* Right: Price & Time */}
-                    <div className="flex flex-col items-end min-w-0">
-                      <span className={`text-[10px] font-bold leading-tight ${isBuy ? 'text-emerald-300' : 'text-rose-300'}`}>
+                      {/* ONLY THE PRICE (ЦІНА) */}
+                      <span
+                        className={`font-mono font-bold text-[10px] sm:text-[11px] shrink-0 text-right ml-auto select-all ${
+                          isBuy ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
                         ${formatCryptoPrice(tb.price)}
                       </span>
-                      <span className="text-[8px] text-slate-500 leading-none">
-                        {formatTradeTime(tb.timestamp)}
-                      </span>
                     </div>
-                  </div>
-                );
-              })
-            )}
+                  );
+                })
+              )}
+            </div>
           </div>
-        </div>
+        ) : (
+          /* Collapsed Tape Strip */
+          <div
+            onClick={handleToggleTape}
+            className="w-7 shrink-0 h-full relative z-10 flex flex-col items-center justify-between py-2 border-r border-slate-900/70 bg-[#070a10]/95 hover:bg-slate-900/90 cursor-pointer transition-colors group select-none"
+            title="Розгорнути стрічку угод"
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleToggleTape();
+              }}
+              className="p-1 rounded text-cyan-400 group-hover:text-cyan-300 hover:bg-slate-800 transition-colors"
+              title="Розгорнути стрічку"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+            <div className="flex flex-col items-center gap-1.5 my-auto">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span
+                className="text-[9px] font-bold text-slate-400 group-hover:text-cyan-300 uppercase tracking-widest"
+                style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+              >
+                Стрічка
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500 group-hover:text-cyan-400 font-bold">»</span>
+          </div>
+        )}
 
-        {/* 3. RIGHT SECTION: Order Book ("Стакан") with full scroll of all real orders */}
+        {/* 3. RIGHT SECTION: Order Book ("Стакан") taking all remaining space (Guaranteed visible price on any device) */}
         <div
           ref={domScrollContainerRef}
-          className="w-52 sm:w-64 shrink-0 h-full overflow-y-auto no-scrollbar relative flex flex-col border-l border-slate-900/60 bg-[#090d16]/40"
-          style={{ scrollBehavior: 'smooth' }}
+          className="flex-1 min-w-0 h-full overflow-y-auto no-scrollbar relative flex flex-col bg-[#090d16]/40 touch-pan-y"
+          style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
         >
-          {/* Header columns: Об'єм (ліворуч) | Ціна (праворуч) */}
-          <div className="sticky top-0 z-20 flex items-center justify-between px-2.5 py-1 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800/80 shrink-0 bg-slate-950/90 backdrop-blur-sm">
-            <span className="flex items-center gap-1">
+          {/* Header columns: Об'єм (ліворуч) | Ціна (праворуч, always visible) */}
+          <div className="sticky top-0 z-20 flex items-center justify-between px-2 sm:px-2.5 py-1 text-[9px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800/80 shrink-0 bg-slate-950/95 backdrop-blur-sm">
+            <span className="flex items-center gap-1 min-w-0 truncate">
               <span>Об'єм</span>
               <span className="text-cyan-400/80 font-mono text-[8px]">({aggregatedAsks.length + aggregatedBids.length})</span>
             </span>
-            <span>Ціна</span>
+            <span className="shrink-0 text-right pl-1 text-slate-300">Ціна</span>
           </div>
 
           {/* Rows container */}
@@ -1350,7 +1622,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                 return (
                   <div
                     key={`ask-${row.price}`}
-                    className={`relative flex items-center justify-between px-2.5 h-[21px] transition-colors group cursor-crosshair ${
+                    className={`relative flex items-center justify-between px-2 sm:px-2.5 h-[21px] transition-colors group cursor-crosshair ${
                       isDensity
                         ? 'bg-rose-950/70 border-y border-amber-400 shadow-sm shadow-amber-950/50'
                         : 'hover:bg-slate-800/50'
@@ -1364,20 +1636,20 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                       style={{ width: `${fillPct}%` }}
                     />
 
-                    {/* Volume text */}
-                    <div className="relative z-10 flex items-center gap-1">
-                      <span className="font-mono text-white text-[10px] font-medium">
+                    {/* Volume text on Left */}
+                    <div className="relative z-10 flex items-center gap-1 min-w-0 pr-1 overflow-hidden">
+                      <span className="font-mono text-white text-[10px] sm:text-[11px] font-medium truncate">
                         {formatVolume(row.volumeUsd)}$
                       </span>
                       {isDensity && (
-                        <span className="text-[8px] font-bold px-1 rounded bg-amber-500 text-slate-950 uppercase tracking-tighter">
+                        <span className="text-[7.5px] sm:text-[8px] font-bold px-1 py-0.2 rounded bg-amber-500 text-slate-950 uppercase tracking-tighter shrink-0">
                           Плотн
                         </span>
                       )}
                     </div>
 
-                    {/* Price text (Red) */}
-                    <span className="relative z-10 font-mono font-bold text-rose-400 text-[11px]">
+                    {/* Price text on Right - ALWAYS VISIBLE ON ANY DEVICE */}
+                    <span className="relative z-10 font-mono font-bold text-rose-400 text-[10.5px] sm:text-[11.5px] shrink-0 text-right pl-1.5 ml-auto select-all">
                       {formatCryptoPrice(row.price)}
                     </span>
                   </div>
@@ -1385,20 +1657,17 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
               })}
             </div>
 
-            {/* SPREAD AREA:
-                "посередені ціни в спреді не повинно бути жодних рамок, детально проаналізуй фото усе повинно бути точно як на фото"
-                Seamless continuous flow with NO borders, NO boxes, matching 1.png perfectly!
-            */}
+            {/* SPREAD AREA: Seamless flow with NO borders, NO boxes */}
             <div
               ref={spreadRowRef}
-              className="flex items-center justify-between px-2.5 h-[22px] bg-slate-900/50 text-slate-400 font-mono text-[10px] my-0.5"
+              className="flex items-center justify-between px-2 sm:px-2.5 h-[22px] bg-slate-900/60 text-slate-400 font-mono text-[10px] my-0.5 shrink-0"
             >
-              <div className="flex items-center gap-1.5">
-                <span className="text-[9px] text-slate-500 uppercase font-bold">Спред</span>
+              <div className="flex items-center gap-1.5 min-w-0 truncate">
+                <span className="text-[8.5px] sm:text-[9px] text-slate-500 uppercase font-bold">Спред</span>
                 <span className="text-slate-300 font-bold">{formatCryptoPrice(spreadUsd)}</span>
-                <span className="text-[9px] text-slate-500">({spreadPct.toFixed(2)}%)</span>
+                <span className="text-[8.5px] sm:text-[9px] text-slate-500 hidden xs:inline">({spreadPct.toFixed(2)}%)</span>
               </div>
-              <span className="text-cyan-400 font-bold text-[11px]">
+              <span className="text-cyan-400 font-bold text-[11px] sm:text-[12px] shrink-0 text-right pl-1.5 ml-auto">
                 {formatCryptoPrice(livePrice)}
               </span>
             </div>
@@ -1412,7 +1681,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                 return (
                   <div
                     key={`bid-${row.price}`}
-                    className={`relative flex items-center justify-between px-2.5 h-[21px] transition-colors group cursor-crosshair ${
+                    className={`relative flex items-center justify-between px-2 sm:px-2.5 h-[21px] transition-colors group cursor-crosshair ${
                       isDensity
                         ? 'bg-emerald-950/70 border-y border-amber-400 shadow-sm shadow-amber-950/50'
                         : 'hover:bg-slate-800/50'
@@ -1426,20 +1695,20 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                       style={{ width: `${fillPct}%` }}
                     />
 
-                    {/* Volume text */}
-                    <div className="relative z-10 flex items-center gap-1">
-                      <span className="font-mono text-white text-[10px] font-medium">
+                    {/* Volume text on Left */}
+                    <div className="relative z-10 flex items-center gap-1 min-w-0 pr-1 overflow-hidden">
+                      <span className="font-mono text-white text-[10px] sm:text-[11px] font-medium truncate">
                         {formatVolume(row.volumeUsd)}$
                       </span>
                       {isDensity && (
-                        <span className="text-[8px] font-bold px-1 rounded bg-amber-500 text-slate-950 uppercase tracking-tighter">
+                        <span className="text-[7.5px] sm:text-[8px] font-bold px-1 py-0.2 rounded bg-amber-500 text-slate-950 uppercase tracking-tighter shrink-0">
                           Плотн
                         </span>
                       )}
                     </div>
 
-                    {/* Price text (Green) */}
-                    <span className="relative z-10 font-mono font-bold text-emerald-400 text-[11px]">
+                    {/* Price text on Right - ALWAYS VISIBLE ON ANY DEVICE */}
+                    <span className="relative z-10 font-mono font-bold text-emerald-400 text-[10.5px] sm:text-[11.5px] shrink-0 text-right pl-1.5 ml-auto select-all">
                       {formatCryptoPrice(row.price)}
                     </span>
                   </div>

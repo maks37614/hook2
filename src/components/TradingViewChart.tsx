@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Kline, DetectedFormation, Timeframe, ExchangeId, MarketType, ChartMarkerInfo, ChartRestoreParams } from '../types';
 import { getChartPriceFormat, formatCryptoPrice } from '../utils/formatters';
+import { fetchDirectKlines } from '../utils/directExchangeClient';
 import { useAuth } from '../context/AuthContext';
 import { ScalperDOMWidget } from './terminal/ScalperDOMWidget';
 
@@ -274,15 +275,61 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     return () => clearInterval(interval);
   }, [timeframe]);
 
+  const [effectiveKlines, setEffectiveKlines] = useState<Kline[]>(klines);
+
+  useEffect(() => {
+    if (klines && klines.length > 1) {
+      setEffectiveKlines(klines);
+    }
+  }, [klines]);
+
+  // Self-healing: if parent passed <= 1 candle, fetch 1000 candles immediately
+  useEffect(() => {
+    if (effectiveKlines.length > 1) return;
+    let isCancelled = false;
+
+    async function loadFullHistory() {
+      const cleanSym = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      try {
+        const res = await fetch(
+          `/api/klines?exchange=${exchange}&market=${marketType}&symbol=${cleanSym}&timeframe=${timeframe}&limit=${historyLimit || 1000}`
+        );
+        const json = await res.json();
+        if (!isCancelled && json.success && Array.isArray(json.data) && json.data.length > 1) {
+          setEffectiveKlines(json.data);
+          return;
+        }
+
+        const direct = await fetchDirectKlines(exchange, marketType, cleanSym, timeframe as Timeframe, historyLimit || 1000);
+        if (!isCancelled && direct.length > 1) {
+          setEffectiveKlines(direct);
+        }
+      } catch {
+        try {
+          const direct = await fetchDirectKlines(exchange, marketType, cleanSym, timeframe as Timeframe, historyLimit || 1000);
+          if (!isCancelled && direct.length > 1) {
+            setEffectiveKlines(direct);
+          }
+        } catch {}
+      }
+    }
+
+    loadFullHistory();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [symbol, timeframe, exchange, marketType, historyLimit, effectiveKlines.length]);
+
   // Update latest price ref
   useEffect(() => {
-    if (klines.length > 0) {
-      const p = klines[klines.length - 1].close;
+    if (effectiveKlines.length > 0) {
+      const p = effectiveKlines[effectiveKlines.length - 1].close;
       setCurrentPrice((prev) => prev ?? p);
       latestPriceRef.current = p;
     }
-    klinesLengthRef.current = klines.length;
-  }, [klines]);
+    klinesLengthRef.current = effectiveKlines.length;
+  }, [effectiveKlines]);
 
   // Fit content helper
   const handleFitAll = useCallback(() => {
@@ -336,13 +383,15 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       if (!candleSeriesRef.current) return;
 
       try {
-        candleSeriesRef.current.update({
-          time: candle.time as Time,
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
-        });
+        if (klinesLengthRef.current > 0) {
+          candleSeriesRef.current.update({
+            time: candle.time as Time,
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+          });
+        }
 
         const prevPrice = latestPriceRef.current;
         if (prevPrice !== null && candle.close !== prevPrice) {
@@ -484,15 +533,15 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
   // Update data and price lines when klines change
   useEffect(() => {
-    if (!candleSeriesRef.current || !chartRef.current || !klines.length) return;
+    if (!candleSeriesRef.current || !chartRef.current || !effectiveKlines.length) return;
 
-    const refPrice = klines[klines.length - 1]?.close || formation?.levels.entryPrice || 1;
+    const refPrice = effectiveKlines[effectiveKlines.length - 1]?.close || formation?.levels.entryPrice || 1;
     const priceFormatConfig = getChartPriceFormat(refPrice);
     candleSeriesRef.current.applyOptions({
       priceFormat: priceFormatConfig,
     });
 
-    const chartData: CandlestickData<Time>[] = klines.map((k) => ({
+    const chartData: CandlestickData<Time>[] = effectiveKlines.map((k) => ({
       time: k.time as Time,
       open: k.open,
       high: k.high,
@@ -642,7 +691,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         priceLinesRef.current.push(line);
       }
     }
-  }, [klines, formation, customMarkers, showEntryLevel, showTargetLevel, showStopLevel, savedChartParams]);
+  }, [effectiveKlines, formation, customMarkers, showEntryLevel, showTargetLevel, showStopLevel, savedChartParams]);
 
   // Real-Time Live Stream Connection (WebSocket + Fast REST Poller fallback)
   useEffect(() => {
@@ -704,6 +753,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             : 'wss://stream.bybit.com/v5/public/spot';
 
         ws = new WebSocket(wsUrl);
+        let pingInterval: any = null;
 
         ws.onopen = () => {
           if (isDisposed) return;
@@ -717,6 +767,12 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 args: [`kline.${interval}.${cleanSymbol}`],
               })
             );
+            // Send ping every 20 seconds to keep Bybit connection alive
+            pingInterval = setInterval(() => {
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ op: 'ping' }));
+              }
+            }, 20000);
           } catch {
             // Ignored
           }
@@ -726,23 +782,40 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           if (isDisposed) return;
           try {
             const data = JSON.parse(event.data);
-            if (data.topic && data.topic.startsWith('kline') && Array.isArray(data.data) && data.data[0]) {
-              const item = data.data[0];
-              handleLiveTick(
-                {
-                  time: Math.floor(parseInt(item.start, 10) / 1000),
-                  open: parseFloat(item.open),
-                  high: parseFloat(item.high),
-                  low: parseFloat(item.low),
-                  close: parseFloat(item.close),
-                  volume: parseFloat(item.volume || '0'),
-                },
-                'ws'
-              );
+            if (data.topic && data.topic.startsWith('kline')) {
+              const rawData = data.data;
+              const items = Array.isArray(rawData) ? rawData : [rawData];
+              if (items.length > 0 && items[0]) {
+                const item = items[0];
+                const ts = parseInt(item.start || item.timestamp || item.t || Date.now(), 10);
+                const open = parseFloat(item.open || item.o || 0);
+                const high = parseFloat(item.high || item.h || 0);
+                const low = parseFloat(item.low || item.l || 0);
+                const close = parseFloat(item.close || item.c || 0);
+                const volume = parseFloat(item.volume || item.v || 0);
+
+                if (close > 0) {
+                  handleLiveTick(
+                    {
+                      time: Math.floor(ts / 1000),
+                      open,
+                      high,
+                      low,
+                      close,
+                      volume,
+                    },
+                    'ws'
+                  );
+                }
+              }
             }
           } catch {
             // Ignored
           }
+        };
+
+        ws.onclose = () => {
+          if (pingInterval) clearInterval(pingInterval);
         };
       }
     } catch {

@@ -3,7 +3,7 @@ export type MarketType = 'futures' | 'spot';
 export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 export type ActivePageType = 'patterns' | 'screener' | 'terminal' | 'surveillance';
 
-export type TerminalBlockMode = 'tradingview' | 'pattern' | 'orderbook';
+export type TerminalBlockMode = 'tradingview' | 'pattern' | 'orderbook' | 'combined';
 
 export interface TerminalChartBlock {
   id: string;
@@ -19,8 +19,9 @@ export interface TerminalChartBlock {
   heightPx?: number;
   domSettings?: {
     compression?: number; // 1, 2, 5, 10, 20, 50, 100
-    depth?: 'small' | 'medium' | 'deep'; // 20, 50, 100
+    depth?: 'all' | 'deep' | 'medium' | 'small';
     densityThresholdUsd?: number;
+    bubbleThresholdUsd?: number;
     soundAlertEnabled?: boolean;
     clusterTimeframe?: Timeframe;
   };

@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { runScreenerScan, fetchKlines, fetchMarketCoins, fetchOrderBook } from './server/marketService';
+import { runScreenerScan, fetchKlines, fetchMarketCoins, fetchOrderBook, fetchRecentTrades } from './server/marketService';
 import { analyzeFormationWithAI } from './server/geminiService';
 import { generateSmartAnalysis } from './server/smartAnalysisService';
 import { calculateMarketSentiment } from './server/sentimentService';
@@ -238,7 +238,8 @@ async function startServer() {
     try {
       const exchange = (req.query.exchange as ExchangeId) || 'binance';
       const market = (req.query.market as MarketType) || 'futures';
-      const symbol = (req.query.symbol as string) || 'BTCUSDT';
+      const rawSymbol = (req.query.symbol as string) || 'BTCUSDT';
+      const symbol = rawSymbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
       const timeframe = (req.query.timeframe as Timeframe) || '1h';
       const limit = req.query.limit ? Math.min(Math.max(parseInt(req.query.limit as string, 10) || 500, 10), 1000) : 500;
 
@@ -263,6 +264,22 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error fetching orderbook:', err);
       res.status(500).json({ success: false, error: err.message || 'Failed to fetch orderbook' });
+    }
+  });
+
+  // Recent trades endpoint for Scalper DOM tape
+  app.get('/api/trades', async (req, res) => {
+    try {
+      const exchange = (req.query.exchange as ExchangeId) || 'binance';
+      const market = (req.query.marketType as MarketType) || (req.query.market as MarketType) || 'futures';
+      const symbol = (req.query.symbol as string) || 'BTCUSDT';
+      const limit = req.query.limit ? Math.min(Math.max(parseInt(req.query.limit as string, 10) || 60, 10), 100) : 60;
+
+      const trades = await fetchRecentTrades(exchange, market, symbol, limit);
+      res.json({ success: true, trades });
+    } catch (err: any) {
+      console.error('Error fetching trades:', err);
+      res.status(500).json({ success: false, error: err.message || 'Failed to fetch trades' });
     }
   });
 

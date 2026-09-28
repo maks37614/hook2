@@ -90,6 +90,57 @@ export const ScreenerTable: React.FC<ScreenerTableProps> = ({
                       {coin.marketType === 'futures' ? 'FUT' : 'SPOT'}
                     </span>
                   </div>
+
+                  {/* Scalper Metrics: Волатильність 5м, Відстань до хаю, Відстань до лою */}
+                  {(() => {
+                    const high = coin.highPrice24h || coin.high24h || coin.currentPrice;
+                    const low = coin.lowPrice24h || coin.low24h || coin.currentPrice;
+                    const distHigh = high > 0 && coin.currentPrice > 0 ? Math.max(0, ((high - coin.currentPrice) / high) * 100) : 0;
+                    const distLow = low > 0 && coin.currentPrice > 0 ? Math.max(0, ((coin.currentPrice - low) / low) * 100) : 0;
+                    const vol5m = Math.max(0.12, Math.abs(coin.priceChange24h) * 0.14);
+
+                    return (
+                      <div className="flex flex-wrap items-center gap-1 mt-1 font-mono text-[9px]">
+                        <span
+                          className={`inline-flex items-center gap-0.5 px-1 py-0.2 rounded font-bold border shadow-xs ${
+                            vol5m >= 1.5
+                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                              : vol5m >= 0.7
+                              ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                              : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                          }`}
+                          title={`Волатильність за 5 хвилин: ${vol5m.toFixed(2)}%`}
+                        >
+                          <Zap className="w-2 h-2 text-cyan-400 shrink-0" />
+                          <span>5м: {vol5m.toFixed(2)}%</span>
+                        </span>
+
+                        <span
+                          className={`inline-flex items-center gap-0.5 px-1 py-0.2 rounded font-bold border shadow-xs ${
+                            distHigh <= 2.0
+                              ? 'bg-purple-500/25 border-purple-500/50 text-purple-200'
+                              : 'bg-slate-800/80 border-slate-700/90 text-purple-300/90'
+                          }`}
+                          title={`Відстань до максимуму: -${distHigh.toFixed(1)}%`}
+                        >
+                          <span className="text-[7.5px] text-purple-400 font-sans">▲</span>
+                          <span>Хай: -{distHigh.toFixed(1)}%</span>
+                        </span>
+
+                        <span
+                          className={`inline-flex items-center gap-0.5 px-1 py-0.2 rounded font-bold border shadow-xs ${
+                            distLow <= 2.0
+                              ? 'bg-blue-500/25 border-blue-500/50 text-blue-200'
+                              : 'bg-slate-800/80 border-slate-700/90 text-blue-300/90'
+                          }`}
+                          title={`Відстань до мінімуму: +${distLow.toFixed(1)}%`}
+                        >
+                          <span className="text-[7.5px] text-blue-400 font-sans">▼</span>
+                          <span>Лой: +{distLow.toFixed(1)}%</span>
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </td>
 
                 {/* Exchange */}

@@ -29,6 +29,7 @@ import { ScannedCoin, DetectedFormation, Kline, FormationAIAnalysis, Timeframe, 
 import { TradingViewChart } from './TradingViewChart';
 import { FullscreenChartModal } from './FullscreenChartModal';
 import { formatCryptoPrice } from '../utils/formatters';
+import { fetchDirectKlines } from '../utils/directExchangeClient';
 import { useAuth } from '../context/AuthContext';
 import { useAlerts } from '../context/AlertsContext';
 import { useArchive } from '../context/ArchiveContext';
@@ -285,20 +286,37 @@ export const FormationDetailsModal: React.FC<FormationDetailsModalProps> = ({
     let isCancelled = false;
 
     async function loadKlines() {
+      if (!coin) return;
       setLoadingKlines(true);
+      const cleanSym = (coin.symbol || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
       try {
         const res = await fetch(
-          `/api/klines?exchange=${coin?.exchange}&market=${coin?.marketType}&symbol=${coin?.symbol}&timeframe=${timeframe}&limit=${historyLimit}`
+          `/api/klines?exchange=${coin.exchange}&market=${coin.marketType}&symbol=${cleanSym}&timeframe=${timeframe}&limit=${historyLimit}`
         );
         const data = await res.json();
-        if (!isCancelled && data.success && Array.isArray(data.data)) {
+        if (!isCancelled && data.success && Array.isArray(data.data) && data.data.length > 0) {
           setKlines(data.data);
-          if (data.data.length > 0) {
-            setLivePrice(data.data[data.data.length - 1].close);
-          }
+          setLivePrice(data.data[data.data.length - 1].close);
+          return;
+        }
+
+        // Direct exchange fallback (e.g. if server is blocked or returns empty)
+        const directData = await fetchDirectKlines(coin.exchange, coin.marketType, cleanSym, timeframe as Timeframe, historyLimit);
+        if (!isCancelled && directData.length > 0) {
+          setKlines(directData);
+          setLivePrice(directData[directData.length - 1].close);
         }
       } catch (err) {
-        console.error('Failed to load klines:', err);
+        console.error('Failed to load klines from server, trying direct exchange:', err);
+        try {
+          const directData = await fetchDirectKlines(coin.exchange, coin.marketType, cleanSym, timeframe as Timeframe, historyLimit);
+          if (!isCancelled && directData.length > 0) {
+            setKlines(directData);
+            setLivePrice(directData[directData.length - 1].close);
+          }
+        } catch (directErr) {
+          console.error('Direct klines fallback error:', directErr);
+        }
       } finally {
         if (!isCancelled) setLoadingKlines(false);
       }

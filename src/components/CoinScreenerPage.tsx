@@ -56,6 +56,38 @@ interface CoinScreenerPageProps {
   formationsCoins?: ScannedCoin[];
 }
 
+export function getCoinVol5m(coin: { volatility5mPct?: number; volatility24hPct?: number; change24h?: number }): number {
+  if (typeof coin.volatility5mPct === 'number' && coin.volatility5mPct > 0) {
+    return coin.volatility5mPct;
+  }
+  const vol24h = coin.volatility24hPct || Math.abs(coin.change24h || 0) * 1.2 || 2.0;
+  return Number(Math.max(0.12, vol24h * 0.14).toFixed(2));
+}
+
+export function getCoinDistanceToHigh(coin: { distanceToHighPct?: number; high24h?: number; highPrice24h?: number; price?: number; currentPrice?: number }): number {
+  if (typeof coin.distanceToHighPct === 'number' && !isNaN(coin.distanceToHighPct)) {
+    return coin.distanceToHighPct;
+  }
+  const high = coin.high24h || coin.highPrice24h || 0;
+  const p = coin.price || coin.currentPrice || 0;
+  if (high > 0 && p > 0) {
+    return Number(Math.max(0, ((high - p) / high) * 100).toFixed(1));
+  }
+  return 0;
+}
+
+export function getCoinDistanceToLow(coin: { distanceToLowPct?: number; low24h?: number; lowPrice24h?: number; price?: number; currentPrice?: number }): number {
+  if (typeof coin.distanceToLowPct === 'number' && !isNaN(coin.distanceToLowPct)) {
+    return coin.distanceToLowPct;
+  }
+  const low = coin.low24h || coin.lowPrice24h || 0;
+  const p = coin.price || coin.currentPrice || 0;
+  if (low > 0 && p > 0) {
+    return Number(Math.max(0, ((p - low) / low) * 100).toFixed(1));
+  }
+  return 0;
+}
+
 export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   onSelectCoin,
   onSendMetaScalp,
@@ -290,13 +322,11 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
       } else if (sortBy === 'price') {
         comparison = b.price - a.price;
       } else if (sortBy === 'volatility') {
-        const valA = a.volatility5mPct !== undefined ? a.volatility5mPct : (a.volatility24hPct * 0.12);
-        const valB = b.volatility5mPct !== undefined ? b.volatility5mPct : (b.volatility24hPct * 0.12);
-        comparison = valB - valA;
+        comparison = getCoinVol5m(b) - getCoinVol5m(a);
       } else if (sortBy === 'distanceToHigh') {
-        comparison = a.distanceToHighPct - b.distanceToHighPct;
+        comparison = getCoinDistanceToHigh(a) - getCoinDistanceToHigh(b);
       } else if (sortBy === 'distanceToLow') {
-        comparison = a.distanceToLowPct - b.distanceToLowPct;
+        comparison = getCoinDistanceToLow(a) - getCoinDistanceToLow(b);
       }
 
       return sortOrder === 'asc' ? -comparison : comparison;
@@ -814,13 +844,13 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
         </div>
       ) : viewMode === 'table' ? (
         /* TABLE VIEW */
-        <div className="overflow-x-auto rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-sm shadow-xl">
-          <table className="w-full text-left text-xs border-collapse">
+        <div className="overflow-x-auto touch-scroll rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-sm shadow-xl">
+          <table className="w-full min-w-[760px] text-left text-xs border-collapse">
             <thead>
               <tr className="border-b border-slate-800/80 bg-slate-950/60 text-slate-400 select-none">
                 <th
                   onClick={() => handleHeaderSort('volume')}
-                  className="py-3 px-3.5 font-semibold cursor-pointer hover:text-white transition-colors"
+                  className="py-3 px-3.5 font-semibold cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center gap-1">
                     <span>{t('coin')}</span>
@@ -828,7 +858,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 </th>
                 <th
                   onClick={() => handleHeaderSort('price')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors"
+                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>{t('price')} ($)</span>
@@ -837,19 +867,19 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 </th>
                 <th
                   onClick={() => handleHeaderSort('priceChange')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors"
+                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>{t('change24h')} (%)</span>
                     {sortBy === 'priceChange' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
                   </div>
                 </th>
-                <th className="py-3 px-3.5 font-semibold text-center hidden md:table-cell">
+                <th className="py-3 px-3.5 font-semibold text-center whitespace-nowrap">
                   24h Range (Low - High)
                 </th>
                 <th
                   onClick={() => handleHeaderSort('distanceToHigh')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors hidden lg:table-cell"
+                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>{t('distToHigh')}</span>
@@ -858,7 +888,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 </th>
                 <th
                   onClick={() => handleHeaderSort('distanceToLow')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors hidden lg:table-cell"
+                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>{t('distToLow')}</span>
@@ -867,7 +897,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 </th>
                 <th
                   onClick={() => handleHeaderSort('volume')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors"
+                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>{t('volume')}</span>
@@ -876,7 +906,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 </th>
                 <th
                   onClick={() => handleHeaderSort('volatility')}
-                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors hidden sm:table-cell"
+                  className="py-3 px-3.5 font-semibold text-right cursor-pointer hover:text-white transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center justify-end gap-1.5">
                     <span>{t('volatility')}</span>
@@ -892,6 +922,9 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
               {filteredCoins.slice(0, displayLimit).map((coin, index) => {
                 const isWatchlisted = watchlist.includes(coin.symbol);
                 const isPositive = coin.change24h >= 0;
+                const vol5m = getCoinVol5m(coin);
+                const distHigh = getCoinDistanceToHigh(coin);
+                const distLow = getCoinDistanceToLow(coin);
 
                 // Calculate where price is positioned between 24h low and high (0 to 100%)
                 const rangeDiff = coin.high24h - coin.low24h;
@@ -907,7 +940,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                     className="hover:bg-slate-800/40 cursor-pointer transition-colors group"
                   >
                     {/* Symbol & Exchange */}
-                    <td className="py-3 px-3.5">
+                    <td className="py-3 px-3.5 whitespace-nowrap">
                       <div className="flex items-center gap-2.5">
                         <button
                           onClick={(e) => {
@@ -924,8 +957,8 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                           <Bookmark className={`w-3.5 h-3.5 ${isWatchlisted ? 'fill-amber-400' : ''}`} />
                         </button>
 
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold text-white group-hover:text-cyan-400 transition-colors text-sm">
                               {coin.baseAsset}
                             </span>
@@ -974,7 +1007,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1 ml-1">
+                        <div className="flex items-center gap-1 ml-1 shrink-0">
                           {onSendMetaScalp && (
                             <button
                               onClick={(e) => handleSendMetaScalpClick(e, coin)}
@@ -1013,12 +1046,12 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                     </td>
 
                     {/* Price */}
-                    <td className="py-3 px-3.5 text-right font-bold text-white">
+                    <td className="py-3 px-3.5 text-right font-bold text-white whitespace-nowrap">
                       ${formatCryptoPrice(coin.price)}
                     </td>
 
                     {/* 24h Change */}
-                    <td className="py-3 px-3.5 text-right">
+                    <td className="py-3 px-3.5 text-right whitespace-nowrap">
                       <span
                         className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-bold ${
                           isPositive
@@ -1032,7 +1065,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                     </td>
 
                     {/* 24h Range Bar */}
-                    <td className="py-3 px-3.5 hidden md:table-cell">
+                    <td className="py-3 px-3.5 whitespace-nowrap">
                       <div className="w-36 mx-auto space-y-1">
                         <div className="flex justify-between text-[10px] text-slate-500 font-mono">
                           <span>${formatCryptoPrice(coin.low24h)}</span>
@@ -1054,7 +1087,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                     </td>
 
                     {/* Distance to 24h High */}
-                    <td className="py-3 px-3.5 text-right hidden lg:table-cell">
+                    <td className="py-3 px-3.5 text-right whitespace-nowrap">
                       <span
                         className={`text-xs font-semibold ${
                           coin.isNearHigh
@@ -1062,12 +1095,12 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                             : 'text-slate-400'
                         }`}
                       >
-                        -{coin.distanceToHighPct.toFixed(1)}%
+                        -{distHigh.toFixed(1)}%
                       </span>
                     </td>
 
                     {/* Distance to 24h Low */}
-                    <td className="py-3 px-3.5 text-right hidden lg:table-cell">
+                    <td className="py-3 px-3.5 text-right whitespace-nowrap">
                       <span
                         className={`text-xs font-semibold ${
                           coin.isNearLow
@@ -1075,17 +1108,17 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                             : 'text-slate-400'
                         }`}
                       >
-                        +{coin.distanceToLowPct.toFixed(1)}%
+                        +{distLow.toFixed(1)}%
                       </span>
                     </td>
 
                     {/* 24h Volume */}
-                    <td className="py-3 px-3.5 text-right font-bold text-slate-200">
+                    <td className="py-3 px-3.5 text-right font-bold text-slate-200 whitespace-nowrap">
                       {formatVolume(coin.volumeUsd)}
                     </td>
 
                     {/* Volatility (5m timeframe) */}
-                    <td className="py-3 px-3.5 text-right hidden sm:table-cell">
+                    <td className="py-3 px-3.5 text-right whitespace-nowrap">
                       {(() => {
                         const vol = coin.volatility5mPct !== undefined ? coin.volatility5mPct : (coin.volatility24hPct * 0.12);
                         return (
@@ -1116,10 +1149,13 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
         </div>
       ) : (
         /* CARDS / GRID VIEW */
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4">
+        <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 min-[2200px]:grid-cols-7 min-[3000px]:grid-cols-8 gap-3 sm:gap-4">
           {filteredCoins.slice(0, displayLimit).map((coin, index) => {
             const isWatchlisted = watchlist.includes(coin.symbol);
             const isPositive = coin.change24h >= 0;
+            const vol5m = getCoinVol5m(coin);
+            const distHigh = getCoinDistanceToHigh(coin);
+            const distLow = getCoinDistanceToLow(coin);
             const rangeDiff = coin.high24h - coin.low24h;
             const pricePosition =
               rangeDiff > 0

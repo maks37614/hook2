@@ -21,6 +21,9 @@ import {
   ChevronRight,
   PanelLeftClose,
   PanelLeftOpen,
+  Layers,
+  Split,
+  Plus,
 } from 'lucide-react';
 import {
   TerminalChartBlock,
@@ -31,6 +34,7 @@ import {
   Kline,
 } from '../../types';
 import { formatCryptoPrice, formatVolume } from '../../utils/formatters';
+import { ScalperDOMWidget } from './ScalperDOMWidget';
 
 interface TerminalChartWidgetProps {
   block: TerminalChartBlock;
@@ -48,8 +52,12 @@ interface TerminalChartWidgetProps {
   onMove?: (direction: 'left' | 'right') => void;
   onDragStart?: (e: React.DragEvent) => void;
   onDragOver?: (e: React.DragEvent) => void;
+  onDragLeave?: (e: React.DragEvent) => void;
   onDrop?: (e: React.DragEvent) => void;
   heightStyle?: string;
+  isDragOverMerge?: boolean;
+  canMerge?: boolean;
+  onSplitBlock?: () => void;
 }
 
 export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
@@ -68,8 +76,12 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
   onMove,
   onDragStart,
   onDragOver,
+  onDragLeave,
   onDrop,
   heightStyle,
+  isDragOverMerge,
+  canMerge,
+  onSplitBlock,
 }) => {
   // Coin switcher popup state
   const [isCoinPickerOpen, setIsCoinPickerOpen] = useState(false);
@@ -271,20 +283,22 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
   // Compute CSS column span class
   const colSpanClass = useMemo(() => {
     if (isSingleBlock || isMaximized) return 'col-span-full';
-    switch (block.colSpan) {
+    const effectiveSpan = block.colSpan || (block.mode === 'combined' ? 2 : 1);
+    switch (effectiveSpan) {
       case 2: return 'col-span-1 md:col-span-2';
       case 3: return 'col-span-1 md:col-span-2 lg:col-span-3';
       case 4:
       case 'full': return 'col-span-full';
       default: return 'col-span-1';
     }
-  }, [block.colSpan, isSingleBlock, isMaximized]);
+  }, [block.colSpan, block.mode, isSingleBlock, isMaximized]);
 
   return (
     <div
       draggable={!isSingleBlock && !isMaximized}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={`relative flex flex-col bg-[#090d16] border border-slate-800 rounded-xl overflow-hidden shadow-lg transition-all duration-150 ${colSpanClass} ${
         isMaximized ? 'fixed inset-2 sm:inset-4 z-50 rounded-2xl border-cyan-500/50 shadow-2xl shadow-cyan-950/50' : ''
@@ -447,6 +461,53 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
           >
             {block.marketType === 'futures' ? 'Perp' : 'Spot'}
           </button>
+
+          {/* Mode Switcher / Badge */}
+          {block.mode === 'orderbook' ? (
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-950/70 border border-emerald-700/60 text-emerald-300 flex items-center gap-1">
+                <Layers className="w-2.5 h-2.5" />
+                <span>Стакан</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => onUpdateBlock({ mode: 'combined', colSpan: 2 })}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
+                title="Додати графік до цього стакану (об'єднаний блок)"
+              >
+                <Plus className="w-2.5 h-2.5 text-cyan-400" />
+                <span className="hidden sm:inline">Графік</span>
+              </button>
+            </div>
+          ) : block.mode === 'combined' ? (
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-cyan-950/80 border border-cyan-700/60 text-cyan-200 flex items-center gap-1">
+                <Zap className="w-2.5 h-2.5 text-cyan-400 fill-cyan-400/30" />
+                <span>Графік + Стакан</span>
+              </span>
+              {onSplitBlock && (
+                <button
+                  type="button"
+                  onClick={onSplitBlock}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-amber-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Розділити на 2 окремі блоки (Графік та Стакан)"
+                >
+                  <Split className="w-2.5 h-2.5 text-amber-400" />
+                  <span className="hidden sm:inline">Розділити</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onUpdateBlock({ mode: 'combined', colSpan: 2 })}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
+              title="Прикріпити біржовий стакан до цього графіка"
+            >
+              <Plus className="w-2.5 h-2.5 text-emerald-400" />
+              <span className="hidden sm:inline">Стакан</span>
+            </button>
+          )}
         </div>
 
         {/* Right: MetaScalp, Telegram, Maximize, Close */}
@@ -630,39 +691,150 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
         </div>
       </div>
 
-      {/* Main Chart Body */}
-      <div className="flex-1 w-full relative bg-[#090d16] overflow-hidden">
-        <div
-          className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
-            showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
-          }`}
-        >
-          <iframe
-            key={`tv-${block.symbol}-${block.exchange}-${block.marketType}-${block.timeframe}`}
-            src={tradingViewUrl}
-            className="w-full h-full border-0"
-            title={`${block.symbol} TradingView Chart`}
-            loading="lazy"
-            allowFullScreen
-          />
-        </div>
+      {/* Block Body Content (Chart / Orderbook / Combined) */}
+      <div className="flex-1 w-full relative bg-[#090d16] overflow-hidden min-h-0 flex flex-col">
+        {block.mode === 'orderbook' ? (
+          /* 1. Dedicated Order Book (Scalper DOM) */
+          <div className="flex-1 w-full h-full relative overflow-hidden bg-[#070a10]">
+            <ScalperDOMWidget
+              symbol={block.symbol}
+              baseAsset={block.baseAsset}
+              quoteAsset={block.quoteAsset}
+              exchange={block.exchange}
+              marketType={block.marketType}
+              currentPrice={currentPrice || coin?.currentPrice}
+              priceChange24h={coin?.priceChange24h || 0}
+              initialTimeframe={block.timeframe}
+              initialCompression={block.domSettings?.compression || 1}
+              initialDepth={block.domSettings?.depth || 'all'}
+              initialDensityThreshold={block.domSettings?.densityThresholdUsd || 100000}
+              initialSoundAlert={block.domSettings?.soundAlertEnabled ?? true}
+              onUpdateSettings={(settings) => {
+                onUpdateBlock({
+                  domSettings: {
+                    ...block.domSettings,
+                    ...settings,
+                  },
+                });
+              }}
+              height="100%"
+            />
+          </div>
+        ) : block.mode === 'combined' ? (
+          /* 2. Combined Mode: Chart + Order Book side-by-side adapting to screen size */
+          <div className="flex-1 w-full h-full flex flex-col md:flex-row overflow-hidden relative">
+            {/* Left/Top: TradingView Chart */}
+            <div className="flex-1 h-1/2 md:h-full min-w-0 relative border-b md:border-b-0 md:border-r border-slate-800 bg-[#090d16]">
+              <div
+                className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
+                  showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
+                }`}
+              >
+                <iframe
+                  key={`tv-${block.symbol}-${block.exchange}-${block.marketType}-${block.timeframe}`}
+                  src={tradingViewUrl}
+                  className="w-full h-full border-0"
+                  title={`${block.symbol} TradingView Chart`}
+                  loading="lazy"
+                  allowFullScreen
+                />
+              </div>
 
-        {/* Quick floating toggle button on the chart itself */}
-        <div className="absolute bottom-2 left-2 z-20 flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={handleToggleToolbar}
-            className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow-md backdrop-blur-sm transition-all cursor-pointer group"
-            title={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
-            aria-label={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
-          >
-            {showDrawingToolbar ? (
-              <PanelLeftClose className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
-            ) : (
-              <PanelLeftOpen className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
-            )}
-          </button>
-        </div>
+              {/* Quick floating toggle button on the chart itself */}
+              <div className="absolute bottom-2 left-2 z-20 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleToggleToolbar}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow-md backdrop-blur-sm transition-all cursor-pointer group"
+                  title={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
+                  aria-label={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
+                >
+                  {showDrawingToolbar ? (
+                    <PanelLeftClose className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
+                  ) : (
+                    <PanelLeftOpen className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Right/Bottom: Order Book (Scalper DOM) */}
+            <div className="h-1/2 md:h-full w-full md:w-[340px] lg:w-[400px] xl:w-[450px] shrink-0 relative bg-[#070a10]">
+              <ScalperDOMWidget
+                symbol={block.symbol}
+                baseAsset={block.baseAsset}
+                quoteAsset={block.quoteAsset}
+                exchange={block.exchange}
+                marketType={block.marketType}
+                currentPrice={currentPrice || coin?.currentPrice}
+                priceChange24h={coin?.priceChange24h || 0}
+                initialTimeframe={block.timeframe}
+                initialCompression={block.domSettings?.compression || 1}
+                initialDepth={block.domSettings?.depth || 'all'}
+                initialDensityThreshold={block.domSettings?.densityThresholdUsd || 100000}
+                initialSoundAlert={block.domSettings?.soundAlertEnabled ?? true}
+                onUpdateSettings={(settings) => {
+                  onUpdateBlock({
+                    domSettings: {
+                      ...block.domSettings,
+                      ...settings,
+                    },
+                  });
+                }}
+                height="100%"
+              />
+            </div>
+          </div>
+        ) : (
+          /* 3. TradingView Chart Only */
+          <div className="flex-1 w-full h-full relative overflow-hidden bg-[#090d16]">
+            <div
+              className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
+                showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
+              }`}
+            >
+              <iframe
+                key={`tv-${block.symbol}-${block.exchange}-${block.marketType}-${block.timeframe}`}
+                src={tradingViewUrl}
+                className="w-full h-full border-0"
+                title={`${block.symbol} TradingView Chart`}
+                loading="lazy"
+                allowFullScreen
+              />
+            </div>
+
+            {/* Quick floating toggle button on the chart itself */}
+            <div className="absolute bottom-2 left-2 z-20 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleToggleToolbar}
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow-md backdrop-blur-sm transition-all cursor-pointer group"
+                title={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
+                aria-label={showDrawingToolbar ? 'Сховати панель інструментів' : 'Показати панель інструментів'}
+              >
+                {showDrawingToolbar ? (
+                  <PanelLeftClose className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
+                ) : (
+                  <PanelLeftOpen className="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Visual Drop Merge Overlay (when dragging a block over this block to combine) */}
+        {isDragOverMerge && canMerge && (
+          <div className="absolute inset-0 z-50 bg-cyan-950/90 border-2 border-dashed border-cyan-400 backdrop-blur-md flex flex-col items-center justify-center p-4 text-center animate-in fade-in duration-150 pointer-events-none shadow-2xl">
+            <div className="w-14 h-14 rounded-2xl bg-cyan-500/20 border border-cyan-400/60 flex items-center justify-center text-cyan-300 mb-2 shadow-lg shadow-cyan-950/90 animate-pulse">
+              <Layers className="w-7 h-7" />
+            </div>
+            <span className="font-bold text-sm text-white">Об'єднати в один блок</span>
+            <span className="text-xs text-cyan-300 mt-1">Графік + Біржовий стакан</span>
+            <span className="text-[10px] text-slate-400 mt-2 bg-slate-900/90 px-2.5 py-0.5 rounded-full border border-slate-700">
+              Відпустіть для об'єднання блоків
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Bottom status strip */}

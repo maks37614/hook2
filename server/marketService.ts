@@ -168,26 +168,27 @@ export async function fetchKlines(
   timeframe: Timeframe,
   limit: number = 70
 ): Promise<Kline[]> {
+  const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const safeLimit = Math.min(Math.max(limit, 10), 1000);
 
   if (exchange === 'binance') {
     const interval = toBinanceInterval(timeframe);
     const mirrors = market === 'futures'
       ? [
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api1.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
         ]
       : [
-          `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api1.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
         ];
 
     for (const url of mirrors) {
       try {
-        const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(5000) });
+        const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
         if (!res.ok) continue;
         const data = await res.json();
         if (!Array.isArray(data) || data.length === 0) continue;
@@ -207,34 +208,41 @@ export async function fetchKlines(
     return [];
   } else {
     // Bybit
-    const category = market === 'futures' ? 'linear' : 'spot';
+    const primaryCategory = market === 'futures' ? 'linear' : 'spot';
+    const fallbackCategory = primaryCategory === 'linear' ? 'spot' : 'linear';
     const interval = toBybitInterval(timeframe);
-    const mirrors = [
-      `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-      `https://api.bytick.com/v5/market/kline?category=${category}&symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
+
+    const categories = [primaryCategory, fallbackCategory];
+    const hosts = [
+      'https://api.bybit.com',
+      'https://api.bytick.com',
+      'https://api.bybit.nl',
     ];
 
-    for (const url of mirrors) {
-      try {
-        const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(5000) });
-        if (!res.ok) continue;
-        const json = await res.json();
-        const list = json?.result?.list;
-        if (!Array.isArray(list) || list.length === 0) continue;
+    for (const cat of categories) {
+      for (const host of hosts) {
+        try {
+          const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`;
+          const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
+          if (!res.ok) continue;
+          const json = await res.json();
+          const list = json?.result?.list;
+          if (!Array.isArray(list) || list.length === 0) continue;
 
-        return list
-          .slice()
-          .reverse()
-          .map((d: any) => ({
-            time: Math.floor(parseInt(d[0], 10) / 1000),
-            open: parseFloat(d[1]),
-            high: parseFloat(d[2]),
-            low: parseFloat(d[3]),
-            close: parseFloat(d[4]),
-            volume: parseFloat(d[5]),
-          }));
-      } catch {
-        // Try next mirror
+          return list
+            .slice()
+            .reverse()
+            .map((d: any) => ({
+              time: Math.floor(parseInt(d[0], 10) / 1000),
+              open: parseFloat(d[1]),
+              high: parseFloat(d[2]),
+              low: parseFloat(d[3]),
+              close: parseFloat(d[4]),
+              volume: parseFloat(d[5]),
+            }));
+        } catch {
+          // Try next mirror
+        }
       }
     }
     return [];
@@ -768,5 +776,98 @@ export async function fetchOrderBook(
     asks: [],
     timestamp: Date.now(),
   };
+}
+
+export interface RawTradeItem {
+  id: string;
+  price: number;
+  qty: number;
+  volumeUsd: number;
+  isBuyerMaker: boolean; // true = sell, false = buy
+  timestamp: number;
+}
+
+// Fetch recent market trades
+export async function fetchRecentTrades(
+  exchange: ExchangeId = 'binance',
+  market: MarketType = 'futures',
+  symbol: string = 'BTCUSDT',
+  limit: number = 60
+): Promise<RawTradeItem[]> {
+  const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  const safeLimit = Math.min(Math.max(limit, 10), 100);
+
+  if (exchange === 'bybit') {
+    const category = market === 'futures' ? 'linear' : 'spot';
+    const mirrors = [
+      `https://api.bybit.com/v5/market/recent-trade?category=${category}&symbol=${cleanSymbol}&limit=${safeLimit}`,
+      `https://api.bytick.com/v5/market/recent-trade?category=${category}&symbol=${cleanSymbol}&limit=${safeLimit}`,
+    ];
+
+    for (const url of mirrors) {
+      try {
+        const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(3500) });
+        if (res.ok) {
+          const json = await res.json();
+          const list = json?.result?.list;
+          if (Array.isArray(list) && list.length > 0) {
+            return list.map((item: any) => {
+              const price = parseFloat(item.price) || 0;
+              const qty = parseFloat(item.size || item.v || 0);
+              const isBuyerMaker = item.side === 'Sell';
+              const time = parseInt(item.time, 10) || Date.now();
+              return {
+                id: item.execId || `${time}-${Math.random()}`,
+                price,
+                qty,
+                volumeUsd: price * qty,
+                isBuyerMaker,
+                timestamp: time,
+              };
+            });
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // Binance
+  const mirrors = market === 'futures'
+    ? [
+        `https://fapi.binance.com/fapi/v1/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
+        `https://data-api.binance.vision/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
+        `https://api.binance.com/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
+      ]
+    : [
+        `https://data-api.binance.vision/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
+        `https://api.binance.com/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
+      ];
+
+  for (const url of mirrors) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(3500) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const parsed = data.map((item: any) => {
+          const price = parseFloat(item.price) || 0;
+          const qty = parseFloat(item.qty) || 0;
+          const volumeUsd = parseFloat(item.quoteQty) || (price * qty);
+          const isBuyerMaker = !!item.isBuyerMaker;
+          return {
+            id: String(item.id || `${item.time}-${Math.random()}`),
+            price,
+            qty,
+            volumeUsd,
+            isBuyerMaker,
+            timestamp: item.time || Date.now(),
+          };
+        });
+        return parsed.sort((a, b) => b.timestamp - a.timestamp);
+      }
+    } catch {}
+  }
+
+  return [];
 }
 

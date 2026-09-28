@@ -106,6 +106,27 @@ export function formatVolume(vol: number | undefined | null): string {
 }
 
 /**
+ * Format whole sum without dots (ціла сума без крапок, e.g. $250, $15k, $2M)
+ */
+export function formatWholeSum(vol: number | undefined | null): string {
+  if (!vol || vol <= 0 || isNaN(vol)) return '$0';
+  if (vol >= 1_000_000_000) return `$${Math.round(vol / 1_000_000_000)}B`;
+  if (vol >= 1_000_000) return `$${Math.round(vol / 1_000_000)}M`;
+  if (vol >= 1_000) return `$${Math.round(vol / 1_000)}k`;
+  return `$${Math.max(1, Math.round(vol))}`;
+}
+
+/**
+ * Format compact bubble sum without dots for small circular badges
+ */
+export function formatCompactWholeBubble(vol: number | undefined | null): string {
+  if (!vol || vol <= 0 || isNaN(vol)) return '0';
+  if (vol >= 1_000_000) return `${Math.round(vol / 1_000_000)}M`;
+  if (vol >= 1_000) return `${Math.round(vol / 1_000)}k`;
+  return `${Math.max(1, Math.round(vol))}`;
+}
+
+/**
  * Format percentage changes with optional sign
  */
 export function formatPercent(pct: number | undefined | null, includeSign: boolean = true): string {

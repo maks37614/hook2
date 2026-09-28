@@ -232,37 +232,45 @@ export async function fetchDirectKlines(
   timeframe: Timeframe,
   limit: number = 70
 ): Promise<Kline[]> {
+  const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const safeLimit = Math.min(Math.max(limit, 10), 1000);
 
   if (exchange === 'bybit') {
     const interval = toBybitInterval(timeframe);
-    const category = market === 'futures' ? 'linear' : 'spot';
-    const mirrors = [
-      `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-      `https://api.bytick.com/v5/market/kline?category=${category}&symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
+    const primaryCategory = market === 'futures' ? 'linear' : 'spot';
+    const fallbackCategory = primaryCategory === 'linear' ? 'spot' : 'linear';
+
+    const categories = [primaryCategory, fallbackCategory];
+    const hosts = [
+      'https://api.bybit.com',
+      'https://api.bytick.com',
+      'https://api.bybit.nl',
     ];
 
-    for (const url of mirrors) {
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-        if (!res.ok) continue;
-        const json = await res.json();
-        const list = json?.result?.list;
-        if (!Array.isArray(list) || list.length === 0) continue;
+    for (const cat of categories) {
+      for (const host of hosts) {
+        try {
+          const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`;
+          const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+          if (!res.ok) continue;
+          const json = await res.json();
+          const list = json?.result?.list;
+          if (!Array.isArray(list) || list.length === 0) continue;
 
-        return list
-          .slice()
-          .reverse()
-          .map((d: any) => ({
-            time: Math.floor(parseInt(d[0], 10) / 1000),
-            open: parseFloat(d[1]),
-            high: parseFloat(d[2]),
-            low: parseFloat(d[3]),
-            close: parseFloat(d[4]),
-            volume: parseFloat(d[5]),
-          }));
-      } catch {
-        // Try next
+          return list
+            .slice()
+            .reverse()
+            .map((d: any) => ({
+              time: Math.floor(parseInt(d[0], 10) / 1000),
+              open: parseFloat(d[1]),
+              high: parseFloat(d[2]),
+              low: parseFloat(d[3]),
+              close: parseFloat(d[4]),
+              volume: parseFloat(d[5]),
+            }));
+        } catch {
+          // Try next
+        }
       }
     }
     return [];
@@ -270,16 +278,22 @@ export async function fetchDirectKlines(
 
   // Binance
   const interval = toBinanceInterval(timeframe);
-  const mirrors = [
-    `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-    `https://api1.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-    `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${safeLimit}`,
-  ];
+  const mirrors = market === 'futures'
+    ? [
+        `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+        `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+        `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+      ]
+    : [
+        `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+        `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+      ];
 
   for (const url of mirrors) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
       if (!res.ok) continue;
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) continue;

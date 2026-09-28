@@ -672,7 +672,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-[1720px] w-full mx-auto px-2.5 sm:px-4 lg:px-6 py-2.5 sm:py-4 space-y-3 sm:space-y-4">
+      <main className="flex-1 max-w-[2560px] 3xl:max-w-[3440px] w-full mx-auto px-2 sm:px-4 lg:px-6 2xl:px-8 py-2 sm:py-4 space-y-3 sm:space-y-4">
         {activePage === 'terminal' ? (
           <TerminalPage
             coins={coins}
@@ -735,8 +735,8 @@ export default function App() {
 
             {/* Results Area */}
             {isLoading && coins.length === 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((idx) => (
+              <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 min-[2200px]:grid-cols-7 min-[2800px]:grid-cols-8 gap-3 sm:gap-4">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((idx) => (
                   <div
                     key={idx}
                     className="h-56 rounded-2xl bg-slate-900/40 border border-slate-800/60 animate-pulse p-4 space-y-4"
@@ -825,7 +825,7 @@ export default function App() {
                 </div>
               )
             ) : viewMode === 'grid' ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 min-[2200px]:grid-cols-7 min-[2800px]:grid-cols-8 gap-3 sm:gap-4">
                 {flattenedItems.map(({ coin, formation }, idx) => (
                   <FormationCard
                     key={`${coin.exchange}-${coin.symbol}-${coin.marketType}-${formation.id}-${idx}`}
