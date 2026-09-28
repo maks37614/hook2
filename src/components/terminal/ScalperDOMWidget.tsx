@@ -72,6 +72,8 @@ interface ScalperDOMWidgetProps {
     clusterTimeframe?: Timeframe;
   }) => void;
   height?: string | number;
+  domHeightPreset?: 'md' | 'lg' | 'xl';
+  onDomHeightPresetChange?: (preset: 'md' | 'lg' | 'xl') => void;
   onToggleView?: () => void;
 }
 
@@ -125,23 +127,52 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   initialSoundAlert = true,
   onUpdateSettings,
   height,
+  domHeightPreset = 'lg',
+  onDomHeightPresetChange,
   onToggleView,
 }) => {
   // DOM settings state
   const [clusterTf, setClusterTf] = useState<Timeframe>(initialTimeframe);
-  const [compression, setCompression] = useState<number>(initialCompression); // 1, 2, 5, 10, 20, 50, 100
-  const [depthPreset, setDepthPreset] = useState<'all' | 'deep' | 'medium' | 'small'>(initialDepth);
+  const [compression, setCompression] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('scalper_dom_compression');
+      if (saved && !isNaN(Number(saved))) return Number(saved);
+    } catch {}
+    return 10; // default x10
+  });
+  const [depthPreset, setDepthPreset] = useState<'all' | 'deep' | 'medium' | 'small'>(() => {
+    try {
+      const saved = localStorage.getItem('scalper_dom_depth_preset');
+      if (saved && ['all', 'deep', 'medium', 'small'].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return 'medium'; // default 100 levels
+  });
   const [densityThresholdUsd, setDensityThresholdUsd] = useState<number>(() => {
     const saved = localStorage.getItem('scalper_dom_density_threshold');
     if (saved && !isNaN(Number(saved)) && Number(saved) > 0) return Number(saved);
-    return initialDensityThreshold;
+    return 500000; // default 500k
   });
   const [bubbleThresholdUsd, setBubbleThresholdUsd] = useState<number>(() => {
     const saved = localStorage.getItem('scalper_dom_bubble_threshold');
     if (saved !== null && !isNaN(Number(saved))) return Number(saved);
-    return initialBubbleThreshold;
+    return 5000; // default 5k
   });
-  const [soundAlertEnabled, setSoundAlertEnabled] = useState<boolean>(initialSoundAlert);
+  const [soundAlertEnabled, setSoundAlertEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('scalper_dom_sound_alert');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return false; // default false
+  });
+  const [autoCenterEnabled, setAutoCenterEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('scalper_dom_auto_center');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return true; // default true
+  });
 
   // Settings popover toggle
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -773,9 +804,11 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(handleCenterDOM, 300);
-    return () => clearTimeout(timer);
-  }, [handleCenterDOM, symbol]);
+    if (autoCenterEnabled) {
+      const timer = setTimeout(handleCenterDOM, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [handleCenterDOM, symbol, autoCenterEnabled]);
 
   // Timeframe switch handler
   const handleSelectClusterTf = (tf: Timeframe) => {
@@ -788,12 +821,18 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   const handleSelectCompression = (comp: number) => {
     setCompression(comp);
     setIsCompressionDropdownOpen(false);
+    try {
+      localStorage.setItem('scalper_dom_compression', String(comp));
+    } catch {}
     onUpdateSettings?.({ compression: comp });
   };
 
   // Depth switch handler
   const handleSelectDepth = (depth: 'all' | 'deep' | 'medium' | 'small') => {
     setDepthPreset(depth);
+    try {
+      localStorage.setItem('scalper_dom_depth_preset', depth);
+    } catch {}
     onUpdateSettings?.({ depth });
   };
 
@@ -820,7 +859,24 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     const next = !soundAlertEnabled;
     setSoundAlertEnabled(next);
     if (next) playDensityChime(true);
+    try {
+      localStorage.setItem('scalper_dom_sound_alert', String(next));
+    } catch {}
     onUpdateSettings?.({ soundAlertEnabled: next });
+  };
+
+  // Auto-center toggle handler
+  const handleToggleAutoCenter = () => {
+    setAutoCenterEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('scalper_dom_auto_center', String(next));
+      } catch {}
+      if (next) {
+        setTimeout(handleCenterDOM, 50);
+      }
+      return next;
+    });
   };
 
   // Calculate recent trade bubbles placed next to the price ladder (filtered by volume threshold)
@@ -846,34 +902,8 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       style={{ height: height || '100%' }}
     >
       {/* ================= TOP-LEFT OVERLAY (Responsive, mobile friendly) ================= */}
-      <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1 pointer-events-auto max-w-[calc(100%-80px)]">
-        {/* Row 1: Exchange Icon + Perp Badge 'F' + Symbol + Price Change */}
-        <div className="flex items-center gap-1.5 bg-[#090d16]/95 px-2 py-1 rounded-lg border border-slate-800/80 shadow-md backdrop-blur-md">
-          {/* Exchange Icon */}
-          <div className="flex items-center justify-center w-4 h-4 rounded bg-amber-500/20 text-amber-400 font-bold text-[9px]">
-            {exchange === 'bybit' ? 'B' : '🔶'}
-          </div>
+      <div className="absolute top-1 left-1.5 z-30 flex flex-col items-start gap-1 pointer-events-auto max-w-[calc(100%-80px)]">
 
-          {/* Futures Perp 'F' badge */}
-          <span className="flex items-center justify-center w-3.5 h-3.5 rounded bg-indigo-600/90 text-white font-bold text-[9px] shadow-sm">
-            {marketType === 'futures' ? 'F' : 'S'}
-          </span>
-
-          {/* Symbol */}
-          <div className="flex items-baseline gap-0.5">
-            <span className="font-extrabold text-white text-xs tracking-tight">{baseAsset || symbol}</span>
-            <span className="text-[10px] text-slate-400 font-semibold">{quoteAsset || 'USDT'}</span>
-          </div>
-
-          {/* 24h percentage change */}
-          <span
-            className={`text-[11px] font-bold px-1 rounded ${
-              priceChange24h >= 0 ? 'text-emerald-400' : 'text-rose-400'
-            }`}
-          >
-            {priceChange24h >= 0 ? `+${priceChange24h.toFixed(2)}%` : `${priceChange24h.toFixed(2)}%`}
-          </span>
-        </div>
 
         {/* Row 2: ⚙ | 5m | x10 | Стрічка [▾/▴] | Кластери | Center | Ping */}
         <div className="flex flex-wrap items-center gap-1 bg-[#090d16]/95 px-1.5 py-0.5 rounded-md border border-slate-800/80 text-[10px] text-slate-400 backdrop-blur-md shadow-sm">
@@ -1003,19 +1033,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         </div>
       </div>
 
-      {/* Top-Right Toggle to Chart / Collapse Button */}
-      {onToggleView && (
-        <div className="absolute top-2 right-2.5 z-30 flex items-center gap-1.5 pointer-events-auto">
-          <button
-            onClick={onToggleView}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-[11px] shadow-lg shadow-black/50 border border-slate-700/60 transition-all active:scale-95 cursor-pointer backdrop-blur-md"
-            title="Згорнути стакан"
-          >
-            <ChevronUp className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Згорнути</span>
-          </button>
-        </div>
-      )}
+
 
       {/* ================= SETTINGS POPOVER DIALOG ================= */}
       {isSettingsOpen && (
@@ -1033,6 +1051,63 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
               className="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded hover:bg-slate-800 cursor-pointer"
             >
               ✕
+            </button>
+          </div>
+
+          {/* Розмір цілого блоку стакану */}
+          <div className="mb-3 space-y-1.5 p-2 rounded-xl bg-slate-950/80 border border-slate-800/90">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-300 font-medium flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Розмір блоку стакану:</span>
+              </span>
+              <span className="text-cyan-400 font-bold font-mono">
+                {domHeightPreset === 'md' ? '600px' : domHeightPreset === 'lg' ? '780px' : '950px'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+              {[
+                { size: 'md' as const, label: '600px' },
+                { size: 'lg' as const, label: '780px' },
+                { size: 'xl' as const, label: '950px' },
+              ].map((item) => (
+                <button
+                  key={item.size}
+                  type="button"
+                  onClick={() => onDomHeightPresetChange?.(item.size)}
+                  className={`py-1.5 rounded-lg border text-center font-bold transition-all cursor-pointer ${
+                    domHeightPreset === item.size
+                      ? 'bg-cyan-500/25 border-cyan-500 text-cyan-300 shadow-sm shadow-cyan-950/60'
+                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-600'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Автоцентрування */}
+          <div className="mb-3 p-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-cyan-500/15 flex items-center justify-center text-cyan-400">
+                <Crosshair className="w-3.5 h-3.5" />
+              </div>
+              <div className="text-[11px]">
+                <div className="font-semibold text-white">Автоцентрування</div>
+                <div className="text-[9px] text-slate-400">Автоцентрувати стакан на спред</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleAutoCenter}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                autoCenterEnabled
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                  : 'bg-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              {autoCenterEnabled ? 'УВІМК' : 'ВИМК'}
             </button>
           </div>
 
@@ -1302,7 +1377,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
         {/* 1. LEFT SECTION: Cluster History (collapsible/expandable footprint clusters with all sums visible) */}
         {showClusters ? (
-          <div className="w-36 sm:w-52 md:w-60 lg:w-64 shrink-0 h-full flex flex-col relative z-10 select-none overflow-hidden bg-[#070a10]/90 border-r border-slate-900/80">
+          <div className="w-48 sm:w-64 md:w-72 lg:w-80 shrink-0 h-full flex flex-col relative z-10 select-none overflow-hidden bg-[#070a10]/90 border-r border-slate-900/80">
             {/* Clusters Sticky Header */}
             <div className="sticky top-0 z-20 flex items-center justify-between px-1.5 py-1 bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md shrink-0">
               <div className="flex items-center gap-1 min-w-0">
@@ -1596,10 +1671,10 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           </div>
         )}
 
-        {/* 3. RIGHT SECTION: Order Book ("Стакан") taking all remaining space (Guaranteed visible price on any device) */}
+        {/* 3. RIGHT SECTION: Order Book ("Стакан") */}
         <div
           ref={domScrollContainerRef}
-          className="flex-1 min-w-0 h-full overflow-y-auto no-scrollbar relative flex flex-col bg-[#090d16]/40 touch-pan-y"
+          className="w-44 sm:w-52 md:w-60 shrink-0 h-full overflow-y-auto no-scrollbar relative flex flex-col bg-[#090d16]/40 touch-pan-y"
           style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
         >
           {/* Header columns: Об'єм (ліворуч) | Ціна (праворуч, always visible) */}
@@ -1660,11 +1735,10 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             {/* SPREAD AREA: Seamless flow with NO borders, NO boxes */}
             <div
               ref={spreadRowRef}
-              className="flex items-center justify-between px-2 sm:px-2.5 h-[22px] bg-slate-900/60 text-slate-400 font-mono text-[10px] my-0.5 shrink-0"
+              className="flex items-center justify-between px-2 sm:px-2.5 h-[16px] bg-slate-900/60 text-slate-400 font-mono text-[9.5px] my-[1px] shrink-0"
             >
               <div className="flex items-center gap-1.5 min-w-0 truncate">
-                <span className="text-[8.5px] sm:text-[9px] text-slate-500 uppercase font-bold">Спред</span>
-                <span className="text-slate-300 font-bold">{formatCryptoPrice(spreadUsd)}</span>
+               
                 <span className="text-[8.5px] sm:text-[9px] text-slate-500 hidden xs:inline">({spreadPct.toFixed(2)}%)</span>
               </div>
               <span className="text-cyan-400 font-bold text-[11px] sm:text-[12px] shrink-0 text-right pl-1.5 ml-auto">

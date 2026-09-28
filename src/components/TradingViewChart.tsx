@@ -1090,12 +1090,12 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         <div className="absolute right-2.5 sm:right-3 bottom-2.5 sm:bottom-3 z-30 flex items-center gap-1.5 sm:gap-2 select-none pointer-events-auto">
           {/* Time to Bar Close Countdown with Ticking */}
           <div
-            className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono font-bold select-none transition-all duration-300 backdrop-blur-md shadow-lg ${
+            className={`flex items-center gap-1.5 px-1 py-0.5 text-xs font-mono font-bold select-none transition-all duration-300 ${
               barCountdown.isUrgent
-                ? `bg-rose-950/90 text-rose-300 border border-rose-500 shadow-rose-950/50 ${
-                    tickPulse ? 'scale-105 opacity-100 border-rose-400 shadow-rose-500/40' : 'scale-100 opacity-90'
+                ? `text-rose-300 ${
+                    tickPulse ? 'scale-105 opacity-100 text-rose-200' : 'scale-100 opacity-90'
                   }`
-                : 'bg-slate-950/85 text-slate-200 border border-slate-800/90 hover:border-slate-700'
+                : 'text-slate-200 hover:text-white'
             }`}
             title={`Час до закриття поточної ${timeframe} свічки: ${barCountdown.formatted}`}
           >
@@ -1131,16 +1131,15 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             <button
               type="button"
               onClick={() => setIsDomOpen((prev) => !prev)}
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-bold shadow-lg backdrop-blur-md transition-all active:scale-95 cursor-pointer border ${
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                 isDomOpen
-                  ? 'bg-gradient-to-r from-cyan-600 via-sky-600 to-blue-600 text-white border-cyan-400/80 shadow-cyan-950/80'
-                  : 'bg-slate-950/85 hover:bg-slate-900 text-slate-200 hover:text-white border-slate-800/90 hover:border-slate-700'
+                  ? 'text-cyan-300 hover:text-cyan-200'
+                  : 'text-slate-200 hover:text-white'
               }`}
-              title={isDomOpen ? 'Сховати біржовий стакан під графіком' : 'Висунути біржовий стакан під графіком'}
+              title={isDomOpen ? 'Сховати стакан під графіком' : 'Висунути біржовий стакан під графіком'}
             >
               <Layers className={`w-3.5 h-3.5 ${isDomOpen ? 'text-cyan-200' : 'text-cyan-400'}`} />
-              <span>{isDomOpen ? 'Стакан відкрито' : 'Стакан'}</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${isDomOpen ? 'rotate-180 text-cyan-200' : 'text-slate-400'}`} />
+             <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${isDomOpen ? 'rotate-180 text-cyan-200' : 'text-slate-400'}`} />
             </button>
           )}
         </div>
@@ -1156,56 +1155,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       >
         {isDomOpen && (
           <div className={`flex flex-col w-full ${domHeightClass} transition-all duration-200`}>
-            {/* DOM Block Header */}
-            <div className="flex items-center justify-between px-3 py-2 bg-slate-950/95 border-b border-slate-800/90 text-xs shrink-0 select-none">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="flex items-center gap-1.5 font-bold text-slate-100">
-                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Біржовий стакан (Scalper DOM)</span>
-                </span>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-800 font-semibold">
-                  {symbol} • {exchange.toUpperCase()} {marketType === 'futures' ? 'PERP' : 'SPOT'}
-                </span>
-                <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-900/70 font-mono font-bold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  LIVE DOM
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Height Presets Selector */}
-                <div className="flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-[10px] font-mono">
-                  {(['md', 'lg', 'xl'] as const).map((size) => (
-                    <button
-                      key={size}
-                      type="button"
-                      onClick={() => setDomHeightPreset(size)}
-                      className={`px-2 py-0.5 rounded transition-all font-semibold cursor-pointer ${
-                        domHeightPreset === size
-                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-xs'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                      title={`Висота стакану: ${size === 'md' ? '600px' : size === 'lg' ? '780px (довгий)' : '950px (максимальний)'}`}
-                    >
-                      {size === 'md' ? '600px' : size === 'lg' ? '780px' : '950px'}
-                    </button>
-                  ))}
-                </div>
-
-                <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
-                  Кластери • Стрічка угод • Щільності
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsDomOpen(false)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 hover:border-slate-700 text-[11px] font-semibold transition-all cursor-pointer active:scale-95 shadow-sm"
-                  title="Згорнути стакан"
-                >
-                  <ChevronUp className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Згорнути</span>
-                </button>
-              </div>
-            </div>
 
             {/* Scalper DOM Widget */}
             <div className="flex-1 w-full min-h-0 relative">
@@ -1218,6 +1167,8 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 currentPrice={currentPrice || (klines.length > 0 ? klines[klines.length - 1].close : 0)}
                 priceChange24h={formation?.potentialProfitPct || 0}
                 initialTimeframe={timeframe as Timeframe}
+                domHeightPreset={domHeightPreset}
+                onDomHeightPresetChange={setDomHeightPreset}
                 onToggleView={() => setIsDomOpen(false)}
               />
             </div>

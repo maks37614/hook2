@@ -227,7 +227,7 @@ export const FormationCard: React.FC<FormationCardProps> = ({
                   {formation.name}
                 </span>
                 <span
-                  className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
+                  className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider whitespace-nowrap ${
                     isBullish
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                       : isBearish
