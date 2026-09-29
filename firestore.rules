@@ -40,10 +40,18 @@ service cloud.firestore {
         (!('telegramBotUsername' in data) || data.telegramBotUsername == null || (data.telegramBotUsername is string && data.telegramBotUsername.size() <= 64)) &&
         (!('defaultExchange' in data) || (data.defaultExchange in ['all', 'binance', 'bybit'])) &&
         (!('defaultMarketType' in data) || (data.defaultMarketType in ['all', 'futures', 'spot'])) &&
-        (!('defaultTimeframe' in data) || (data.defaultTimeframe in ['5m', '15m', '1h', '4h', '1d'])) &&
+        (!('defaultTimeframe' in data) || (data.defaultTimeframe in ['1m', '5m', '15m', '1h', '4h', '1d'])) &&
         (!('soundAlertsEnabled' in data) || data.soundAlertsEnabled is bool) &&
         (!('watchlist' in data) || data.watchlist is list) &&
+        (!('watchlistFolders' in data) || data.watchlistFolders is map) &&
         (!('metaScalpSettings' in data) || data.metaScalpSettings is map) &&
+        (!('unifiedLinkingSettings' in data) || data.unifiedLinkingSettings is map) &&
+        (!('chartTradeMarkers' in data) || data.chartTradeMarkers is map) &&
+        (!('chartLabelSettings' in data) || data.chartLabelSettings is map) &&
+        (!('orderbookSettings' in data) || data.orderbookSettings is map) &&
+        (!('terminalSettings' in data) || data.terminalSettings is map) &&
+        (!('searchSettings' in data) || data.searchSettings is map) &&
+        (!('exchangeApiCredentials' in data) || data.exchangeApiCredentials is list) &&
         (!('inviteCode' in data) || data.inviteCode == null || (data.inviteCode is string && data.inviteCode.size() <= 64)) &&
         (!('createdAt' in data) || data.createdAt == null || (data.createdAt is string && data.createdAt.size() <= 64)) &&
         (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 64));
@@ -95,7 +103,7 @@ service cloud.firestore {
         data.symbol is string && data.symbol.size() <= 32 &&
         (data.exchange in ['binance', 'bybit']) &&
         (data.marketType in ['futures', 'spot']) &&
-        (data.timeframe in ['5m', '15m', '1h', '4h', '1d']) &&
+        (data.timeframe in ['1m', '5m', '15m', '1h', '4h', '1d']) &&
         data.formationName is string && data.formationName.size() <= 128 &&
         (data.bias in ['bullish', 'bearish', 'neutral']) &&
         (data.entryPrice is int || data.entryPrice is float) &&
