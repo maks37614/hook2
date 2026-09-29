@@ -16,8 +16,10 @@ import {
   Monitor,
   Radar,
   Globe,
+  Lock,
 } from 'lucide-react';
 import { MetaScalpSettings } from '../utils/metaScalpService';
+import { UnifiedLinkingSettings } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { ActivePageType } from '../types';
 import { useLanguage, SupportedLanguage } from '../context/LanguageContext';
@@ -37,7 +39,8 @@ interface HeaderProps {
   onOpenArchive?: () => void;
   onOpenGuide: () => void;
   onOpenMetaScalp: () => void;
-  metaScalpSettings: MetaScalpSettings;
+  metaScalpSettings?: MetaScalpSettings;
+  unifiedLinkingSettings?: UnifiedLinkingSettings;
   lastUpdated: number | null;
   telegramAlertsCount?: number;
   surveillanceCount?: number;
@@ -64,6 +67,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenGuide,
   onOpenMetaScalp,
   metaScalpSettings,
+  unifiedLinkingSettings,
   lastUpdated,
   telegramAlertsCount = 0,
   surveillanceCount = 0,
@@ -75,17 +79,33 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const { user, profile } = useAuth();
   const { language, setLanguage, t } = useLanguage();
+
+  const isLinkingEnabled = unifiedLinkingSettings
+    ? (unifiedLinkingSettings.activeTarget === 'all' || unifiedLinkingSettings[unifiedLinkingSettings.activeTarget as 'metascalp' | 'vataga' | 'tiger']?.enabled)
+    : (metaScalpSettings?.enabled ?? true);
+
+  const linkingBadge = unifiedLinkingSettings ? (
+    unifiedLinkingSettings.activeTarget === 'all' ? '3x' :
+    unifiedLinkingSettings.activeTarget === 'vataga' ? `VT:${unifiedLinkingSettings.vataga.binding}` :
+    unifiedLinkingSettings.activeTarget === 'tiger' ? `TG:${unifiedLinkingSettings.tiger.binding}` :
+    `MS:${unifiedLinkingSettings.metascalp.binding}`
+  ) : (metaScalpSettings?.binding ?? '001');
   return (
     <header className="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-30">
       <div className="max-w-[1720px] mx-auto px-2.5 sm:px-4 lg:px-6 py-1.5 sm:py-2">
         <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Brand Title */}
-            <div className="flex items-center">
+            <button
+              type="button"
+              onClick={() => onPageChange('screener')}
+              className="flex items-center cursor-pointer select-none text-left bg-transparent border-0 p-0 focus:outline-none"
+              title="Головна сторінка: Скрінер"
+            >
               <span className="font-bold text-base sm:text-lg tracking-tight text-white font-mono">
                 signal<span className="text-cyan-400">hook</span>
               </span>
-            </div>
+            </button>
 
     {/* Language Switcher */}
             <div className="relative">
@@ -125,10 +145,13 @@ export const Header: React.FC<HeaderProps> = ({
                     ? 'bg-gradient-to-r from-cyan-600 to-cyan-500 text-white shadow-sm shadow-cyan-900/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
+                title={!user ? 'Формації та патерни (доступно після реєстрації)' : undefined}
               >
                 <Layers className="w-3.5 h-3.5" />
                 <span>{t('patterns')}</span>
-                {formationsCount > 0 && (
+                {!user ? (
+                  <Lock className="w-3 h-3 text-slate-500" />
+                ) : formationsCount > 0 ? (
                   <span
                     className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
                       activePage === 'patterns'
@@ -138,10 +161,8 @@ export const Header: React.FC<HeaderProps> = ({
                   >
                     {formationsCount}
                   </span>
-                )}
+                ) : null}
               </button>
-
-
 
               <button
                 id="nav-category-terminal-btn"
@@ -151,10 +172,11 @@ export const Header: React.FC<HeaderProps> = ({
                     ? 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white shadow-sm shadow-emerald-900/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
-                title="Термінал"
+                title={!user ? 'Торговий термінал (доступно після реєстрації)' : 'Термінал'}
               >
                 <Monitor className="w-3.5 h-3.5 text-emerald-400" />
                 <span>{t('terminal')}</span>
+                {!user && <Lock className="w-3 h-3 text-slate-500" />}
               </button>
             </div>
           </div>
@@ -215,49 +237,55 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               id="open-telegram-btn"
               onClick={onOpenTelegramAlerts}
-              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-300 transition-all shadow-sm cursor-pointer"
-              title="Сповіщення ціни в Telegram"
+              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-300 transition-all shadow-sm cursor-pointer relative"
+              title={!user ? 'Сповіщення ціни в Telegram (тільки для зареєстрованих)' : 'Сповіщення ціни в Telegram'}
             >
               <Send className="w-3.5 h-3.5 text-sky-400" />
-              {telegramAlertsCount > 0 && (
+              {!user ? (
+                <Lock className="w-2.5 h-2.5 text-sky-400/80" />
+              ) : telegramAlertsCount > 0 ? (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-sky-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {telegramAlertsCount}
                 </span>
-              )}
+              ) : null}
             </button>
 
             <button
               id="open-surveillance-btn"
               onClick={() => onPageChange('surveillance')}
-              className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs border transition-all shadow-sm cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs border transition-all shadow-sm cursor-pointer relative ${
                 activePage === 'surveillance'
                   ? 'bg-gradient-to-r from-violet-600 to-indigo-600 border-violet-500 text-white shadow-violet-900/30'
                   : 'bg-violet-500/15 hover:bg-violet-500/25 border-violet-500/40 text-violet-300'
               }`}
-              title="Стеження за Монетою (Системний нагляд SignalHook)"
+              title={!user ? 'Системний нагляд (тільки для зареєстрованих)' : 'Стеження за Монетою (Системний нагляд SignalHook)'}
             >
               <Radar className="w-3.5 h-3.5 text-violet-400" />
-              {surveillanceCount > 0 && (
+              {!user ? (
+                <Lock className="w-2.5 h-2.5 text-violet-400/80" />
+              ) : surveillanceCount > 0 ? (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-violet-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {surveillanceCount}
                 </span>
-              )}
+              ) : null}
             </button>
 
             <button
               id="open-metascalp-btn"
               onClick={onOpenMetaScalp}
-              className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs border transition-all ${
-                metaScalpSettings.enabled
+              className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs border transition-all relative ${
+                isLinkingEnabled
                   ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300 shadow-sm'
                   : 'bg-slate-900/60 hover:bg-slate-800 border-slate-800 text-slate-400'
               }`}
-              title="Налаштування лінковки з терміналом MetaScalp"
+              title={!user ? 'Лінковка (MetaScalp, Vataga, Tiger) — доступна після реєстрації' : 'Об\'єднана лінковка: MetaScalp, Vataga, Tiger Trade'}
             >
-              <Zap className={`w-3.5 h-3.5 ${metaScalpSettings.enabled ? 'text-amber-400 fill-amber-400/20' : 'text-slate-500'}`} />
-              {metaScalpSettings.enabled && (
+              <Zap className={`w-3.5 h-3.5 ${isLinkingEnabled ? 'text-amber-400 fill-amber-400/20' : 'text-slate-500'}`} />
+              {!user ? (
+                <Lock className="w-2.5 h-2.5 text-amber-400/80" />
+              ) : (
                 <span className="text-[10px] font-mono font-bold px-1 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30">
-                  {metaScalpSettings.binding}
+                  {linkingBadge}
                 </span>
               )}
             </button>
@@ -265,29 +293,33 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               id="open-watchlist-btn"
               onClick={onOpenWatchlist}
-              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 transition-colors"
-              title="Список обраних монет"
+              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 transition-colors relative"
+              title={!user ? 'Список обраних монет (тільки для зареєстрованих)' : 'Список обраних монет'}
             >
               <Bookmark className="w-3.5 h-3.5 text-amber-400" />
-              {watchlistCount > 0 && (
+              {!user ? (
+                <Lock className="w-2.5 h-2.5 text-amber-400/80" />
+              ) : watchlistCount > 0 ? (
                 <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {watchlistCount}
                 </span>
-              )}
+              ) : null}
             </button>
 
             <button
               id="open-archive-btn"
               onClick={onOpenArchive}
-              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-300 transition-all shadow-sm cursor-pointer"
-              title="Архів збережених формацій та графіків"
+              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-300 transition-all shadow-sm cursor-pointer relative"
+              title={!user ? 'Архів збережених формацій (тільки для зареєстрованих)' : 'Архів збережених формацій та графіків'}
             >
               <FolderArchive className="w-3.5 h-3.5 text-purple-400" />
-              {archiveCount > 0 && (
+              {!user ? (
+                <Lock className="w-2.5 h-2.5 text-purple-400/80" />
+              ) : archiveCount > 0 ? (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-purple-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
                   {archiveCount}
                 </span>
-              )}
+              ) : null}
             </button>
 
             <button

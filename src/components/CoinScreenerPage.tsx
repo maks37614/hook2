@@ -24,8 +24,10 @@ import {
   Maximize2,
   Sparkles,
   Radar,
+  Lock,
 } from 'lucide-react';
 import { useSurveillance } from '../context/SurveillanceContext';
+import { useAuth } from '../context/AuthContext';
 import {
   ExchangeId,
   MarketType,
@@ -54,6 +56,7 @@ interface CoinScreenerPageProps {
   onOpenTelegramAlerts: (prefill?: any) => void;
   onOpenWatchlist: () => void;
   formationsCoins?: ScannedCoin[];
+  onOpenAuthModal?: (mode?: 'signin' | 'signup', reason?: 'chart' | 'alerts' | 'linking' | 'general') => void;
 }
 
 export function getCoinVol5m(coin: { volatility5mPct?: number; volatility24hPct?: number; change24h?: number }): number {
@@ -97,8 +100,11 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   onOpenTelegramAlerts,
   onOpenWatchlist,
   formationsCoins = [],
+  onOpenAuthModal,
 }) => {
   const { t } = useLanguage();
+  const { user } = useAuth();
+  const isGuest = !user;
   const [coins, setCoins] = useState<MarketCoin[]>(() =>
     TOP_POPULAR_PAIRS.map((p, idx) => ({
       symbol: p.symbol,
@@ -146,6 +152,10 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
 
   const handleSurveillanceToggle = async (e: React.MouseEvent, coin: MarketCoin) => {
     e.stopPropagation();
+    if (isGuest) {
+      onOpenAuthModal?.('signin', 'general');
+      return;
+    }
     const monitored = isCoinMonitored(coin.symbol, coin.exchange);
     if (monitored) {
       const found = surveillanceCoins.find(
@@ -379,6 +389,10 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
 
   // Helper to convert MarketCoin to ScannedCoin and trigger modal
   const handleCoinClick = (coin: MarketCoin) => {
+    if (isGuest) {
+      onOpenAuthModal?.('signin', 'chart');
+      return;
+    }
     const key = `${coin.exchange}_${coin.symbol}_${coin.marketType}`.toUpperCase();
     const existing = formationsMap.get(key);
 
@@ -437,6 +451,10 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
 
   const handleSendMetaScalpClick = (e: React.MouseEvent, coin: MarketCoin) => {
     e.stopPropagation();
+    if (isGuest) {
+      onOpenAuthModal?.('signin', 'linking');
+      return;
+    }
     if (onSendMetaScalp) {
       const scanned: ScannedCoin = {
         symbol: coin.symbol,
@@ -460,6 +478,10 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
 
   const handleAlertClick = (e: React.MouseEvent, coin: MarketCoin) => {
     e.stopPropagation();
+    if (isGuest) {
+      onOpenAuthModal?.('signin', 'alerts');
+      return;
+    }
     onOpenTelegramAlerts({
       symbol: coin.symbol,
       exchange: coin.exchange,
@@ -488,11 +510,16 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
       <div className="fixed bottom-4 right-4 z-30 flex flex-col gap-2">
         <button
           onClick={onOpenWatchlist}
-          className="p-2 rounded-xl bg-slate-900/95 border border-slate-700 text-amber-400 shadow-lg shadow-black/20 hover:bg-slate-800 transition-colors"
-          title="Обрані монети"
+          className="p-2 rounded-xl bg-slate-900/95 border border-slate-700 text-amber-400 shadow-lg shadow-black/20 hover:bg-slate-800 transition-colors relative"
+          title={isGuest ? 'Обрані монети (тільки для зареєстрованих)' : 'Обрані монети'}
           aria-label="Відкрити обрані монети"
         >
           <Bookmark className="w-4 h-4" />
+          {isGuest && (
+            <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-slate-800 border border-slate-700 text-amber-400 flex items-center justify-center">
+              <Lock className="w-2 h-2" />
+            </span>
+          )}
         </button>
       </div>
 
@@ -799,6 +826,42 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
         </div>
       )}
 
+      {/* Guest Mode Informational Banner */}
+      {isGuest && (
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-cyan-500/30 shadow-lg shadow-cyan-950/20 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shrink-0">
+              <Lock className="w-4 h-4" />
+            </div>
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-white text-xs sm:text-sm">Гостьовий доступ до Скрінера</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40">
+                  Тільки перегляд списку
+                </span>
+              </div>
+              <p className="text-slate-300 text-[11px] sm:text-xs leading-relaxed">
+                Вам доступний перегляд списку монет, котирувань та аналітичних фільтрів. Щоб відкривати <strong>графіки</strong>, налаштовувати <strong>сповіщення в Telegram</strong> та використовувати <strong>лінковку з MetaScalp</strong>, увійдіть або зареєструйтесь.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+            <button
+              onClick={() => onOpenAuthModal?.('signin', 'general')}
+              className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition-colors cursor-pointer text-xs"
+            >
+              Увійти
+            </button>
+            <button
+              onClick={() => onOpenAuthModal?.('signup', 'general')}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold transition-all shadow-sm shadow-cyan-500/20 cursor-pointer text-xs"
+            >
+              Реєстрація
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Loading Skeleton */}
       {isLoading && coins.length === 0 ? (
         <div className="space-y-2">
@@ -917,6 +980,11 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                   <tr
                     key={`${coin.exchange}-${coin.symbol}-${coin.marketType}-${index}`}
                     onClick={() => handleCoinClick(coin)}
+                    title={
+                      isGuest
+                        ? 'Гостьовий режим: перегляд списку монет (для відкриття графіку потрібна реєстрація)'
+                        : 'Клікніть, щоб відкрити графік та детальний аналіз'
+                    }
                     className="hover:bg-slate-800/40 cursor-pointer transition-colors group"
                   >
                     {/* Symbol & Exchange */}
@@ -925,6 +993,10 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            if (isGuest) {
+                              onOpenAuthModal?.('signin', 'general');
+                              return;
+                            }
                             onToggleWatchlist(coin.symbol);
                           }}
                           className={`p-1 rounded transition-colors ${
@@ -932,7 +1004,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                               ? 'text-amber-400 fill-amber-400'
                               : 'text-slate-600 hover:text-slate-400'
                           }`}
-                          title={isWatchlisted ? 'Видалити з обраного' : 'Додати в обране'}
+                          title={isGuest ? 'Додати в обране (доступно після реєстрації)' : isWatchlisted ? 'Видалити з обраного' : 'Додати в обране'}
                         >
                           <Bookmark className={`w-3.5 h-3.5 ${isWatchlisted ? 'fill-amber-400' : ''}`} />
                         </button>
@@ -943,6 +1015,16 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                               {coin.baseAsset}
                             </span>
                             <span className="text-[10px] text-slate-500">/USDT</span>
+
+                            {isGuest && (
+                              <span
+                                className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] bg-slate-800/80 text-slate-400 font-sans border border-slate-700/60"
+                                title="Графік доступний після реєстрації"
+                              >
+                                <Lock className="w-2.5 h-2.5 text-slate-400" />
+                                <span className="hidden lg:inline text-[8.5px]">графік</span>
+                              </span>
+                            )}
 
                             {/* Badges for Hot / High / Low */}
                             {coin.isActiveCoin && (
@@ -991,35 +1073,62 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                           {onSendMetaScalp && (
                             <button
                               onClick={(e) => handleSendMetaScalpClick(e, coin)}
-                              className="p-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 transition-colors"
-                              title={`Відкрити в MetaScalp (${metaScalpBinding})`}
+                              className={`p-1 rounded-lg transition-colors relative ${
+                                isGuest
+                                  ? 'bg-slate-800/80 text-slate-400 hover:text-amber-300 hover:bg-slate-800'
+                                  : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300'
+                              }`}
+                              title={isGuest ? 'Лінковка з MetaScalp (тільки для зареєстрованих)' : `Відкрити в MetaScalp (${metaScalpBinding})`}
                             >
                               <Zap className="w-3 h-3" />
+                              {isGuest && (
+                                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-slate-700 text-amber-400 flex items-center justify-center">
+                                  <Lock className="w-1.5 h-1.5" />
+                                </span>
+                              )}
                             </button>
                           )}
 
                           <button
                             onClick={(e) => handleAlertClick(e, coin)}
-                            className="p-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 transition-colors"
-                            title="Встановити сповіщення в Telegram"
+                            className={`p-1 rounded-lg transition-colors relative ${
+                              isGuest
+                                ? 'bg-slate-800/80 text-slate-400 hover:text-sky-300 hover:bg-slate-800'
+                                : 'bg-sky-500/10 hover:bg-sky-500/20 text-sky-300'
+                            }`}
+                            title={isGuest ? 'Telegram сповіщення (тільки для зареєстрованих)' : 'Встановити сповіщення в Telegram'}
                           >
                             <Send className="w-3 h-3" />
+                            {isGuest && (
+                              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-slate-700 text-sky-400 flex items-center justify-center">
+                                <Lock className="w-1.5 h-1.5" />
+                              </span>
+                            )}
                           </button>
 
                           <button
                             onClick={(e) => handleSurveillanceToggle(e, coin)}
-                            className={`p-1 rounded-lg transition-colors cursor-pointer ${
-                              isCoinMonitored(coin.symbol, coin.exchange)
+                            className={`p-1 rounded-lg transition-colors cursor-pointer relative ${
+                              isGuest
+                                ? 'bg-slate-800/80 text-slate-400 hover:text-violet-300 hover:bg-slate-800'
+                                : isCoinMonitored(coin.symbol, coin.exchange)
                                 ? 'bg-violet-500/25 text-violet-300 border border-violet-500/40'
                                 : 'bg-violet-500/10 hover:bg-violet-500/20 text-violet-300/70 hover:text-violet-200'
                             }`}
                             title={
-                              isCoinMonitored(coin.symbol, coin.exchange)
+                              isGuest
+                                ? 'Системний нагляд (тільки для зареєстрованих)'
+                                : isCoinMonitored(coin.symbol, coin.exchange)
                                 ? 'Монета на системному нагляді (Натисніть щоб зняти)'
                                 : 'Взяти монету на системний нагляд'
                             }
                           >
-                            <Radar className={`w-3 h-3 ${isCoinMonitored(coin.symbol, coin.exchange) ? 'animate-pulse' : ''}`} />
+                            <Radar className={`w-3 h-3 ${!isGuest && isCoinMonitored(coin.symbol, coin.exchange) ? 'animate-pulse' : ''}`} />
+                            {isGuest && (
+                              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-slate-700 text-violet-400 flex items-center justify-center">
+                                <Lock className="w-1.5 h-1.5" />
+                              </span>
+                            )}
                           </button>
                         </div>
                       </div>
@@ -1120,6 +1229,11 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
               <div
                 key={`${coin.exchange}-${coin.symbol}-${coin.marketType}-${index}`}
                 onClick={() => handleCoinClick(coin)}
+                title={
+                  isGuest
+                    ? 'Гостьовий режим: перегляд монети (для відкриття графіку потрібна реєстрація)'
+                    : 'Клікніть, щоб відкрити графік та детальний аналіз'
+                }
                 className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 hover:border-slate-700 backdrop-blur-sm transition-all hover:shadow-lg hover:shadow-cyan-950/20 cursor-pointer flex flex-col justify-between space-y-3 group"
               >
                 {/* Card Top: Symbol, exchange, bookmark */}
@@ -1130,6 +1244,14 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                         {coin.baseAsset}
                       </span>
                       <span className="text-xs text-slate-500 font-mono">/USDT</span>
+                      {isGuest && (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[8.5px] bg-slate-800/80 text-slate-400 font-sans border border-slate-700/60"
+                          title="Графік доступний після реєстрації"
+                        >
+                          <Lock className="w-2.5 h-2.5 text-slate-400" />
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1">
                       <span
@@ -1156,6 +1278,10 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (isGuest) {
+                          onOpenAuthModal?.('signin', 'general');
+                          return;
+                        }
                         onToggleWatchlist(coin.symbol);
                       }}
                       className={`p-1.5 rounded-lg transition-colors ${
@@ -1163,6 +1289,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                           ? 'text-amber-400 bg-amber-500/10'
                           : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
                       }`}
+                      title={isGuest ? 'Додати в обране (доступно після реєстрації)' : isWatchlisted ? 'Видалити з обраного' : 'Додати в обране'}
                     >
                       <Bookmark className={`w-4 h-4 ${isWatchlisted ? 'fill-amber-400' : ''}`} />
                     </button>
@@ -1247,33 +1374,60 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                     {onSendMetaScalp && (
                       <button
                         onClick={(e) => handleSendMetaScalpClick(e, coin)}
-                        className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 transition-colors"
-                        title="Відкрити в MetaScalp"
+                        className={`p-1.5 rounded-lg transition-colors relative border ${
+                          isGuest
+                            ? 'bg-slate-800/80 text-slate-400 hover:text-amber-300 hover:bg-slate-800 border-slate-700/60'
+                            : 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
+                        }`}
+                        title={isGuest ? 'Лінковка з MetaScalp (тільки для зареєстрованих)' : 'Відкрити в MetaScalp'}
                       >
                         <Zap className="w-3.5 h-3.5" />
+                        {isGuest && (
+                          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-slate-700 text-amber-400 flex items-center justify-center">
+                            <Lock className="w-1.5 h-1.5" />
+                          </span>
+                        )}
                       </button>
                     )}
                     <button
                       onClick={(e) => handleAlertClick(e, coin)}
-                      className="p-1.5 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 transition-colors"
-                      title="Telegram сповіщення"
+                      className={`p-1.5 rounded-lg transition-colors relative border ${
+                        isGuest
+                          ? 'bg-slate-800/80 text-slate-400 hover:text-sky-300 hover:bg-slate-800 border-slate-700/60'
+                          : 'bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/30 text-sky-300'
+                      }`}
+                      title={isGuest ? 'Telegram сповіщення (тільки для зареєстрованих)' : 'Telegram сповіщення'}
                     >
                       <Send className="w-3.5 h-3.5" />
+                      {isGuest && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-slate-700 text-sky-400 flex items-center justify-center">
+                          <Lock className="w-1.5 h-1.5" />
+                        </span>
+                      )}
                     </button>
                     <button
                       onClick={(e) => handleSurveillanceToggle(e, coin)}
-                      className={`p-1.5 rounded-lg transition-colors cursor-pointer border ${
-                        isCoinMonitored(coin.symbol, coin.exchange)
+                      className={`p-1.5 rounded-lg transition-colors cursor-pointer border relative ${
+                        isGuest
+                          ? 'bg-slate-800/80 text-slate-400 hover:text-violet-300 hover:bg-slate-800 border-slate-700/60'
+                          : isCoinMonitored(coin.symbol, coin.exchange)
                           ? 'bg-violet-500/25 text-violet-300 border-violet-500/40'
                           : 'bg-violet-500/10 hover:bg-violet-500/20 border-violet-500/30 text-violet-300/70 hover:text-violet-200'
                       }`}
                       title={
-                        isCoinMonitored(coin.symbol, coin.exchange)
+                        isGuest
+                          ? 'Системний нагляд (тільки для зареєстрованих)'
+                          : isCoinMonitored(coin.symbol, coin.exchange)
                           ? 'Монета на системному нагляді (Натисніть щоб зняти)'
                           : 'Взяти монету на системний нагляд'
                       }
                     >
-                      <Radar className={`w-3.5 h-3.5 ${isCoinMonitored(coin.symbol, coin.exchange) ? 'animate-pulse' : ''}`} />
+                      <Radar className={`w-3.5 h-3.5 ${!isGuest && isCoinMonitored(coin.symbol, coin.exchange) ? 'animate-pulse' : ''}`} />
+                      {isGuest && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-slate-700 text-violet-400 flex items-center justify-center">
+                          <Lock className="w-1.5 h-1.5" />
+                        </span>
+                      )}
                     </button>
                     <a
                       href={coin.exchangeUrl}

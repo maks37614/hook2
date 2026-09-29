@@ -178,7 +178,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   hideSymbolAndPrice = false,
   onLiveStatusChange,
 }) => {
-  const { profile } = useAuth();
+  const { user, profile, updateProfileData } = useAuth();
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -1112,9 +1112,20 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
                     key={item.key}
                     type="button"
                     onClick={() => {
-                      if (item.key === 'entry') setShowEntryLevel((value) => !value);
-                      if (item.key === 'target') setShowTargetLevel((value) => !value);
-                      if (item.key === 'stop') setShowStopLevel((value) => !value);
+                      let nextEntry = showEntryLevel;
+                      let nextTarget = showTargetLevel;
+                      let nextStop = showStopLevel;
+                      if (item.key === 'entry') nextEntry = !showEntryLevel;
+                      if (item.key === 'target') nextTarget = !showTargetLevel;
+                      if (item.key === 'stop') nextStop = !showStopLevel;
+                      setShowEntryLevel(nextEntry);
+                      setShowTargetLevel(nextTarget);
+                      setShowStopLevel(nextStop);
+                      if (user) {
+                        updateProfileData({
+                          chartLabelSettings: { entry: nextEntry, target: nextTarget, stop: nextStop },
+                        }).catch(() => {});
+                      }
                     }}
                     className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md border transition-colors cursor-pointer shrink-0 ${
                       item.enabled ? item.activeClass : 'bg-slate-800 text-slate-400 border-slate-700'

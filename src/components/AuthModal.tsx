@@ -23,12 +23,15 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { AUTHOR_TELEGRAM_CHANNEL_URL, AUTHOR_TELEGRAM_USERNAME } from '../utils/accessCodes';
 
+export type AuthPromptReason = 'chart' | 'alerts' | 'linking' | 'general' | null;
+
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialMode?: 'signin' | 'signup';
   onSuccess?: () => void;
   isRestrictedMode?: boolean; // When true, modal cannot be closed by unregistered user
+  promptReason?: AuthPromptReason;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -37,6 +40,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'signin',
   onSuccess,
   isRestrictedMode = false,
+  promptReason = null,
 }) => {
   const { user, signInWithGoogle, signInWithEmail, registerWithEmail, authError, authErrorCode, clearAuthError } = useAuth();
 
@@ -50,6 +54,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
 
+  React.useEffect(() => {
+    if (isOpen) {
+      setMode(initialMode);
+      clearAuthError();
+      setValidationError(null);
+    }
+  }, [isOpen, initialMode]);
+
   if (!isOpen) return null;
 
   const handleModeSwitch = (newMode: 'signin' | 'signup') => {
@@ -62,8 +74,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsSubmitting(true);
     clearAuthError();
     setValidationError(null);
+
+    if (mode === 'signup') {
+      const cleanCode = inviteCode.trim();
+      if (!cleanCode) {
+        setValidationError('Будь ласка, введіть спеціальний код доступу з Telegram для реєстрації через Gmail');
+        setIsSubmitting(false);
+        return;
+      }
+    }
+
     try {
-      await signInWithGoogle();
+      await signInWithGoogle(inviteCode.trim() || undefined, mode === 'signup');
       onSuccess?.();
       onClose();
     } catch {
@@ -182,6 +204,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Form Body */}
         <div className="p-5 sm:p-6 space-y-4 overflow-y-auto">
+          {/* Guest restriction reason alert */}
+          {promptReason && (
+            <div className="p-3.5 rounded-xl bg-gradient-to-r from-amber-950/40 via-amber-900/20 to-slate-900 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5 shadow-sm">
+              <Lock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-bold text-amber-300 text-xs">
+                  {promptReason === 'chart'
+                    ? 'Графіки доступні зареєстрованим користувачам'
+                    : promptReason === 'alerts'
+                    ? 'Сповіщення доступні зареєстрованим користувачам'
+                    : promptReason === 'linking'
+                    ? 'Лінковка MetaScalp доступна після реєстрації'
+                    : 'Доступ для зареєстрованих користувачів'}
+                </div>
+                <div className="text-[11px] text-amber-200/80 leading-relaxed">
+                  {promptReason === 'chart'
+                    ? 'Гостям дозволено перегляд списку монет. Для відкриття інтерактивного графіку, технічного аналізу та стакана увійдіть або зареєструйтесь.'
+                    : promptReason === 'alerts'
+                    ? 'Гостям дозволено перегляд котирувань. Для налаштування сповіщень та цінових алертів увійдіть або створіть акаунт.'
+                    : promptReason === 'linking'
+                    ? 'Гостям дозволено перегляд списку монет. Для швидкої лінковки стакана та графіку в MetaScalp увійдіть або зареєструйтесь.'
+                    : 'Гостям дозволено перегляд списку монет на сторінці Скрінер. Для доступу до графіків, сповіщень, лінковки та терміналу увійдіть в акаунт.'}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Telegram Channel CTA Banner for Invite Code */}
           {mode === 'signup' && (
             <div className="p-3.5 rounded-xl bg-gradient-to-r from-sky-950/40 to-slate-950 border border-sky-500/30 space-y-2 text-xs">
@@ -192,7 +241,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     Де взяти спеціальний код доступу?
                   </span>
                   <p className="text-[11px] text-slate-300 leading-relaxed">
-                    Коди для реєстрації видаються виключно в офіційному <strong>Telegram каналі автора</strong>. Реєстрація без підтвердження пошти — одразу доступ до всіх функцій!
+                    Коди для реєстрації видаються виключно в офіційному <strong>Telegram каналі автора</strong>. Реєстрація через Gmail або пошту за кодом — без підтвердження пошти, миттєвий доступ до всіх функцій!
                   </p>
                 </div>
               </div>
@@ -203,43 +252,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 className="w-full py-2 px-3 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-sm shadow-sky-500/20"
               >
                 <Send className="w-3.5 h-3.5" />
-                <span>Отримати код у Telegram каналі автора</span>
+                <span>Отримати код у Telegram каналі автора ({AUTHOR_TELEGRAM_USERNAME})</span>
                 <ExternalLink className="w-3 h-3 ml-auto opacity-75" />
               </a>
             </div>
           )}
 
-          {/* Featured 1-Click Google Sign In */}
-          <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-            <button
-              type="button"
-              onClick={handleGoogleAuth}
-              disabled={isSubmitting}
-              className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 text-xs font-bold transition-all flex items-center justify-center gap-2.5 shadow-md shadow-white/5 disabled:opacity-50 cursor-pointer"
-            >
-              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-              <span>
-                {mode === 'signin' ? 'Швидкий вхід через Google' : 'Зареєструватися через Google'}
-              </span>
-            </button>
-          </div>
+          {/* Standard error notification */}
+          {displayedError && !isOperationNotAllowed && (
+            <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2 animate-in fade-in">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>{displayedError}</span>
+            </div>
+          )}
 
           {/* Operation Not Allowed Help Card if email provider is disabled */}
           {isOperationNotAllowed && (
@@ -258,20 +283,111 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          {/* Standard error notification */}
-          {displayedError && !isOperationNotAllowed && (
-            <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2 animate-in fade-in">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{displayedError}</span>
+          {/* SIGNUP MODE: Invite code required FIRST */}
+          {mode === 'signup' && (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-amber-300 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1">
+                    <Key className="w-3.5 h-3.5 text-amber-400" />
+                    Спеціальний код доступу з Telegram *
+                  </span>
+                  <span className="text-[10px] text-amber-400/80 font-normal">
+                    Обов'язково
+                  </span>
+                </label>
+                <div className="relative">
+                  <Key className="w-4 h-4 text-amber-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                    placeholder="Наприклад: SCALPER2025"
+                    className="w-full bg-slate-950 border-2 border-amber-500/50 focus:border-amber-400 rounded-xl pl-9 pr-3 py-2 text-xs text-amber-200 font-mono font-bold tracking-wider placeholder:text-slate-600 focus:outline-none transition-colors shadow-inner"
+                  />
+                </div>
+              </div>
+
+              {/* 1-Click Registration with Gmail using the Special Code */}
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <button
+                  type="button"
+                  onClick={handleGoogleAuth}
+                  disabled={isSubmitting}
+                  className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 text-xs font-bold transition-all flex items-center justify-center gap-2.5 shadow-md shadow-white/5 disabled:opacity-50 cursor-pointer"
+                >
+                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                  <span>Зареєструватися через Gmail (за кодом)</span>
+                </button>
+              </div>
+
+              <div className="relative flex items-center justify-center my-2">
+                <div className="border-t border-slate-800 w-full" />
+                <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium uppercase tracking-wider absolute">
+                  або реєстрація через пароль
+                </span>
+              </div>
             </div>
           )}
 
-          <div className="relative flex items-center justify-center my-2">
-            <div className="border-t border-slate-800 w-full" />
-            <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium uppercase tracking-wider absolute">
-              або електронна пошта
-            </span>
-          </div>
+          {/* SIGNIN MODE: Google Sign In */}
+          {mode === 'signin' && (
+            <>
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <button
+                  type="button"
+                  onClick={handleGoogleAuth}
+                  disabled={isSubmitting}
+                  className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 text-xs font-bold transition-all flex items-center justify-center gap-2.5 shadow-md shadow-white/5 disabled:opacity-50 cursor-pointer"
+                >
+                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                  <span>Швидкий вхід через Google</span>
+                </button>
+              </div>
+
+              <div className="relative flex items-center justify-center my-2">
+                <div className="border-t border-slate-800 w-full" />
+                <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium uppercase tracking-wider absolute">
+                  або вхід через email
+                </span>
+              </div>
+            </>
+          )}
 
           {/* Email & Password Form */}
           <form onSubmit={handleSubmit} className="space-y-3">

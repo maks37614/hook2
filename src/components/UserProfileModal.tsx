@@ -49,6 +49,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [defaultTimeframe, setDefaultTimeframe] = useState<Timeframe>('1h');
   const [soundAlertsEnabled, setSoundAlertsEnabled] = useState(true);
 
+  // Exchange API credentials for in-DOM trading
+  const [binanceApiKey, setBinanceApiKey] = useState('');
+  const [binanceApiSecret, setBinanceApiSecret] = useState('');
+  const [binanceIsTestnet, setBinanceIsTestnet] = useState(false);
+  const [bybitApiKey, setBybitApiKey] = useState('');
+  const [bybitApiSecret, setBybitApiSecret] = useState('');
+  const [bybitIsTestnet, setBybitIsTestnet] = useState(false);
+  const [showApiKeys, setShowApiKeys] = useState(false);
+
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -67,6 +76,21 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       setDefaultMarketType(profile.defaultMarketType || 'all');
       setDefaultTimeframe(profile.defaultTimeframe || '1h');
       setSoundAlertsEnabled(profile.soundAlertsEnabled !== undefined ? profile.soundAlertsEnabled : true);
+
+      if (profile.exchangeApiCredentials && Array.isArray(profile.exchangeApiCredentials)) {
+        const binance = profile.exchangeApiCredentials.find((c) => c.exchange === 'binance');
+        if (binance) {
+          setBinanceApiKey(binance.apiKey || '');
+          setBinanceApiSecret(binance.apiSecret || '');
+          setBinanceIsTestnet(Boolean(binance.isTestnet));
+        }
+        const bybit = profile.exchangeApiCredentials.find((c) => c.exchange === 'bybit');
+        if (bybit) {
+          setBybitApiKey(bybit.apiKey || '');
+          setBybitApiSecret(bybit.apiSecret || '');
+          setBybitIsTestnet(Boolean(bybit.isTestnet));
+        }
+      }
     }
   }, [profile, user]);
 
@@ -79,6 +103,26 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     setSaveSuccess(false);
 
     try {
+      const creds: any[] = [];
+      if (binanceApiKey.trim()) {
+        creds.push({
+          exchange: 'binance',
+          apiKey: binanceApiKey.trim(),
+          apiSecret: binanceApiSecret.trim(),
+          isTestnet: binanceIsTestnet,
+          marketType: 'futures',
+        });
+      }
+      if (bybitApiKey.trim()) {
+        creds.push({
+          exchange: 'bybit',
+          apiKey: bybitApiKey.trim(),
+          apiSecret: bybitApiSecret.trim(),
+          isTestnet: bybitIsTestnet,
+          marketType: 'futures',
+        });
+      }
+
       await updateProfileData({
         displayName: displayName.trim() || user.email?.split('@')[0] || 'Користувач',
         telegramBotToken: telegramBotToken.trim(),
@@ -87,7 +131,12 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         defaultMarketType,
         defaultTimeframe,
         soundAlertsEnabled,
+        exchangeApiCredentials: creds,
       });
+
+      try {
+        localStorage.setItem(`signalhook_exchange_creds_${user.uid}`, JSON.stringify(creds));
+      } catch {}
 
       saveStoredPreferences({
         defaultExchange,
@@ -546,6 +595,95 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   onChange={(e) => setSoundAlertsEnabled(e.target.checked)}
                   className="w-4 h-4 rounded text-cyan-500 focus:ring-0 bg-slate-900 border-slate-700 cursor-pointer"
                 />
+              </div>
+            </div>
+
+            {/* Section 4: Exchange API Keys for DOM Scalping */}
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-amber-400" />
+                  <span>API ключі для торгівлі в стакані (Особисті)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowApiKeys(!showApiKeys)}
+                  className="text-[11px] text-slate-400 hover:text-white"
+                >
+                  {showApiKeys ? 'Приховати секрети' : 'Показати'}
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Ключі зберігаються виключно у вашому захищеному профілі та використовуються для виставлення лімітних ордерів прямо зі стакана (Scalper DOM).
+              </p>
+
+              {/* Binance */}
+              <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>Binance Futures / Spot</span>
+                  </span>
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={binanceIsTestnet}
+                      onChange={(e) => setBinanceIsTestnet(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded text-amber-500"
+                    />
+                    <span>Testnet</span>
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={binanceApiKey}
+                    onChange={(e) => setBinanceApiKey(e.target.value)}
+                    placeholder="Binance API Key"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
+                  />
+                  <input
+                    type={showApiKeys ? 'text' : 'password'}
+                    value={binanceApiSecret}
+                    onChange={(e) => setBinanceApiSecret(e.target.value)}
+                    placeholder="Binance API Secret"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+              </div>
+
+              {/* Bybit */}
+              <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>Bybit V5 (Unified)</span>
+                  </span>
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={bybitIsTestnet}
+                      onChange={(e) => setBybitIsTestnet(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded text-amber-500"
+                    />
+                    <span>Testnet</span>
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={bybitApiKey}
+                    onChange={(e) => setBybitApiKey(e.target.value)}
+                    placeholder="Bybit API Key"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
+                  />
+                  <input
+                    type={showApiKeys ? 'text' : 'password'}
+                    value={bybitApiSecret}
+                    onChange={(e) => setBybitApiSecret(e.target.value)}
+                    placeholder="Bybit API Secret"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
               </div>
             </div>
 

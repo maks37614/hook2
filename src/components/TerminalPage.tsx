@@ -33,6 +33,7 @@ import { AddChartModal } from './terminal/AddChartModal';
 import { TerminalSettingsDrawer } from './terminal/TerminalSettingsDrawer';
 import { formatCryptoPrice, formatVolume } from '../utils/formatters';
 import { getStoredPreferences, useAppPreferences } from '../utils/userPreferences';
+import { useAuth } from '../context/AuthContext';
 
 interface TerminalPageProps {
   coins: ScannedCoin[];
@@ -68,19 +69,23 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
   onReturnToPatterns,
 }) => {
   const { preferences } = useAppPreferences();
+  const { user, profile, updateProfileData } = useAuth();
 
-  // Initialize blocks from localStorage or default to BTCUSDT with preferences
+  // Initialize blocks from user profile or scoped localStorage
   const [blocks, setBlocks] = useState<TerminalChartBlock[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_BLOCKS_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((b: any) => ({ ...b, mode: 'tradingview' as const }));
-        }
+    if (user) {
+      if (profile?.terminalSettings?.blocks && Array.isArray(profile.terminalSettings.blocks) && profile.terminalSettings.blocks.length > 0) {
+        return profile.terminalSettings.blocks.map((b: any) => ({ ...b, mode: 'tradingview' as const }));
       }
-    } catch (e) {
-      console.error('Failed to load saved terminal blocks:', e);
+      try {
+        const saved = localStorage.getItem(`${STORAGE_BLOCKS_KEY}_${user.uid}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed.map((b: any) => ({ ...b, mode: 'tradingview' as const }));
+          }
+        }
+      } catch (e) {}
     }
     const prefs = getStoredPreferences();
     const defaultEx = prefs.defaultExchange === 'all' ? 'binance' : prefs.defaultExchange;
@@ -100,17 +105,41 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
     ];
   });
 
-  // Workspace configuration
+  // Workspace configuration (scoped per user)
   const [config, setConfig] = useState<TerminalWorkspaceConfig>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_CONFIG_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return { ...DEFAULT_CONFIG, ...parsed };
-      }
-    } catch (e) {}
+    if (user && profile?.terminalSettings) {
+      return {
+        ...DEFAULT_CONFIG,
+        columns: profile.terminalSettings.columns || 2,
+        blockHeight: (profile.terminalSettings.blockHeight as any) || 'medium',
+      };
+    }
+    if (user) {
+      try {
+        const saved = localStorage.getItem(`${STORAGE_CONFIG_KEY}_${user.uid}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          return { ...DEFAULT_CONFIG, ...parsed };
+        }
+      } catch (e) {}
+    }
     return DEFAULT_CONFIG;
   });
+
+  // Sync profile terminalSettings changes
+  useEffect(() => {
+    if (!user) return;
+    if (profile?.terminalSettings?.blocks && Array.isArray(profile.terminalSettings.blocks) && profile.terminalSettings.blocks.length > 0) {
+      setBlocks(profile.terminalSettings.blocks.map((b: any) => ({ ...b, mode: 'tradingview' as const })));
+    }
+    if (profile?.terminalSettings?.columns) {
+      setConfig((prev) => ({
+        ...prev,
+        columns: (profile.terminalSettings?.columns as 1 | 2 | 3 | 4) || prev.columns,
+        blockHeight: (profile.terminalSettings?.blockHeight as any) || prev.blockHeight,
+      }));
+    }
+  }, [user?.uid, profile?.terminalSettings]);
 
   // Active coin for single-chart full view (matching FullscreenChartModal)
   const [activeCoin, setActiveCoin] = useState<ScannedCoin>(() => {
@@ -188,19 +217,35 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
     }
   }, [watchlist]);
 
-  // Save blocks to localStorage
+  // Save blocks to user-scoped storage and profile
   useEffect(() => {
+    if (!user) return;
     try {
-      localStorage.setItem(STORAGE_BLOCKS_KEY, JSON.stringify(blocks));
+      localStorage.setItem(`${STORAGE_BLOCKS_KEY}_${user.uid}`, JSON.stringify(blocks));
     } catch (e) {}
-  }, [blocks]);
+    updateProfileData({
+      terminalSettings: {
+        columns: config.columns,
+        blockHeight: (config.blockHeight as any) || 'medium',
+        blocks: blocks,
+      },
+    }).catch(() => {});
+  }, [blocks, user?.uid]);
 
-  // Save config to localStorage
+  // Save config to user-scoped storage and profile
   useEffect(() => {
+    if (!user) return;
     try {
-      localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify(config));
+      localStorage.setItem(`${STORAGE_CONFIG_KEY}_${user.uid}`, JSON.stringify(config));
     } catch (e) {}
-  }, [config]);
+    updateProfileData({
+      terminalSettings: {
+        columns: config.columns,
+        blockHeight: (config.blockHeight as any) || 'medium',
+        blocks: blocks,
+      },
+    }).catch(() => {});
+  }, [config, user?.uid]);
 
   // Browser fullscreen change listener
   useEffect(() => {
