@@ -185,6 +185,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastTickTimeRef = useRef<number>(0);
   const latestPriceRef = useRef<number | null>(null);
+  const currentCandleRef = useRef<{ time: number; open: number; high: number; low: number; close: number; volume?: number } | null>(null);
+  const rafIdRef = useRef<number | null>(null);
+  const pendingUiPriceRef = useRef<{ price: number; direction: 'up' | 'down' | 'neutral' } | null>(null);
+  const lastUiUpdateTimestampRef = useRef<number>(0);
   const klinesLengthRef = useRef<number>(klines.length);
   const hasInitiallyCenteredRef = useRef<boolean>(false);
   const prevSymbolRef = useRef<string>(symbol);
@@ -321,12 +325,20 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     };
   }, [symbol, timeframe, exchange, marketType, historyLimit, effectiveKlines.length]);
 
-  // Update latest price ref
+  // Update latest price ref and initialize active candle
   useEffect(() => {
     if (effectiveKlines.length > 0) {
-      const p = effectiveKlines[effectiveKlines.length - 1].close;
-      setCurrentPrice((prev) => prev ?? p);
-      latestPriceRef.current = p;
+      const last = effectiveKlines[effectiveKlines.length - 1];
+      setCurrentPrice((prev) => prev ?? last.close);
+      latestPriceRef.current = last.close;
+      currentCandleRef.current = {
+        time: last.time,
+        open: last.open,
+        high: last.high,
+        low: last.low,
+        close: last.close,
+        volume: last.volume,
+      };
     }
     klinesLengthRef.current = effectiveKlines.length;
   }, [effectiveKlines]);
@@ -377,10 +389,15 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     }
   }, []);
 
-  // Update current live candle and price
+  // Ultra-fast live tick and series update:
+  // 1. Candlestick series is updated directly on canvas with ZERO latency (bypassing React re-renders)
+  // 2. React UI state updates (badges, price numbers) are throttled via RAF (~12fps max)
+  // This completely eliminates CPU throttling and canvas stutter during high-frequency trade storms
   const handleLiveTick = useCallback(
     (candle: { time: number; open: number; high: number; low: number; close: number; volume?: number }, mode: 'ws' | 'rest') => {
       if (!candleSeriesRef.current) return;
+
+      currentCandleRef.current = candle;
 
       try {
         if (klinesLengthRef.current > 0) {
@@ -392,22 +409,54 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             close: candle.close,
           });
         }
+      } catch {
+        // Ignored
+      }
 
-        const prevPrice = latestPriceRef.current;
-        if (prevPrice !== null && candle.close !== prevPrice) {
-          setPriceDirection(candle.close > prevPrice ? 'up' : 'down');
-          setTickAnimation(true);
-          setTimeout(() => setTickAnimation(false), 500);
+      lastTickTimeRef.current = Date.now();
+      const prevPrice = latestPriceRef.current;
+      latestPriceRef.current = candle.close;
+
+      const direction: 'up' | 'down' | 'neutral' =
+        prevPrice !== null
+          ? candle.close > prevPrice
+            ? 'up'
+            : candle.close < prevPrice
+            ? 'down'
+            : 'neutral'
+          : 'neutral';
+
+      pendingUiPriceRef.current = { price: candle.close, direction };
+
+      const now = performance.now();
+      if (now - lastUiUpdateTimestampRef.current >= 80) {
+        lastUiUpdateTimestampRef.current = now;
+        const update = pendingUiPriceRef.current;
+        if (update) {
+          setCurrentPrice(update.price);
+          if (update.direction !== 'neutral') {
+            setPriceDirection(update.direction);
+          }
+          onLivePriceUpdate?.(update.price);
         }
-
-        latestPriceRef.current = candle.close;
-        setCurrentPrice(candle.close);
-        lastTickTimeRef.current = Date.now();
         setIsLiveConnected(true);
         setLiveMode(mode);
-        onLivePriceUpdate?.(candle.close);
-      } catch (err) {
-        // Ignored
+      } else if (!rafIdRef.current) {
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = null;
+          const uNow = performance.now();
+          if (uNow - lastUiUpdateTimestampRef.current >= 80 && pendingUiPriceRef.current) {
+            lastUiUpdateTimestampRef.current = uNow;
+            const update = pendingUiPriceRef.current;
+            setCurrentPrice(update.price);
+            if (update.direction !== 'neutral') {
+              setPriceDirection(update.direction);
+            }
+            onLivePriceUpdate?.(update.price);
+            setIsLiveConnected(true);
+            setLiveMode(mode);
+          }
+        });
       }
     },
     [onLivePriceUpdate]
@@ -468,6 +517,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         mouseWheel: true,
         pinch: true,
       },
+      kineticScroll: {
+        touch: true,
+        mouse: false,
+      },
     });
 
     const removeTvLogo = () => {
@@ -510,11 +563,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           const width = chartContainerRef.current.clientWidth;
           const height = chartContainerRef.current.clientHeight;
           if (width > 0 && height > 0) {
-            chartRef.current.applyOptions({ width, height });
-            chartRef.current.timeScale().fitContent();
+            chartRef.current.resize(width, height);
           }
         }
-      }, 60);
+      }, 50);
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
@@ -522,6 +574,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
     return () => {
       clearTimeout(resizeTimer);
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
       resizeObserver.disconnect();
       logoObserver.disconnect();
       chart.remove();
@@ -560,19 +616,12 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     if (savedChartParams?.visibleRange && totalBars > 0) {
       chartRef.current.timeScale().setVisibleLogicalRange(savedChartParams.visibleRange);
       hasInitiallyCenteredRef.current = true;
-    } else if (totalBars > 0) {
+    } else if (totalBars > 0 && !hasInitiallyCenteredRef.current) {
       hasInitiallyCenteredRef.current = true;
       centerChartOnScreen();
-      // Ensure executed after layout painting completes
-      setTimeout(() => {
+      requestAnimationFrame(() => {
         centerChartOnScreen();
-      }, 50);
-      setTimeout(() => {
-        centerChartOnScreen();
-      }, 200);
-      setTimeout(() => {
-        centerChartOnScreen();
-      }, 500);
+      });
     }
 
     // Remove existing price lines
@@ -693,140 +742,229 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     }
   }, [effectiveKlines, formation, customMarkers, showEntryLevel, showTargetLevel, showStopLevel, savedChartParams]);
 
-  // Real-Time Live Stream Connection (WebSocket + Fast REST Poller fallback)
+  // Real-Time Live Stream Connection (Combined Trade + Kline WebSocket with fast failover)
   useEffect(() => {
     let isDisposed = false;
     let ws: WebSocket | null = null;
     let pollInterval: any = null;
+    let reconnectTimer: any = null;
+    let pingInterval: any = null;
 
     const cleanSymbol = symbol.toUpperCase().replace('/', '').trim();
 
-    // 1. Setup WebSocket
-    try {
-      if (exchange === 'binance') {
-        const interval = toBinanceWsInterval(timeframe);
-        const wsUrl =
-          marketType === 'futures'
-            ? `wss://fstream.binance.com/ws/${cleanSymbol.toLowerCase()}@kline_${interval}`
-            : `wss://stream.binance.com:9443/ws/${cleanSymbol.toLowerCase()}@kline_${interval}`;
+    const connectWs = () => {
+      if (isDisposed) return;
 
-        ws = new WebSocket(wsUrl);
+      try {
+        if (exchange === 'binance') {
+          const interval = toBinanceWsInterval(timeframe);
+          const baseWs =
+            marketType === 'futures'
+              ? 'wss://fstream.binance.com/stream?streams='
+              : 'wss://stream.binance.com:9443/stream?streams=';
+          const symLower = cleanSymbol.toLowerCase();
+          // Combined stream: real-time klines + millisecond aggregated trades for 0 latency price ticks
+          const wsUrl = `${baseWs}${symLower}@kline_${interval}/${symLower}@aggTrade`;
 
-        ws.onmessage = (event) => {
-          if (isDisposed) return;
-          try {
-            const data = JSON.parse(event.data);
-            if (data.e === 'kline' && data.k) {
-              const k = data.k;
-              handleLiveTick(
-                {
-                  time: Math.floor(k.t / 1000),
-                  open: parseFloat(k.o),
-                  high: parseFloat(k.h),
-                  low: parseFloat(k.l),
-                  close: parseFloat(k.c),
-                  volume: parseFloat(k.v),
-                },
-                'ws'
-              );
-            }
-          } catch {
-            // Ignored
-          }
-        };
+          ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => {
-          if (!isDisposed) {
-            setIsLiveConnected(true);
-            setLiveMode('ws');
-          }
-        };
+          ws.onmessage = (event) => {
+            if (isDisposed) return;
+            try {
+              const raw = JSON.parse(event.data);
+              const stream = raw.stream || '';
+              const payload = raw.data || raw;
 
-        ws.onerror = () => {
-          // Handled smoothly by fallback poller
-        };
-      } else {
-        // Bybit
-        const wsUrl =
-          marketType === 'futures'
-            ? 'wss://stream.bybit.com/v5/public/linear'
-            : 'wss://stream.bybit.com/v5/public/spot';
+              if (stream.includes('@kline') || payload.e === 'kline') {
+                const k = payload.k || payload;
+                const candleTime = Math.floor(k.t / 1000);
+                const open = parseFloat(k.o);
+                const high = parseFloat(k.h);
+                const low = parseFloat(k.l);
+                const close = parseFloat(k.c);
+                const volume = parseFloat(k.v);
 
-        ws = new WebSocket(wsUrl);
-        let pingInterval: any = null;
-
-        ws.onopen = () => {
-          if (isDisposed) return;
-          setIsLiveConnected(true);
-          setLiveMode('ws');
-          try {
-            const interval = toBybitWsInterval(timeframe);
-            ws?.send(
-              JSON.stringify({
-                op: 'subscribe',
-                args: [`kline.${interval}.${cleanSymbol}`],
-              })
-            );
-            // Send ping every 20 seconds to keep Bybit connection alive
-            pingInterval = setInterval(() => {
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ op: 'ping' }));
-              }
-            }, 20000);
-          } catch {
-            // Ignored
-          }
-        };
-
-        ws.onmessage = (event) => {
-          if (isDisposed) return;
-          try {
-            const data = JSON.parse(event.data);
-            if (data.topic && data.topic.startsWith('kline')) {
-              const rawData = data.data;
-              const items = Array.isArray(rawData) ? rawData : [rawData];
-              if (items.length > 0 && items[0]) {
-                const item = items[0];
-                const ts = parseInt(item.start || item.timestamp || item.t || Date.now(), 10);
-                const open = parseFloat(item.open || item.o || 0);
-                const high = parseFloat(item.high || item.h || 0);
-                const low = parseFloat(item.low || item.l || 0);
-                const close = parseFloat(item.close || item.c || 0);
-                const volume = parseFloat(item.volume || item.v || 0);
-
-                if (close > 0) {
-                  handleLiveTick(
-                    {
-                      time: Math.floor(ts / 1000),
-                      open,
-                      high,
-                      low,
-                      close,
-                      volume,
-                    },
-                    'ws'
-                  );
+                handleLiveTick(
+                  {
+                    time: candleTime,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                  },
+                  'ws'
+                );
+              } else if (stream.includes('@aggTrade') || payload.e === 'aggTrade') {
+                // Immediate millisecond trade execution tick
+                const price = parseFloat(payload.p);
+                const qty = parseFloat(payload.q || 0);
+                if (price > 0 && currentCandleRef.current) {
+                  const cur = currentCandleRef.current;
+                  const updated = {
+                    ...cur,
+                    close: price,
+                    high: Math.max(cur.high, price),
+                    low: Math.min(cur.low, price),
+                    volume: (cur.volume || 0) + qty,
+                  };
+                  handleLiveTick(updated, 'ws');
                 }
               }
+            } catch {
+              // Ignored
             }
-          } catch {
-            // Ignored
-          }
-        };
+          };
 
-        ws.onclose = () => {
-          if (pingInterval) clearInterval(pingInterval);
-        };
+          ws.onopen = () => {
+            if (!isDisposed) {
+              setIsLiveConnected(true);
+              setLiveMode('ws');
+            }
+          };
+
+          ws.onclose = () => {
+            if (!isDisposed && !reconnectTimer) {
+              setIsLiveConnected(false);
+              reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connectWs();
+              }, 800);
+            }
+          };
+
+          ws.onerror = () => {
+            try {
+              ws?.close();
+            } catch {}
+          };
+        } else {
+          // Bybit
+          const wsUrl =
+            marketType === 'futures'
+              ? 'wss://stream.bybit.com/v5/public/linear'
+              : 'wss://stream.bybit.com/v5/public/spot';
+
+          ws = new WebSocket(wsUrl);
+
+          ws.onopen = () => {
+            if (isDisposed) return;
+            setIsLiveConnected(true);
+            setLiveMode('ws');
+            try {
+              const interval = toBybitWsInterval(timeframe);
+              ws?.send(
+                JSON.stringify({
+                  op: 'subscribe',
+                  args: [
+                    `kline.${interval}.${cleanSymbol}`,
+                    `publicTrade.${cleanSymbol}`,
+                  ],
+                })
+              );
+              // Send ping every 20 seconds to keep Bybit connection alive
+              if (pingInterval) clearInterval(pingInterval);
+              pingInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ op: 'ping' }));
+                }
+              }, 20000);
+            } catch {
+              // Ignored
+            }
+          };
+
+          ws.onmessage = (event) => {
+            if (isDisposed) return;
+            try {
+              const data = JSON.parse(event.data);
+              if (data.topic && data.topic.startsWith('kline')) {
+                const rawData = data.data;
+                const items = Array.isArray(rawData) ? rawData : [rawData];
+                if (items.length > 0 && items[0]) {
+                  const item = items[0];
+                  const ts = parseInt(item.start || item.timestamp || item.t || Date.now(), 10);
+                  const open = parseFloat(item.open || item.o || 0);
+                  const high = parseFloat(item.high || item.h || 0);
+                  const low = parseFloat(item.low || item.l || 0);
+                  const close = parseFloat(item.close || item.c || 0);
+                  const volume = parseFloat(item.volume || item.v || 0);
+
+                  if (close > 0) {
+                    handleLiveTick(
+                      {
+                        time: Math.floor(ts / 1000),
+                        open,
+                        high,
+                        low,
+                        close,
+                        volume,
+                      },
+                      'ws'
+                    );
+                  }
+                }
+              } else if (data.topic && data.topic.startsWith('publicTrade')) {
+                // Immediate millisecond trade execution tick from Bybit
+                const trades = Array.isArray(data.data) ? data.data : [data.data];
+                if (trades.length > 0 && currentCandleRef.current) {
+                  let lastPrice = 0;
+                  let addedVol = 0;
+                  for (const t of trades) {
+                    const p = parseFloat(t.p || t.price || 0);
+                    const v = parseFloat(t.v || t.size || 0);
+                    if (p > 0) {
+                      lastPrice = p;
+                      addedVol += v;
+                    }
+                  }
+                  if (lastPrice > 0) {
+                    const cur = currentCandleRef.current;
+                    const updated = {
+                      ...cur,
+                      close: lastPrice,
+                      high: Math.max(cur.high, lastPrice),
+                      low: Math.min(cur.low, lastPrice),
+                      volume: (cur.volume || 0) + addedVol,
+                    };
+                    handleLiveTick(updated, 'ws');
+                  }
+                }
+              }
+            } catch {
+              // Ignored
+            }
+          };
+
+          ws.onclose = () => {
+            if (pingInterval) clearInterval(pingInterval);
+            if (!isDisposed && !reconnectTimer) {
+              setIsLiveConnected(false);
+              reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connectWs();
+              }, 800);
+            }
+          };
+
+          ws.onerror = () => {
+            try {
+              ws?.close();
+            } catch {}
+          };
+        }
+      } catch {
+        // WS setup failed, fallback poller will operate
       }
-    } catch {
-      // WS setup failed, fallback poller will operate
-    }
+    };
 
-    // 2. High-Frequency Poller Fallback (ensures live updates in iframes/sandboxes)
+    connectWs();
+
+    // 2. High-Frequency Poller Fallback (operates smoothly if WS blocked by network)
     const runFastPoll = async () => {
       if (isDisposed) return;
-      // If WebSocket has ticked within the last 4 seconds, skip REST poll to save bandwidth
-      if (Date.now() - lastTickTimeRef.current < 4000 && ws && ws.readyState === WebSocket.OPEN) {
+      // If WebSocket has ticked within the last 3 seconds, skip REST poll to save network bandwidth
+      if (Date.now() - lastTickTimeRef.current < 3000 && ws && ws.readyState === WebSocket.OPEN) {
         return;
       }
 
@@ -844,11 +982,13 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       }
     };
 
-    pollInterval = setInterval(runFastPoll, 2500);
+    pollInterval = setInterval(runFastPoll, 2000);
 
     return () => {
       isDisposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (pollInterval) clearInterval(pollInterval);
+      if (pingInterval) clearInterval(pingInterval);
       if (ws) {
         try {
           ws.close();
@@ -1063,11 +1203,15 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       )}
 
       {/* Chart Canvas */}
-      <div className={`relative w-full overflow-hidden ${fullHeight ? "flex-1 min-h-[220px]" : "h-[220px] xs:h-[260px] sm:h-[300px] md:h-[350px] lg:h-[390px] xl:h-[430px]"}`}>
+      <div
+        className={`relative w-full overflow-hidden ${fullHeight ? "flex-1 min-h-[220px]" : "h-[220px] xs:h-[260px] sm:h-[300px] md:h-[350px] lg:h-[390px] xl:h-[430px]"}`}
+        style={{ contain: 'content' }}
+      >
         {/* TradingView Chart Container */}
         <div
           ref={chartContainerRef}
           className="w-full h-full relative"
+          style={{ willChange: 'transform', transform: 'translateZ(0)' }}
         />
 
         {/* Right-Bottom: Time to Bar Close Countdown + Button "Стакан" */}

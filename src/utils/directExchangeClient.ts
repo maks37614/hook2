@@ -222,6 +222,10 @@ export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
   return [];
 }
 
+// Fast client-side memory cache for direct exchange kline calls
+const directKlinesCache = new Map<string, { data: Kline[]; timestamp: number }>();
+const CLIENT_CACHE_TTL_MS = 1500;
+
 /**
  * Direct client-side fetch of Klines
  */
@@ -234,6 +238,13 @@ export async function fetchDirectKlines(
 ): Promise<Kline[]> {
   const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const safeLimit = Math.min(Math.max(limit, 10), 1000);
+  const cacheKey = `${exchange}:${market}:${cleanSymbol}:${timeframe}:${safeLimit}`;
+
+  const cached = directKlinesCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.timestamp < CLIENT_CACHE_TTL_MS && cached.data.length > 0) {
+    return cached.data;
+  }
 
   if (exchange === 'bybit') {
     const interval = toBybitInterval(timeframe);
@@ -251,13 +262,13 @@ export async function fetchDirectKlines(
       for (const host of hosts) {
         try {
           const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`;
-          const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+          const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
           if (!res.ok) continue;
           const json = await res.json();
           const list = json?.result?.list;
           if (!Array.isArray(list) || list.length === 0) continue;
 
-          return list
+          const result: Kline[] = list
             .slice()
             .reverse()
             .map((d: any) => ({
@@ -268,12 +279,15 @@ export async function fetchDirectKlines(
               close: parseFloat(d[4]),
               volume: parseFloat(d[5]),
             }));
+
+          directKlinesCache.set(cacheKey, { data: result, timestamp: Date.now() });
+          return result;
         } catch {
           // Try next
         }
       }
     }
-    return [];
+    return cached?.data || [];
   }
 
   // Binance
@@ -293,12 +307,12 @@ export async function fetchDirectKlines(
 
   for (const url of mirrors) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
       if (!res.ok) continue;
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) continue;
 
-      return data.map((d: any) => ({
+      const result: Kline[] = data.map((d: any) => ({
         time: Math.floor(d[0] / 1000),
         open: parseFloat(d[1]),
         high: parseFloat(d[2]),
@@ -306,12 +320,15 @@ export async function fetchDirectKlines(
         close: parseFloat(d[4]),
         volume: parseFloat(d[5]),
       }));
+
+      directKlinesCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      return result;
     } catch {
       // Try next
     }
   }
 
-  return [];
+  return cached?.data || [];
 }
 
 /**

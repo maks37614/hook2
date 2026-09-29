@@ -160,6 +160,14 @@ async function fetchBybitTickers(market: MarketType, minVolume: number = 0): Pro
   return [];
 }
 
+// In-memory cache for high-frequency kline requests to reduce latency to < 1ms
+interface KlineCacheEntry {
+  data: Kline[];
+  timestamp: number;
+}
+const klinesMemoryCache = new Map<string, KlineCacheEntry>();
+const KLINES_CACHE_TTL_MS = 1500; // 1.5s TTL for ultra-fast repeated requests
+
 // Fetch Klines for a specific coin with multi-mirror resilience
 export async function fetchKlines(
   exchange: ExchangeId,
@@ -170,6 +178,13 @@ export async function fetchKlines(
 ): Promise<Kline[]> {
   const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const safeLimit = Math.min(Math.max(limit, 10), 1000);
+  const cacheKey = `${exchange}:${market}:${cleanSymbol}:${timeframe}:${safeLimit}`;
+
+  const cached = klinesMemoryCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.timestamp < KLINES_CACHE_TTL_MS && cached.data.length > 0) {
+    return cached.data;
+  }
 
   if (exchange === 'binance') {
     const interval = toBinanceInterval(timeframe);
@@ -188,12 +203,12 @@ export async function fetchKlines(
 
     for (const url of mirrors) {
       try {
-        const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
+        const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(2500) });
         if (!res.ok) continue;
         const data = await res.json();
         if (!Array.isArray(data) || data.length === 0) continue;
 
-        return data.map((d: any) => ({
+        const result: Kline[] = data.map((d: any) => ({
           time: Math.floor(d[0] / 1000),
           open: parseFloat(d[1]),
           high: parseFloat(d[2]),
@@ -201,11 +216,21 @@ export async function fetchKlines(
           close: parseFloat(d[4]),
           volume: parseFloat(d[5]),
         }));
+
+        klinesMemoryCache.set(cacheKey, { data: result, timestamp: Date.now() });
+        if (klinesMemoryCache.size > 500) {
+          const expireBefore = Date.now() - 10000;
+          for (const [k, v] of klinesMemoryCache.entries()) {
+            if (v.timestamp < expireBefore) klinesMemoryCache.delete(k);
+          }
+        }
+
+        return result;
       } catch {
         // Try next mirror
       }
     }
-    return [];
+    return cached?.data || [];
   } else {
     // Bybit
     const primaryCategory = market === 'futures' ? 'linear' : 'spot';
@@ -223,13 +248,13 @@ export async function fetchKlines(
       for (const host of hosts) {
         try {
           const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`;
-          const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
+          const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(2500) });
           if (!res.ok) continue;
           const json = await res.json();
           const list = json?.result?.list;
           if (!Array.isArray(list) || list.length === 0) continue;
 
-          return list
+          const result: Kline[] = list
             .slice()
             .reverse()
             .map((d: any) => ({
@@ -240,12 +265,15 @@ export async function fetchKlines(
               close: parseFloat(d[4]),
               volume: parseFloat(d[5]),
             }));
+
+          klinesMemoryCache.set(cacheKey, { data: result, timestamp: Date.now() });
+          return result;
         } catch {
           // Try next mirror
         }
       }
     }
-    return [];
+    return cached?.data || [];
   }
 }
 
