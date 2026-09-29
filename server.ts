@@ -326,11 +326,21 @@ async function startServer() {
   app.get('/api/telegram/status', async (req, res) => {
     try {
       const userId = req.query.userId as string | undefined;
-      const userTg = userId ? getUserTelegram(userId) : undefined;
-      const globalCfg = getEffectiveTelegramConfig();
+      if (!userId || userId === 'guest') {
+        return res.json({
+          success: true,
+          isConfigured: false,
+          botUsername: undefined,
+          chatId: undefined,
+          hasBotToken: false,
+          hasEnvToken: false,
+          hasEnvChatId: false,
+        });
+      }
 
-      const activeToken = userTg?.botToken || globalCfg.botToken;
-      const activeChatId = userTg?.chatId || globalCfg.chatId;
+      const userTg = getUserTelegram(userId);
+      const activeToken = userTg?.botToken;
+      const activeChatId = userTg?.chatId;
 
       let botUsername: string | undefined;
       if (activeToken) {
@@ -343,8 +353,8 @@ async function startServer() {
         botUsername,
         chatId: activeChatId || undefined,
         hasBotToken: Boolean(activeToken),
-        hasEnvToken: globalCfg.hasEnvToken,
-        hasEnvChatId: globalCfg.hasEnvChatId,
+        hasEnvToken: false,
+        hasEnvChatId: false,
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -409,12 +419,19 @@ async function startServer() {
   app.get('/api/alerts', (req, res) => {
     try {
       const userId = req.query.userId as string | undefined;
+      if (!userId || userId === 'guest') {
+        return res.json({
+          success: true,
+          alerts: [],
+          isTelegramConfigured: false,
+        });
+      }
       const alerts = getAllAlerts(userId);
-      const cfg = getEffectiveTelegramConfig();
+      const userTg = getUserTelegram(userId);
       res.json({
         success: true,
         alerts,
-        isTelegramConfigured: Boolean(cfg.botToken && cfg.chatId),
+        isTelegramConfigured: Boolean(userTg?.botToken && userTg?.chatId),
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -425,8 +442,8 @@ async function startServer() {
   app.post('/api/alerts/sync', (req, res) => {
     try {
       const { userId, alerts, telegramBotToken, telegramChatId } = req.body;
-      if (!userId || !Array.isArray(alerts)) {
-        return res.status(400).json({ success: false, error: 'Missing userId or alerts array' });
+      if (!userId || userId === 'guest' || !Array.isArray(alerts)) {
+        return res.status(400).json({ success: false, error: 'Valid userId and alerts array required' });
       }
       const merged = syncUserAlerts(userId, alerts, telegramBotToken, telegramChatId);
       res.json({ success: true, count: merged.length, alerts: merged });
@@ -439,6 +456,9 @@ async function startServer() {
   app.get('/api/alerts/history', (req, res) => {
     try {
       const userId = req.query.userId as string | undefined;
+      if (!userId || userId === 'guest') {
+        return res.json({ success: true, history: [] });
+      }
       const history = getAlertHistory(userId);
       res.json({ success: true, history });
     } catch (err: any) {
@@ -594,7 +614,10 @@ async function startServer() {
   // Surveillance endpoints
   app.get('/api/surveillance', (req, res) => {
     try {
-      const userId = (req.query.userId as string) || 'guest';
+      const userId = req.query.userId as string | undefined;
+      if (!userId || userId === 'guest') {
+        return res.json({ success: true, data: [] });
+      }
       const list = loadSurveillanceList(userId);
       res.json({ success: true, data: list });
     } catch (err: any) {
@@ -605,7 +628,13 @@ async function startServer() {
   app.post('/api/surveillance', async (req, res) => {
     try {
       const { symbol, baseAsset, quoteAsset, exchange, marketType, userId, config } = req.body;
-      const uid = userId || 'guest';
+      if (!userId || userId === 'guest') {
+        return res.status(401).json({
+          success: false,
+          error: 'Системний нагляд доступний тільки для зареєстрованих користувачів. Будь ласка, увійдіть.',
+        });
+      }
+      const uid = String(userId).trim();
       if (!symbol) {
         return res.status(400).json({ success: false, error: 'Тікер монети не вказано' });
       }
