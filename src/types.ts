@@ -186,6 +186,56 @@ export interface MetaScalpSettings {
   autoSwitchOnClick: boolean;
 }
 
+export type TerminalTarget = 'metascalp' | 'vataga' | 'tiger' | 'all';
+
+export interface SingleTerminalConfig {
+  enabled: boolean;
+  port: number;
+  binding: string;
+}
+
+export interface UnifiedLinkingSettings {
+  activeTarget: TerminalTarget;
+  autoSwitchOnClick: boolean;
+  soundFeedback: boolean;
+  metascalp: SingleTerminalConfig;
+  vataga: SingleTerminalConfig;
+  tiger: SingleTerminalConfig;
+}
+
+export interface ChartTradeMarkerSettings {
+  showEntry: boolean;
+  showTarget: boolean;
+  showStop: boolean;
+  entryColor?: string;
+  targetColor?: string;
+  stopColor?: string;
+  customLevels?: Record<string, { entry?: number; target?: number; stop?: number; note?: string }>;
+}
+
+export interface OrderbookUserSettings {
+  compression?: number;
+  depth?: 'all' | 'deep' | 'medium' | 'small';
+  densityThresholdUsd?: number;
+  bubbleThresholdUsd?: number;
+  soundAlertEnabled?: boolean;
+  heightPreset?: 'md' | 'lg' | 'xl';
+  showClusters?: boolean;
+}
+
+export interface TerminalWorkspaceSettings {
+  columns: number;
+  blockHeight: 'compact' | 'medium' | 'tall';
+  blocks: any[];
+}
+
+export interface SearchUserSettings {
+  minVolumeUsd?: number;
+  presetFilter?: ScreenerPresetFilter;
+  sortBy?: ScreenerSortBy;
+  sortDirection?: 'asc' | 'desc';
+}
+
 export interface UserProfile {
   uid: string;
   email?: string | null;
@@ -201,10 +251,16 @@ export interface UserProfile {
   watchlist?: string[];
   watchlistFolders?: Record<string, string[]>;
   metaScalpSettings?: MetaScalpSettings;
+  unifiedLinkingSettings?: UnifiedLinkingSettings;
+  chartTradeMarkers?: ChartTradeMarkerSettings;
+  orderbookSettings?: OrderbookUserSettings;
+  terminalSettings?: TerminalWorkspaceSettings;
+  searchSettings?: SearchUserSettings;
   inviteCode?: string;
   createdAt?: string;
   updatedAt?: string;
   chartLabelSettings?: { entry: boolean; target: boolean; stop: boolean };
+  exchangeApiCredentials?: ExchangeApiCredentials[];
 }
 
 export interface TelegramConfig {
@@ -633,5 +689,47 @@ export interface SurveillanceCoin {
   lastNotifiedAt?: string;
   config: SurveillanceConfig;
   state?: SurveillanceState;
+}
+
+export type OrderSide = 'BUY' | 'SELL';
+export type OrderType = 'LIMIT' | 'MARKET' | 'STOP' | 'STOP_MARKET' | 'TAKE_PROFIT' | 'TAKE_PROFIT_MARKET';
+
+export interface ExchangeApiCredentials {
+  exchange: ExchangeId;
+  apiKey: string;
+  apiSecret: string;
+  isTestnet?: boolean;
+  marketType?: MarketType;
+}
+
+export interface PlacedOrder {
+  orderId: string;
+  clientOrderId?: string;
+  exchange?: string;
+  marketType?: MarketType;
+  symbol: string;
+  side: OrderSide;
+  type: OrderType;
+  price?: number;
+  stopPrice?: number;
+  origQty: number;
+  executedQty?: number;
+  status: string;
+  time: number;
+}
+
+export interface AccountBalanceInfo {
+  exchange?: string;
+  marketType?: MarketType;
+  isTestnet?: boolean;
+  totalEquityUsd?: number;
+  totalWalletBalance?: number;
+  marginBalance?: number;
+  availableBalanceUsd?: number;
+  availableBalance?: number;
+  unrealizedPnlUsd?: number;
+  unrealizedPnl?: number;
+  currency?: string;
+  assets?: { asset: string; free: number; locked: number }[];
 }
 
