@@ -991,22 +991,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
           {/* Right: View Controls */}
           <div className="flex items-center gap-1 sm:gap-1.5 text-slate-300 text-[10px] sm:text-[11px] flex-nowrap shrink-0 ml-auto">
-            {/* Toggle Button: Висувний стакан під графіком */}
-            <button
-              type="button"
-              onClick={() => setIsDomOpen((prev) => !prev)}
-              className={`flex items-center gap-1.5 px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all border cursor-pointer active:scale-95 shrink-0 whitespace-nowrap ${
-                isDomOpen
-                  ? 'bg-cyan-500/25 text-cyan-200 border-cyan-400/70 shadow-sm shadow-cyan-900/50'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700'
-              }`}
-              title={isDomOpen ? 'Сховати біржовий стакан під графіком' : 'Висунути біржовий стакан під графіком'}
-            >
-              <Layers className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Стакан</span>
-              <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isDomOpen ? 'rotate-180 text-cyan-300' : 'text-slate-400'}`} />
-            </button>
-
             {/* Zoom Recent Buttons */}
             <div className="flex items-center gap-1 shrink-0">
               <button

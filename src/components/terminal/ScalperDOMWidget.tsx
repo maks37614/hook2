@@ -1441,14 +1441,14 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                             >
                               {/* Horizontal relative volume fill bar */}
                               <div
-                                className={`absolute left-0 top-0 bottom-0 pointer-events-none opacity-20 ${
+                                className={`absolute left-0 top-0 bottom-0 pointer-events-none ${
                                   isPOC
-                                    ? 'bg-amber-400'
+                                    ? 'bg-amber-400 opacity-20'
                                     : lvl.buyVol >= lvl.sellVol
-                                    ? 'bg-emerald-400'
-                                    : 'bg-rose-400'
+                                    ? 'bg-emerald-400 opacity-20'
+                                    : ''
                                 }`}
-                                style={{ width: `${fillPct}%` }}
+                                style={{ width: `${fillPct}%`, backgroundColor: isPOC ? undefined : (lvl.buyVol >= lvl.sellVol ? undefined : '#330101') }}
                               />
 
                               {/* Buy volume sum on left */}
@@ -1706,9 +1706,9 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                     {/* Dark Crimson Red Horizontal Volume Bar */}
                     <div
                       className={`absolute left-0 top-0 bottom-0 pointer-events-none transition-all duration-150 ${
-                        isDensity ? 'bg-gradient-to-r from-amber-600/70 to-rose-700/80' : 'bg-rose-900/60'
+                        isDensity ? 'bg-gradient-to-r from-amber-600/70 to-rose-700/80' : ''
                       }`}
-                      style={{ width: `${fillPct}%` }}
+                      style={{ width: `${fillPct}%`, backgroundColor: isDensity ? undefined : '#330101' }}
                     />
 
                     {/* Volume text on Left */}
