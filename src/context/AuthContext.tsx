@@ -16,6 +16,7 @@ import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { cleanForFirestore } from '../lib/firestoreUtils';
 import { verifyAccessCode, normalizeAccessCode } from '../utils/accessCodes';
 import { getStoredPreferences, saveStoredPreferences } from '../utils/userPreferences';
+import { DEFAULT_UNIFIED_LINKING_SETTINGS, saveStoredUnifiedLinkingSettings } from '../utils/terminalLinkingService';
 
 function getLocalUserId(email: string): string {
   let hash = 0;
@@ -32,7 +33,7 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
-  signInWithGoogle: () => Promise<void>;
+  signInWithGoogle: (inviteCode?: string, isSignUp?: boolean) => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<void>;
   registerWithEmail: (email: string, pass: string, name?: string, inviteCode?: string) => Promise<void>;
   updateProfileData: (updates: Partial<UserProfile>) => Promise<void>;
@@ -57,12 +58,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Sync or create user profile in Firestore
-  const syncUserProfile = async (firebaseUser: User) => {
+  const syncUserProfile = async (firebaseUser: User, providedInviteCode?: string, isExplicitSignUp?: boolean) => {
     const userDocRef = doc(db, 'users', firebaseUser.uid);
     try {
       const snap = await getDoc(userDocRef);
       if (!snap.exists()) {
+        if (!providedInviteCode && !isExplicitSignUp) {
+          await signOut(auth);
+          setUser(null);
+          setProfile(null);
+          const err = new Error(
+            'Цей акаунт ще не зареєстрований. Будь ласка, перейдіть на вкладку «Реєстрація» та введіть спеціальний код доступу з Telegram каналу автора.'
+          );
+          setAuthError(err.message);
+          throw err;
+        }
         const storedPrefs = getStoredPreferences();
+        const code = (providedInviteCode || '').trim() || 'SIGNALHOOK';
         const newProfile: UserProfile = {
           uid: firebaseUser.uid,
           email: firebaseUser.email || '',
@@ -72,11 +84,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           defaultExchange: storedPrefs.defaultExchange,
           defaultMarketType: storedPrefs.defaultMarketType,
           defaultTimeframe: storedPrefs.defaultTimeframe,
+          watchlist: [],
+          watchlistFolders: {},
+          metaScalpSettings: { enabled: true, port: 17845, binding: '001', autoSwitchOnClick: true },
+          unifiedLinkingSettings: DEFAULT_UNIFIED_LINKING_SETTINGS,
+          chartTradeMarkers: { showEntry: true, showTarget: true, showStop: true },
+          chartLabelSettings: { entry: true, target: true, stop: true },
+          orderbookSettings: { depth: 'all', compression: 1, soundAlertEnabled: true, heightPreset: 'lg' },
+          terminalSettings: { columns: 2, blockHeight: 'medium', blocks: [] },
+          searchSettings: { minVolumeUsd: 0, presetFilter: 'all', sortBy: 'volume', sortDirection: 'desc' },
+          inviteCode: code,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
         await setDoc(userDocRef, cleanForFirestore(newProfile));
         setProfile(newProfile);
+        saveStoredUnifiedLinkingSettings(newProfile.unifiedLinkingSettings!, firebaseUser.uid);
       } else {
         const loadedProfile = snap.data() as UserProfile;
         setProfile(loadedProfile);
@@ -88,6 +111,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             ...(loadedProfile.defaultTimeframe ? { defaultTimeframe: loadedProfile.defaultTimeframe } : {}),
             ...(loadedProfile.soundAlertsEnabled !== undefined ? { soundAlertsEnabled: loadedProfile.soundAlertsEnabled } : {}),
           });
+          if (loadedProfile.unifiedLinkingSettings) {
+            saveStoredUnifiedLinkingSettings(loadedProfile.unifiedLinkingSettings, firebaseUser.uid);
+          }
         }
       }
     } catch (err) {
@@ -181,15 +207,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (inviteCode?: string, isSignUp?: boolean) => {
     setAuthError(null);
     setAuthErrorCode(null);
+
+    // If explicit registration requested, verify access code first
+    let verifiedCode = (inviteCode || '').trim();
+    if (isSignUp) {
+      if (!verifiedCode) {
+        const err = new Error('Для реєстрації через Google потрібен спеціальний код доступу з Telegram каналу автора.');
+        setAuthError(err.message);
+        throw err;
+      }
+      const verification = await verifyAccessCode(verifiedCode);
+      if (!verification.valid) {
+        const err = new Error(verification.message || 'Недійсний спеціальний код доступу. Отримайте дійсний код у Telegram каналі автора.');
+        setAuthError(err.message);
+        throw err;
+      }
+      verifiedCode = verification.normalizedCode;
+    }
+
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(auth, provider);
       if (result.user) {
-        await syncUserProfile(result.user);
+        await syncUserProfile(result.user, verifiedCode || undefined, isSignUp);
       }
     } catch (err: any) {
       console.error('Google sign in error:', err);

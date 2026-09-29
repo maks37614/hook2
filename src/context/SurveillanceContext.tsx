@@ -34,8 +34,14 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [loading, setLoading] = useState<boolean>(true);
 
   const fetchCoins = useCallback(async () => {
+    if (!user) {
+      setCoins([]);
+      setLoading(false);
+      return;
+    }
+
     try {
-      const userId = user?.uid || 'guest';
+      const userId = user.uid;
       const res = await fetch(`/api/surveillance?userId=${encodeURIComponent(userId)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -48,8 +54,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } catch (err) {
       console.warn('[Surveillance] Fetch error, checking localStorage:', err);
       try {
-        const userId = user?.uid || 'guest';
-        const cached = localStorage.getItem(`signalhook_surveillance_${userId}`);
+        const cached = localStorage.getItem(`signalhook_surveillance_${user.uid}`);
         if (cached) {
           setCoins(JSON.parse(cached));
         }
@@ -57,7 +62,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } finally {
       setLoading(false);
     }
-  }, [user?.uid]);
+  }, [user]);
 
   useEffect(() => {
     fetchCoins();
