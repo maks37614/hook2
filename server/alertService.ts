@@ -150,8 +150,8 @@ export function saveHistory(items: AlertHistoryItem[]): boolean {
 }
 
 export function getAlertHistory(userId?: string): AlertHistoryItem[] {
+  if (!userId || userId === 'guest') return [];
   const all = loadHistory();
-  if (!userId) return all;
   return all.filter((h) => h.userId === userId);
 }
 
@@ -166,26 +166,18 @@ export function addHistoryItem(item: AlertHistoryItem): void {
 }
 
 export function clearAlertHistory(userId?: string): number {
+  if (!userId || userId === 'guest') return 0;
   const history = loadHistory();
-  const remaining = history.filter((h) => {
-    if (userId && h.userId && h.userId !== userId) return true;
-    return false;
-  });
+  const remaining = history.filter((h) => h.userId !== userId);
   const clearedCount = history.length - remaining.length;
   saveHistory(remaining);
   return clearedCount;
 }
 
 export function deleteHistoryItem(id: string, userId?: string): boolean {
+  if (!userId || userId === 'guest') return false;
   const history = loadHistory();
-  const filtered = history.filter((h) => {
-    if (h.id === id) {
-      if (!userId || !h.userId || h.userId === 'guest' || h.userId === userId) {
-        return false;
-      }
-    }
-    return true;
-  });
+  const filtered = history.filter((h) => !(h.id === id && h.userId === userId));
   if (filtered.length !== history.length) {
     saveHistory(filtered);
     return true;
@@ -193,10 +185,10 @@ export function deleteHistoryItem(id: string, userId?: string): boolean {
   return false;
 }
 
-// Get all alerts (optionally filtered by user)
+// Get all alerts (strictly filtered by user, never leaked to guests)
 export function getAllAlerts(userId?: string): PriceAlert[] {
+  if (!userId || userId === 'guest') return [];
   const all = loadAlerts();
-  if (!userId) return all;
   return all.filter((a) => a.userId === userId);
 }
 

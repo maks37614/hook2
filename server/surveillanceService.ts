@@ -83,8 +83,9 @@ export function saveSurveillanceStore(store: UserSurveillanceStore): boolean {
 }
 
 export function loadSurveillanceList(userId?: string): SurveillanceCoin[] {
+  if (!userId || userId === 'guest') return [];
   const store = loadSurveillanceStore();
-  const uid = userId && userId.trim() !== '' ? userId.trim() : 'guest';
+  const uid = userId.trim();
   const list = store[uid] || [];
   // Normalize triggerModes if migrating
   return list.map((coin) => {
@@ -96,8 +97,9 @@ export function loadSurveillanceList(userId?: string): SurveillanceCoin[] {
 }
 
 export function saveSurveillanceList(userId: string, list: SurveillanceCoin[]): boolean {
+  if (!userId || userId === 'guest') return false;
   const store = loadSurveillanceStore();
-  const uid = userId && userId.trim() !== '' ? userId.trim() : 'guest';
+  const uid = userId.trim();
   store[uid] = list;
   return saveSurveillanceStore(store);
 }
