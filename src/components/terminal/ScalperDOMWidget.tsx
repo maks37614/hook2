@@ -24,6 +24,7 @@ import {
 import { ExchangeId, MarketType, Timeframe } from '../../types';
 import { formatCryptoPrice, formatVolume, formatWholeSum, formatCompactWholeBubble } from '../../utils/formatters';
 import { playDensityChime } from '../../utils/domSound';
+import { useAuth } from '../../context/AuthContext';
 
 function formatTradeTime(ts: number): string {
   const d = new Date(ts);
@@ -132,10 +133,14 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   onDomHeightPresetChange,
   onToggleView,
 }: ScalperDOMWidgetProps) => {
+  const { user, profile, updateProfileData } = useAuth();
+
   // DOM settings state
   const [internalHeightPreset, setInternalHeightPreset] = useState<'md' | 'lg' | 'xl'>(() => {
     try {
-      const saved = localStorage.getItem('scalper_dom_height_preset');
+      if (profile?.orderbookSettings?.heightPreset) return profile.orderbookSettings.heightPreset;
+      const key = user?.uid ? `scalper_dom_height_preset_${user.uid}` : 'scalper_dom_height_preset';
+      const saved = localStorage.getItem(key) || localStorage.getItem('scalper_dom_height_preset');
       if (saved === 'md' || saved === 'lg' || saved === 'xl') return saved;
     } catch {}
     return domHeightPreset || 'lg';
@@ -143,26 +148,21 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
   const activeHeightPreset = domHeightPreset || internalHeightPreset;
 
-  const handleDomHeightPresetChange = (preset: 'md' | 'lg' | 'xl') => {
-    setInternalHeightPreset(preset);
-    try {
-      localStorage.setItem('scalper_dom_height_preset', preset);
-    } catch {}
-    onDomHeightPresetChange?.(preset);
-    onUpdateSettings?.({ heightPreset: preset });
-  };
-
   const [clusterTf, setClusterTf] = useState<Timeframe>(initialTimeframe);
   const [compression, setCompression] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem('scalper_dom_compression');
+      if (profile?.orderbookSettings?.compression) return profile.orderbookSettings.compression;
+      const key = user?.uid ? `scalper_dom_compression_${user.uid}` : 'scalper_dom_compression';
+      const saved = localStorage.getItem(key) || localStorage.getItem('scalper_dom_compression');
       if (saved && !isNaN(Number(saved))) return Number(saved);
     } catch {}
     return 10; // default x10
   });
   const [depthPreset, setDepthPreset] = useState<'all' | 'deep' | 'medium' | 'small'>(() => {
     try {
-      const saved = localStorage.getItem('scalper_dom_depth_preset');
+      if (profile?.orderbookSettings?.depth) return profile.orderbookSettings.depth;
+      const key = user?.uid ? `scalper_dom_depth_preset_${user.uid}` : 'scalper_dom_depth_preset';
+      const saved = localStorage.getItem(key) || localStorage.getItem('scalper_dom_depth_preset');
       if (saved && ['all', 'deep', 'medium', 'small'].includes(saved)) {
         return saved as any;
       }
@@ -170,22 +170,73 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     return 'medium'; // default 100 levels
   });
   const [densityThresholdUsd, setDensityThresholdUsd] = useState<number>(() => {
-    const saved = localStorage.getItem('scalper_dom_density_threshold');
-    if (saved && !isNaN(Number(saved)) && Number(saved) > 0) return Number(saved);
+    try {
+      if (profile?.orderbookSettings?.densityThresholdUsd) return profile.orderbookSettings.densityThresholdUsd;
+      const key = user?.uid ? `scalper_dom_density_threshold_${user.uid}` : 'scalper_dom_density_threshold';
+      const saved = localStorage.getItem(key) || localStorage.getItem('scalper_dom_density_threshold');
+      if (saved && !isNaN(Number(saved)) && Number(saved) > 0) return Number(saved);
+    } catch {}
     return 500000; // default 500k
   });
   const [bubbleThresholdUsd, setBubbleThresholdUsd] = useState<number>(() => {
-    const saved = localStorage.getItem('scalper_dom_bubble_threshold');
-    if (saved !== null && !isNaN(Number(saved))) return Number(saved);
+    try {
+      if (profile?.orderbookSettings?.bubbleThresholdUsd !== undefined) return profile.orderbookSettings.bubbleThresholdUsd;
+      const key = user?.uid ? `scalper_dom_bubble_threshold_${user.uid}` : 'scalper_dom_bubble_threshold';
+      const saved = localStorage.getItem(key) || localStorage.getItem('scalper_dom_bubble_threshold');
+      if (saved !== null && !isNaN(Number(saved))) return Number(saved);
+    } catch {}
     return 5000; // default 5k
   });
   const [soundAlertEnabled, setSoundAlertEnabled] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem('scalper_dom_sound_alert');
+      if (profile?.orderbookSettings?.soundAlertEnabled !== undefined) return profile.orderbookSettings.soundAlertEnabled;
+      const key = user?.uid ? `scalper_dom_sound_alert_${user.uid}` : 'scalper_dom_sound_alert';
+      const saved = localStorage.getItem(key) || localStorage.getItem('scalper_dom_sound_alert');
       if (saved !== null) return saved === 'true';
     } catch {}
     return false; // default false
   });
+
+  // Sync profile changes into state
+  useEffect(() => {
+    if (!profile?.orderbookSettings) return;
+    const s = profile.orderbookSettings;
+    if (s.depth) setDepthPreset(s.depth);
+    if (s.compression) setCompression(s.compression);
+    if (s.soundAlertEnabled !== undefined) setSoundAlertEnabled(s.soundAlertEnabled);
+    if (s.densityThresholdUsd) setDensityThresholdUsd(s.densityThresholdUsd);
+    if (s.bubbleThresholdUsd !== undefined) setBubbleThresholdUsd(s.bubbleThresholdUsd);
+    if (s.heightPreset) setInternalHeightPreset(s.heightPreset);
+  }, [profile?.orderbookSettings]);
+
+  // Persist orderbook settings to profile and user storage
+  const persistOrderbookSettings = useCallback((updated: any) => {
+    if (!user) return;
+    const nextSettings = {
+      depth: depthPreset,
+      compression,
+      soundAlertEnabled,
+      densityThresholdUsd,
+      bubbleThresholdUsd,
+      heightPreset: activeHeightPreset,
+      ...updated,
+    };
+    try {
+      localStorage.setItem(`scalper_dom_settings_${user.uid}`, JSON.stringify(nextSettings));
+    } catch {}
+    updateProfileData({ orderbookSettings: nextSettings }).catch(() => {});
+  }, [user, depthPreset, compression, soundAlertEnabled, densityThresholdUsd, bubbleThresholdUsd, activeHeightPreset, updateProfileData]);
+
+  const handleDomHeightPresetChange = (preset: 'md' | 'lg' | 'xl') => {
+    setInternalHeightPreset(preset);
+    try {
+      const key = user?.uid ? `scalper_dom_height_preset_${user.uid}` : 'scalper_dom_height_preset';
+      localStorage.setItem(key, preset);
+    } catch {}
+    persistOrderbookSettings({ heightPreset: preset });
+    onDomHeightPresetChange?.(preset);
+    onUpdateSettings?.({ heightPreset: preset });
+  };
   const [autoCenterEnabled, setAutoCenterEnabled] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('scalper_dom_auto_center');
@@ -873,36 +924,28 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   const handleSelectCompression = (comp: number) => {
     setCompression(comp);
     setIsCompressionDropdownOpen(false);
-    try {
-      localStorage.setItem('scalper_dom_compression', String(comp));
-    } catch {}
+    persistOrderbookSettings({ compression: comp });
     onUpdateSettings?.({ compression: comp });
   };
 
   // Depth switch handler
   const handleSelectDepth = (depth: 'all' | 'deep' | 'medium' | 'small') => {
     setDepthPreset(depth);
-    try {
-      localStorage.setItem('scalper_dom_depth_preset', depth);
-    } catch {}
+    persistOrderbookSettings({ depth });
     onUpdateSettings?.({ depth });
   };
 
   // Density threshold handler
   const handleSetDensityThreshold = (val: number) => {
     setDensityThresholdUsd(val);
-    try {
-      localStorage.setItem('scalper_dom_density_threshold', String(val));
-    } catch {}
+    persistOrderbookSettings({ densityThresholdUsd: val });
     onUpdateSettings?.({ densityThresholdUsd: val });
   };
 
   // Trade bubbles threshold handler
   const handleSetBubbleThreshold = (val: number) => {
     setBubbleThresholdUsd(val);
-    try {
-      localStorage.setItem('scalper_dom_bubble_threshold', String(val));
-    } catch {}
+    persistOrderbookSettings({ bubbleThresholdUsd: val });
     onUpdateSettings?.({ bubbleThresholdUsd: val });
   };
 
@@ -911,9 +954,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     const next = !soundAlertEnabled;
     setSoundAlertEnabled(next);
     if (next) playDensityChime(true);
-    try {
-      localStorage.setItem('scalper_dom_sound_alert', String(next));
-    } catch {}
+    persistOrderbookSettings({ soundAlertEnabled: next });
     onUpdateSettings?.({ soundAlertEnabled: next });
   };
 
