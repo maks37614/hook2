@@ -416,11 +416,11 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
       const source = updated[sourceIndex];
       const target = updated[targetIndex];
 
-      // Build combined block adapting colSpan to screen
+      // Build combined block (chart on top, orderbook below)
       const mergedBlock: TerminalChartBlock = {
         ...target,
         mode: 'combined',
-        colSpan: config.columns > 1 ? 2 : 1,
+        colSpan: target.colSpan || 1,
         domSettings: source.domSettings || target.domSettings,
       };
 
@@ -905,7 +905,7 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({
         <div className="h-8 sm:h-9 bg-slate-950/80 border-b border-slate-800/80 px-3 sm:px-4 flex items-center justify-between gap-2 text-[11px] font-mono shrink-0 overflow-x-auto no-scrollbar">
           <div className="flex items-center gap-3 sm:gap-6 shrink-0">
             <span className="flex items-center gap-1 text-slate-300">
-              Об'єм 24г: <strong className="text-white">${formatVolume(activeCoin.volume24hUsd || 0)}</strong>
+              Об'єм 24г: <strong className="text-white">{formatVolume(activeCoin.volume24hUsd || 0)}</strong>
             </span>
             {activeCoin.highPrice24h ? (
               <span className="flex items-center gap-1 text-emerald-400">

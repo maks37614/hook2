@@ -70,6 +70,7 @@ interface ScalperDOMWidgetProps {
     bubbleThresholdUsd?: number;
     soundAlertEnabled?: boolean;
     clusterTimeframe?: Timeframe;
+    heightPreset?: 'md' | 'lg' | 'xl';
   }) => void;
   height?: string | number;
   domHeightPreset?: 'md' | 'lg' | 'xl';
@@ -127,11 +128,30 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   initialSoundAlert = true,
   onUpdateSettings,
   height,
-  domHeightPreset = 'lg',
+  domHeightPreset,
   onDomHeightPresetChange,
   onToggleView,
-}) => {
+}: ScalperDOMWidgetProps) => {
   // DOM settings state
+  const [internalHeightPreset, setInternalHeightPreset] = useState<'md' | 'lg' | 'xl'>(() => {
+    try {
+      const saved = localStorage.getItem('scalper_dom_height_preset');
+      if (saved === 'md' || saved === 'lg' || saved === 'xl') return saved;
+    } catch {}
+    return domHeightPreset || 'lg';
+  });
+
+  const activeHeightPreset = domHeightPreset || internalHeightPreset;
+
+  const handleDomHeightPresetChange = (preset: 'md' | 'lg' | 'xl') => {
+    setInternalHeightPreset(preset);
+    try {
+      localStorage.setItem('scalper_dom_height_preset', preset);
+    } catch {}
+    onDomHeightPresetChange?.(preset);
+    onUpdateSettings?.({ heightPreset: preset });
+  };
+
   const [clusterTf, setClusterTf] = useState<Timeframe>(initialTimeframe);
   const [compression, setCompression] = useState<number>(() => {
     try {
@@ -793,7 +813,12 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     alertedLevelsRef.current = currentDenseLevels;
   }, [aggregatedAsks, aggregatedBids, soundAlertEnabled]);
 
-  // Auto-center on mount and on symbol change
+  // Root container ref and dimensions tracking
+  const rootContainerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+  const [containerHeight, setContainerHeight] = useState<number>(0);
+
+  // Auto-center on mount, on symbol change, or when block dimensions change
   const handleCenterDOM = useCallback(() => {
     if (spreadRowRef.current && domScrollContainerRef.current) {
       const container = domScrollContainerRef.current;
@@ -802,6 +827,33 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       container.scrollTo({ top: topOffset, behavior: 'smooth' });
     }
   }, []);
+
+  // ResizeObserver to detect any change in width or height of the widget/chart block
+  useEffect(() => {
+    if (!rootContainerRef.current) return;
+    let resizeTimer: any = null;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        setContainerWidth(width);
+        setContainerHeight(height);
+
+        // When block height or width changes, re-center DOM spread smoothly so price is always in view
+        if (autoCenterEnabled) {
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            handleCenterDOM();
+          }, 80);
+        }
+      }
+    });
+
+    ro.observe(rootContainerRef.current);
+    return () => {
+      clearTimeout(resizeTimer);
+      ro.disconnect();
+    };
+  }, [handleCenterDOM, autoCenterEnabled]);
 
   useEffect(() => {
     if (autoCenterEnabled) {
@@ -898,6 +950,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
   return (
     <div
+      ref={rootContainerRef}
       className="relative flex flex-col w-full h-full bg-[#0b0e14] text-slate-200 select-none overflow-hidden font-mono text-[11px]"
       style={{ height: height || '100%' }}
     >
@@ -1054,15 +1107,15 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             </button>
           </div>
 
-          {/* Розмір цілого блоку стакану */}
+          {/* Розмір блоку стакану: 600px 780px 950px */}
           <div className="mb-3 space-y-1.5 p-2 rounded-xl bg-slate-950/80 border border-slate-800/90">
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-300 font-medium flex items-center gap-1.5">
                 <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Розмір блоку стакану:</span>
+                <span>Розмір блоку стакану (висота):</span>
               </span>
               <span className="text-cyan-400 font-bold font-mono">
-                {domHeightPreset === 'md' ? '600px' : domHeightPreset === 'lg' ? '780px' : '950px'}
+                {activeHeightPreset === 'md' ? '600px' : activeHeightPreset === 'xl' ? '950px' : '780px'}
               </span>
             </div>
             <div className="grid grid-cols-3 gap-1.5 text-[11px]">
@@ -1074,9 +1127,9 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                 <button
                   key={item.size}
                   type="button"
-                  onClick={() => onDomHeightPresetChange?.(item.size)}
+                  onClick={() => handleDomHeightPresetChange(item.size)}
                   className={`py-1.5 rounded-lg border text-center font-bold transition-all cursor-pointer ${
-                    domHeightPreset === item.size
+                    activeHeightPreset === item.size
                       ? 'bg-cyan-500/25 border-cyan-500 text-cyan-300 shadow-sm shadow-cyan-950/60'
                       : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-600'
                   }`}
@@ -1085,6 +1138,9 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                 </button>
               ))}
             </div>
+            <p className="text-[9.5px] text-slate-500 leading-tight">
+              Змінює тільки довжину (висоту) стакану до низу. Ширина залежить від ширини графіка.
+            </p>
           </div>
 
           {/* Автоцентрування */}
@@ -1116,7 +1172,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-300 font-medium">Поріг плотності (USD):</span>
               <span className="text-amber-400 font-bold font-mono">
-                ${formatVolume(densityThresholdUsd)}
+                {formatVolume(densityThresholdUsd)}
               </span>
             </div>
             <div className="grid grid-cols-4 gap-1 text-[10px]">
@@ -1172,7 +1228,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                 <span>Сума кружечків у стрічці:</span>
               </span>
               <span className="text-cyan-400 font-bold font-mono">
-                {bubbleThresholdUsd === 0 ? 'Всі угоди' : `≥ $${formatVolume(bubbleThresholdUsd)}`}
+                {bubbleThresholdUsd === 0 ? 'Всі угоди' : `≥ ${formatVolume(bubbleThresholdUsd)}`}
               </span>
             </div>
             <div className="grid grid-cols-6 gap-1 text-[10px]">
@@ -1377,7 +1433,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
         {/* 1. LEFT SECTION: Cluster History (collapsible/expandable footprint clusters with all sums visible) */}
         {showClusters ? (
-          <div className="w-48 sm:w-64 md:w-72 lg:w-80 shrink-0 h-full flex flex-col relative z-10 select-none overflow-hidden bg-[#070a10]/90 border-r border-slate-900/80">
+          <div className="w-36 sm:w-48 md:w-60 lg:w-72 max-w-[42%] shrink-0 h-full flex flex-col relative z-10 select-none overflow-hidden bg-[#070a10]/90 border-r border-slate-900/80">
             {/* Clusters Sticky Header */}
             <div className="sticky top-0 z-20 flex items-center justify-between px-1.5 py-1 bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md shrink-0">
               <div className="flex items-center gap-1 min-w-0">
@@ -1441,14 +1497,14 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                             >
                               {/* Horizontal relative volume fill bar */}
                               <div
-                                className={`absolute left-0 top-0 bottom-0 pointer-events-none ${
+                                className={`absolute left-0 top-0 bottom-0 pointer-events-none opacity-20 ${
                                   isPOC
-                                    ? 'bg-amber-400 opacity-20'
+                                    ? 'bg-amber-400'
                                     : lvl.buyVol >= lvl.sellVol
-                                    ? 'bg-emerald-400 opacity-20'
-                                    : ''
+                                    ? 'bg-emerald-400'
+                                    : 'bg-rose-400'
                                 }`}
-                                style={{ width: `${fillPct}%`, backgroundColor: isPOC ? undefined : (lvl.buyVol >= lvl.sellVol ? undefined : '#330101') }}
+                                style={{ width: `${fillPct}%` }}
                               />
 
                               {/* Buy volume sum on left */}
@@ -1521,7 +1577,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
         {/* 2. MIDDLE SECTION: Trades Tape ("Стрічка угод / Лента сделок") */}
         {!isTapeCollapsed ? (
-          <div className="w-28 sm:w-36 md:w-44 shrink-0 h-full relative z-10 flex flex-col border-r border-slate-900/70 bg-[#070a10]/90 select-none">
+          <div className="w-24 sm:w-32 md:w-36 lg:w-44 max-w-[32%] shrink-0 h-full relative z-10 flex flex-col border-r border-slate-900/70 bg-[#070a10]/90 select-none">
             {/* Tape Sticky Header */}
             <div className="sticky top-0 z-20 flex flex-col px-2 py-1 bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md shrink-0">
               <div className="flex items-center justify-between gap-1">
@@ -1671,10 +1727,10 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           </div>
         )}
 
-        {/* 3. RIGHT SECTION: Order Book ("Стакан") */}
+        {/* 3. RIGHT SECTION: Order Book ("Стакан") - Dynamically stretches to 100% of chart width */}
         <div
           ref={domScrollContainerRef}
-          className="w-44 sm:w-52 md:w-60 shrink-0 h-full overflow-y-auto no-scrollbar relative flex flex-col bg-[#090d16]/40 touch-pan-y"
+          className="flex-1 min-w-[170px] w-full h-full overflow-y-auto no-scrollbar relative flex flex-col bg-[#090d16]/40 touch-pan-y"
           style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
         >
           {/* Header columns: Об'єм (ліворуч) | Ціна (праворуч, always visible) */}
@@ -1706,15 +1762,15 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                     {/* Dark Crimson Red Horizontal Volume Bar */}
                     <div
                       className={`absolute left-0 top-0 bottom-0 pointer-events-none transition-all duration-150 ${
-                        isDensity ? 'bg-gradient-to-r from-amber-600/70 to-rose-700/80' : ''
+                        isDensity ? 'bg-gradient-to-r from-amber-600/70 to-rose-700/80' : 'bg-rose-900/60'
                       }`}
-                      style={{ width: `${fillPct}%`, backgroundColor: isDensity ? undefined : '#330101' }}
+                      style={{ width: `${fillPct}%` }}
                     />
 
                     {/* Volume text on Left */}
                     <div className="relative z-10 flex items-center gap-1 min-w-0 pr-1 overflow-hidden">
                       <span className="font-mono text-white text-[10px] sm:text-[11px] font-medium truncate">
-                        {formatVolume(row.volumeUsd)}$
+                        {formatVolume(row.volumeUsd)}
                       </span>
                       {isDensity && (
                         <span className="text-[7.5px] sm:text-[8px] font-bold px-1 py-0.2 rounded bg-amber-500 text-slate-950 uppercase tracking-tighter shrink-0">
@@ -1772,7 +1828,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
                     {/* Volume text on Left */}
                     <div className="relative z-10 flex items-center gap-1 min-w-0 pr-1 overflow-hidden">
                       <span className="font-mono text-white text-[10px] sm:text-[11px] font-medium truncate">
-                        {formatVolume(row.volumeUsd)}$
+                        {formatVolume(row.volumeUsd)}
                       </span>
                       {isDensity && (
                         <span className="text-[7.5px] sm:text-[8px] font-bold px-1 py-0.2 rounded bg-amber-500 text-slate-950 uppercase tracking-tighter shrink-0">

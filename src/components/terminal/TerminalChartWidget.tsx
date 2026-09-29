@@ -106,6 +106,70 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
     });
   }, []);
 
+  // DOM height preset: 'md' (600px), 'lg' (780px), 'xl' (950px)
+  // Changes ONLY downward height, while width strictly matches chart width
+  const activeDomHeightPreset: 'md' | 'lg' | 'xl' = block.domSettings?.heightPreset || 'lg';
+
+  const domHeightPx = useMemo(() => {
+    switch (activeDomHeightPreset) {
+      case 'md': return 600;
+      case 'xl': return 950;
+      case 'lg':
+      default: return 780;
+    }
+  }, [activeDomHeightPreset]);
+
+  const handleDomHeightPresetChange = useCallback((preset: 'md' | 'lg' | 'xl') => {
+    onUpdateBlock({
+      domSettings: {
+        ...block.domSettings,
+        heightPreset: preset,
+      },
+    });
+  }, [block.domSettings, onUpdateBlock]);
+
+  // Measure block width to detect compact mode (e.g. <= 420px, down to 280px minimum)
+  const cardContainerRef = useRef<HTMLDivElement>(null);
+  const [blockWidth, setBlockWidth] = useState<number>(600);
+  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState<boolean>(false);
+  const headerMenuRef = useRef<HTMLDivElement>(null);
+  const arrowButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!cardContainerRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setBlockWidth(entry.contentRect.width);
+      }
+    });
+    ro.observe(cardContainerRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const isCompactHeader = blockWidth > 0 && blockWidth <= 420;
+
+  useEffect(() => {
+    if (!isCompactHeader) {
+      setIsHeaderMenuOpen(false);
+    }
+  }, [isCompactHeader]);
+
+  useEffect(() => {
+    if (!isHeaderMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        headerMenuRef.current &&
+        !headerMenuRef.current.contains(e.target as Node) &&
+        arrowButtonRef.current &&
+        !arrowButtonRef.current.contains(e.target as Node)
+      ) {
+        setIsHeaderMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isHeaderMenuOpen]);
+
   // Live Price State & Tick Animation
   const [currentPrice, setCurrentPrice] = useState<number | null>(coin?.currentPrice || null);
   const [priceDirection, setPriceDirection] = useState<'up' | 'down' | 'neutral'>('neutral');
@@ -283,7 +347,7 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
   // Compute CSS column span class
   const colSpanClass = useMemo(() => {
     if (isSingleBlock || isMaximized) return 'col-span-full';
-    const effectiveSpan = block.colSpan || (block.mode === 'combined' ? 2 : 1);
+    const effectiveSpan = block.colSpan || 1;
     switch (effectiveSpan) {
       case 2: return 'col-span-1 md:col-span-2';
       case 3: return 'col-span-1 md:col-span-2 lg:col-span-3';
@@ -291,10 +355,11 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
       case 'full': return 'col-span-full';
       default: return 'col-span-1';
     }
-  }, [block.colSpan, block.mode, isSingleBlock, isMaximized]);
+  }, [block.colSpan, isSingleBlock, isMaximized]);
 
   return (
     <div
+      ref={cardContainerRef}
       draggable={!isSingleBlock && !isMaximized}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -308,8 +373,18 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
           ? 'calc(100vh - 2rem)'
           : block.heightPx
           ? `${block.heightPx}px`
+          : block.mode === 'combined'
+          ? `${domHeightPx + 360}px`
+          : block.mode === 'orderbook'
+          ? `${domHeightPx + 44}px`
           : heightStyle || undefined,
-        minHeight: isSingleBlock || isMaximized ? '420px' : '360px',
+        minHeight: isSingleBlock || isMaximized
+          ? '420px'
+          : block.mode === 'combined'
+          ? `${domHeightPx + 260}px`
+          : block.mode === 'orderbook'
+          ? `${domHeightPx}px`
+          : '300px',
       }}
     >
       {/* Block Top Header Bar */}
@@ -465,15 +540,14 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
           {/* Mode Switcher / Badge */}
           {block.mode === 'orderbook' ? (
             <div className="flex items-center gap-1">
-              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-950/70 border border-emerald-700/60 text-emerald-300 flex items-center gap-1">
-                <Layers className="w-2.5 h-2.5" />
-                <span>Стакан</span>
+              <span className="p-1 rounded font-bold bg-emerald-950/70 border border-emerald-700/60 text-emerald-300 flex items-center justify-center" title="Стакан">
+                <Layers className="w-3 h-3" />
               </span>
               <button
                 type="button"
-                onClick={() => onUpdateBlock({ mode: 'combined', colSpan: 2 })}
+                onClick={() => onUpdateBlock({ mode: 'combined' })}
                 className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
-                title="Додати графік до цього стакану (об'єднаний блок)"
+                title="Додати графік над цим стаканом"
               >
                 <Plus className="w-2.5 h-2.5 text-cyan-400" />
                 <span className="hidden sm:inline">Графік</span>
@@ -481,9 +555,8 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
             </div>
           ) : block.mode === 'combined' ? (
             <div className="flex items-center gap-1">
-              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-cyan-950/80 border border-cyan-700/60 text-cyan-200 flex items-center gap-1">
-                <Zap className="w-2.5 h-2.5 text-cyan-400 fill-cyan-400/30" />
-                <span>Графік + Стакан</span>
+              <span className="p-1 rounded font-bold bg-cyan-950/80 border border-cyan-700/60 text-cyan-200 flex items-center justify-center" title="Графік + Стакан">
+                <Layers className="w-3 h-3 text-cyan-400" />
               </span>
               {onSplitBlock && (
                 <button
@@ -500,56 +573,91 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
           ) : (
             <button
               type="button"
-              onClick={() => onUpdateBlock({ mode: 'combined', colSpan: 2 })}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
-              title="Прикріпити біржовий стакан до цього графіка"
+              onClick={() => onUpdateBlock({ mode: 'combined' })}
+              className="p-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 hover:text-white flex items-center gap-0.5 transition-colors cursor-pointer"
+              title="Прикріпити стакан під цим графіком"
             >
-              <Plus className="w-2.5 h-2.5 text-emerald-400" />
-              <span className="hidden sm:inline">Стакан</span>
+              <Layers className="w-3 h-3 text-emerald-400" />
+              <Plus className="w-2 h-2 text-emerald-400 -ml-1" />
             </button>
           )}
         </div>
 
-        {/* Right: MetaScalp, Telegram, Maximize, Close */}
+        {/* Right: MetaScalp, Telegram, Expand Arrow (on compact), Maximize, Close */}
         <div className="flex items-center gap-1 shrink-0">
-          {/* MetaScalp send button */}
-          {coin && onSendMetaScalp && (
-            <button
-              onClick={() => onSendMetaScalp(coin)}
-              className="p-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors"
-              title={`Надіслати в MetaScalp (${metaScalpBinding})`}
-            >
-              <Zap className="w-3 h-3 text-amber-400" />
-            </button>
+          {!isCompactHeader && (
+            <>
+              {/* MetaScalp send button */}
+              {coin && onSendMetaScalp && (
+                <button
+                  onClick={() => onSendMetaScalp(coin)}
+                  className="p-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors"
+                  title={`Надіслати в MetaScalp (${metaScalpBinding})`}
+                >
+                  <Zap className="w-3 h-3 text-amber-400" />
+                </button>
+              )}
+
+              {/* Telegram Alert quick button */}
+              {coin && onOpenTelegramAlerts && (
+                <button
+                  onClick={() =>
+                    onOpenTelegramAlerts({
+                      symbol: coin.symbol,
+                      exchange: coin.exchange,
+                      marketType: coin.marketType,
+                      currentPrice: livePrice,
+                      targetPrice: activeFormation?.levels?.targetPrice,
+                      formationName: activeFormation?.name,
+                    })
+                  }
+                  className="p-1 rounded bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 transition-colors"
+                  title="Налаштувати алерт у Telegram"
+                >
+                  <Send className="w-3 h-3 text-sky-400" />
+                </button>
+              )}
+
+
+
+              {/* Toggle Drawing Toolbar button */}
+              <button
+                onClick={handleToggleToolbar}
+                className={`p-1 rounded transition-colors ${
+                  showDrawingToolbar
+                    ? 'text-cyan-400 bg-cyan-950/50 hover:bg-cyan-900/50'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+                title={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
+                aria-label={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
+              >
+                {showDrawingToolbar ? <PanelLeftClose className="w-3 h-3" /> : <PanelLeftOpen className="w-3 h-3" />}
+              </button>
+
+              {/* Fullscreen Modal trigger (open full analysis) */}
+              {coin && onOpenFullscreenModal && (
+                <button
+                  onClick={() => onOpenFullscreenModal(coin, activeFormation || undefined)}
+                  className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors hidden sm:block"
+                  title="Відкрити детальний графік з розширеним аналізом"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              )}
+            </>
           )}
 
-          {/* Telegram Alert quick button */}
-          {coin && onOpenTelegramAlerts && (
-            <button
-              onClick={() =>
-                onOpenTelegramAlerts({
-                  symbol: coin.symbol,
-                  exchange: coin.exchange,
-                  marketType: coin.marketType,
-                  currentPrice: livePrice,
-                  targetPrice: activeFormation?.levels?.targetPrice,
-                  formationName: activeFormation?.name,
-                })
-              }
-              className="p-1 rounded bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 transition-colors"
-              title="Налаштувати алерт у Telegram"
-            >
-              <Send className="w-3 h-3 text-sky-400" />
-            </button>
-          )}
-
-          {/* Col Span Adjuster (Width) */}
+          {/* Col Span & Height Adjuster (Width & Height) - Positioned next to expand arrow */}
           {!isSingleBlock && !isMaximized && (
-            <div className="relative hidden md:block">
+            <div className="relative">
               <button
                 onClick={() => setIsSpanPickerOpen(!isSpanPickerOpen)}
-                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                title="Ширина та висота блоку"
+                className={`p-1 rounded transition-colors cursor-pointer ${
+                  isSpanPickerOpen
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+                title="Ширина та висота блоку (1, 2, 3 колонки, висота)"
               >
                 <Columns className="w-3 h-3" />
               </button>
@@ -605,14 +713,22 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
                   </button>
                   <div className="my-1 border-t border-slate-800" />
                   <div className="px-2 pt-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                    Висота графіка
+                    {block.mode === 'combined' ? 'Висота блоку (Графік + Стакан)' : 'Висота графіка'}
                   </div>
-                  {[
-                    { px: 280, label: 'Мінімум' },
-                    { px: 380, label: 'Компактний' },
-                    { px: 480, label: 'Стандартний' },
-                    { px: 620, label: 'Високий' },
-                  ].map((height) => (
+                  {(block.mode === 'combined'
+                    ? [
+                        { px: 420, label: 'Мінімум' },
+                        { px: 540, label: 'Компактний' },
+                        { px: 680, label: 'Стандартний' },
+                        { px: 850, label: 'Високий' },
+                      ]
+                    : [
+                        { px: 280, label: 'Мінімум' },
+                        { px: 380, label: 'Компактний' },
+                        { px: 480, label: 'Стандартний' },
+                        { px: 620, label: 'Високий' },
+                      ]
+                  ).map((height) => (
                     <button
                       key={height.px}
                       onClick={() => {
@@ -623,7 +739,7 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
                         block.heightPx === height.px ? 'text-cyan-300 font-bold' : 'text-slate-300'
                       }`}
                     >
-                      {height.label} ({height.px}px)
+                      {height.label}
                     </button>
                   ))}
                   <button
@@ -640,28 +756,25 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
             </div>
           )}
 
-          {/* Toggle Drawing Toolbar button */}
-          <button
-            onClick={handleToggleToolbar}
-            className={`p-1 rounded transition-colors ${
-              showDrawingToolbar
-                ? 'text-cyan-400 bg-cyan-950/50 hover:bg-cyan-900/50'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-            title={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
-            aria-label={showDrawingToolbar ? 'Сховати панель інструментів на графіку' : 'Показати панель інструментів на графіку'}
-          >
-            {showDrawingToolbar ? <PanelLeftClose className="w-3 h-3" /> : <PanelLeftOpen className="w-3 h-3" />}
-          </button>
-
-          {/* Fullscreen Modal trigger (open full analysis) */}
-          {coin && onOpenFullscreenModal && (
+          {/* Expand Arrow Button for compact mode (when width <= 420px, down to 280px) */}
+          {isCompactHeader && (
             <button
-              onClick={() => onOpenFullscreenModal(coin, activeFormation || undefined)}
-              className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors hidden sm:block"
-              title="Відкрити детальний графік з розширеним аналізом"
+              ref={arrowButtonRef}
+              type="button"
+              onClick={() => setIsHeaderMenuOpen(!isHeaderMenuOpen)}
+              className={`p-1 rounded transition-colors flex items-center justify-center cursor-pointer border ${
+                isHeaderMenuOpen
+                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 shadow-sm shadow-cyan-950/50'
+                  : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border-slate-700/80'
+              }`}
+              title={isHeaderMenuOpen ? 'Згорнути панель інструментів' : 'Розгорнути інструменти (що не помістились)'}
+              aria-label="Розгорнути приховані інструменти"
             >
-              <ExternalLink className="w-3 h-3" />
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                  isHeaderMenuOpen ? 'rotate-180 text-cyan-400' : 'text-slate-400'
+                }`}
+              />
             </button>
           )}
 
@@ -691,11 +804,115 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
         </div>
       </div>
 
+      {/* Expandable Sub-Header Panel for Compact / Narrow Mode (<= 420px down to 280px) */}
+      {isCompactHeader && isHeaderMenuOpen && (
+        <div
+          ref={headerMenuRef}
+          className="bg-slate-950/98 border-b border-slate-800 px-2 py-2 text-xs flex flex-col gap-2 z-30 shadow-2xl backdrop-blur-md animate-in slide-in-from-top-1 duration-150 select-none shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Actions & Tools */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Drawing Toolbar */}
+            <button
+              onClick={handleToggleToolbar}
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors border cursor-pointer ${
+                showDrawingToolbar
+                  ? 'bg-cyan-950/60 text-cyan-300 border-cyan-600/50'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+              }`}
+            >
+              {showDrawingToolbar ? <PanelLeftClose className="w-3 h-3" /> : <PanelLeftOpen className="w-3 h-3" />}
+              <span>{showDrawingToolbar ? 'Малювання: увімк' : 'Малювання'}</span>
+            </button>
+
+            {/* MetaScalp */}
+            {coin && onSendMetaScalp && (
+              <button
+                onClick={() => {
+                  onSendMetaScalp(coin);
+                  setIsHeaderMenuOpen(false);
+                }}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] cursor-pointer"
+                title={`Надіслати в MetaScalp (${metaScalpBinding})`}
+              >
+                <Zap className="w-3 h-3 text-amber-400" />
+                <span>MetaScalp</span>
+              </button>
+            )}
+
+            {/* Telegram Alerts */}
+            {coin && onOpenTelegramAlerts && (
+              <button
+                onClick={() => {
+                  onOpenTelegramAlerts({
+                    symbol: coin.symbol,
+                    exchange: coin.exchange,
+                    marketType: coin.marketType,
+                    currentPrice: livePrice,
+                    targetPrice: activeFormation?.levels?.targetPrice,
+                    formationName: activeFormation?.name,
+                  });
+                  setIsHeaderMenuOpen(false);
+                }}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] cursor-pointer"
+                title="Налаштувати алерт у Telegram"
+              >
+                <Send className="w-3 h-3 text-sky-400" />
+                <span>Алерт</span>
+              </button>
+            )}
+
+            {/* Full Analysis Modal */}
+            {coin && onOpenFullscreenModal && (
+              <button
+                onClick={() => {
+                  onOpenFullscreenModal(coin, activeFormation || undefined);
+                  setIsHeaderMenuOpen(false);
+                }}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-[10px] cursor-pointer"
+                title="Відкрити детальний графік з розширеним аналізом"
+              >
+                <ExternalLink className="w-3 h-3 text-cyan-400" />
+                <span>Аналіз</span>
+              </button>
+            )}
+
+            {/* Move Arrows */}
+            {!isSingleBlock && !isMaximized && onMove && (
+              <div className="flex items-center gap-1 text-slate-400 text-[10px] ml-auto">
+                <span className="text-[9px] text-slate-500">Позиція:</span>
+                <button
+                  onClick={() => onMove('left')}
+                  className="p-1 hover:text-white hover:bg-slate-800 rounded border border-slate-800 cursor-pointer"
+                  title="Перемістити ліворуч"
+                >
+                  <ChevronLeft className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => onMove('right')}
+                  className="p-1 hover:text-white hover:bg-slate-800 rounded border border-slate-800 cursor-pointer"
+                  title="Перемістити праворуч"
+                >
+                  <ChevronRight className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Block Body Content (Chart / Orderbook / Combined) */}
       <div className="flex-1 w-full relative bg-[#090d16] overflow-hidden min-h-0 flex flex-col">
         {block.mode === 'orderbook' ? (
           /* 1. Dedicated Order Book (Scalper DOM) */
-          <div className="flex-1 w-full h-full relative overflow-hidden bg-[#070a10]">
+          <div
+            className="w-full relative overflow-hidden bg-[#070a10]"
+            style={{
+              height: `${domHeightPx}px`,
+              width: '100%',
+            }}
+          >
             <ScalperDOMWidget
               symbol={block.symbol}
               baseAsset={block.baseAsset}
@@ -709,6 +926,8 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
               initialDepth={block.domSettings?.depth || 'all'}
               initialDensityThreshold={block.domSettings?.densityThresholdUsd || 100000}
               initialSoundAlert={block.domSettings?.soundAlertEnabled ?? true}
+              domHeightPreset={activeDomHeightPreset}
+              onDomHeightPresetChange={handleDomHeightPresetChange}
               onUpdateSettings={(settings) => {
                 onUpdateBlock({
                   domSettings: {
@@ -721,10 +940,10 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
             />
           </div>
         ) : block.mode === 'combined' ? (
-          /* 2. Combined Mode: Chart + Order Book side-by-side adapting to screen size */
-          <div className="flex-1 w-full h-full flex flex-col md:flex-row overflow-hidden relative">
-            {/* Left/Top: TradingView Chart */}
-            <div className="flex-1 h-1/2 md:h-full min-w-0 relative border-b md:border-b-0 md:border-r border-slate-800 bg-[#090d16]">
+          /* 2. Combined Mode: Chart on Top + Order Book (DOM) directly below it */
+          <div className="flex-1 w-full h-full flex flex-col overflow-hidden relative">
+            {/* Top: TradingView Chart */}
+            <div className="flex-1 w-full relative border-b border-slate-800 bg-[#090d16] min-h-[260px] overflow-hidden">
               <div
                 className={`absolute top-0 h-full transition-[width,left] duration-200 ease-in-out ${
                   showDrawingToolbar ? 'left-0 w-full' : '-left-[54px] w-[calc(100%+54px)]'
@@ -758,8 +977,44 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
               </div>
             </div>
 
-            {/* Right/Bottom: Order Book (Scalper DOM) */}
-            <div className="h-1/2 md:h-full w-full md:w-[340px] lg:w-[400px] xl:w-[450px] shrink-0 relative bg-[#070a10]">
+            {/* Middle Divider Header: Order book title & height presets (600px / 780px / 950px) */}
+            <div className="h-6 px-2.5 bg-slate-950/95 border-b border-slate-800 flex items-center justify-between text-[10px] text-slate-400 shrink-0 select-none">
+              <div className="flex items-center gap-1.5 font-semibold text-cyan-300">
+                <Layers className="w-3 h-3 text-cyan-400" />
+                <span className="truncate">Стакан під графіком ({block.symbol})</span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="text-[9px] text-slate-500 mr-0.5">Висота стакану:</span>
+                {[
+                  { id: 'md' as const, label: '600px' },
+                  { id: 'lg' as const, label: '780px' },
+                  { id: 'xl' as const, label: '950px' },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleDomHeightPresetChange(item.id)}
+                    className={`px-1.5 py-0.5 rounded text-[9.5px] font-mono transition-colors cursor-pointer ${
+                      activeDomHeightPreset === item.id
+                        ? 'bg-cyan-500/25 text-cyan-300 font-bold border border-cyan-500/40'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                    }`}
+                    title={`Встановити висоту стакану ${item.label} до низу (ширина залежить від графіка)`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Bottom: Order Book (Scalper DOM) taking exact height downwards and 100% chart width */}
+            <div
+              className="w-full shrink-0 relative bg-[#070a10] overflow-hidden"
+              style={{
+                height: `${domHeightPx}px`,
+                width: '100%',
+              }}
+            >
               <ScalperDOMWidget
                 symbol={block.symbol}
                 baseAsset={block.baseAsset}
@@ -773,6 +1028,8 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
                 initialDepth={block.domSettings?.depth || 'all'}
                 initialDensityThreshold={block.domSettings?.densityThresholdUsd || 100000}
                 initialSoundAlert={block.domSettings?.soundAlertEnabled ?? true}
+                domHeightPreset={activeDomHeightPreset}
+                onDomHeightPresetChange={handleDomHeightPresetChange}
                 onUpdateSettings={(settings) => {
                   onUpdateBlock({
                     domSettings: {
@@ -842,7 +1099,7 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
         <div className="flex items-center gap-2">
           {coin?.volume24hUsd && (
             <span>
-              Vol 24г: <span className="text-slate-200">${formatVolume(coin.volume24hUsd)}</span>
+              Vol 24г: <span className="text-slate-200">{formatVolume(coin.volume24hUsd)}</span>
             </span>
           )}
           {coin?.highPrice24h && (

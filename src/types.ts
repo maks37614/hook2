@@ -24,6 +24,7 @@ export interface TerminalChartBlock {
     bubbleThresholdUsd?: number;
     soundAlertEnabled?: boolean;
     clusterTimeframe?: Timeframe;
+    heightPreset?: 'md' | 'lg' | 'xl';
   };
 }
 
