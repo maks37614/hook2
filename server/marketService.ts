@@ -54,14 +54,12 @@ const BROWSER_HEADERS = {
 };
 
 // Fetch tickers from Binance with multi-mirror resilience (handles geoblocking on cloud servers like Railway)
-async function fetchBinanceTickers(market: MarketType, minVolume: number = 0): Promise<RawTicker[]> {
+async function fetchBinanceTickers(market: MarketType, minVolume: number = 0, maxVolume: number = 10_000_000_000): Promise<RawTicker[]> {
   const mirrors = market === 'futures'
     ? [
         'https://fapi.binance.com/fapi/v1/ticker/24hr',
-        'https://data-api.binance.vision/api/v3/ticker/24hr',
-        'https://api.binance.com/api/v3/ticker/24hr',
-        'https://api1.binance.com/api/v3/ticker/24hr',
-        'https://api2.binance.com/api/v3/ticker/24hr',
+        'https://fapi1.binance.com/fapi/v1/ticker/24hr',
+        'https://fapi2.binance.com/fapi/v1/ticker/24hr',
       ]
     : [
         'https://data-api.binance.vision/api/v3/ticker/24hr',
@@ -95,7 +93,7 @@ async function fetchBinanceTickers(market: MarketType, minVolume: number = 0): P
             low24h: parseFloat(item.lowPrice) || 0,
           };
         })
-        .filter((t) => t.volumeUsd >= minVolume && t.price > 0)
+        .filter((t) => t.volumeUsd >= minVolume && t.volumeUsd <= maxVolume && t.price > 0)
         .sort((a, b) => b.volumeUsd - a.volumeUsd);
 
       if (tickers.length > 0) {
@@ -110,7 +108,7 @@ async function fetchBinanceTickers(market: MarketType, minVolume: number = 0): P
 }
 
 // Fetch tickers from Bybit with backup domain support
-async function fetchBybitTickers(market: MarketType, minVolume: number = 0): Promise<RawTicker[]> {
+async function fetchBybitTickers(market: MarketType, minVolume: number = 0, maxVolume: number = 10_000_000_000): Promise<RawTicker[]> {
   const category = market === 'futures' ? 'linear' : 'spot';
   const mirrors = [
     `https://api.bybit.com/v5/market/tickers?category=${category}`,
@@ -146,7 +144,7 @@ async function fetchBybitTickers(market: MarketType, minVolume: number = 0): Pro
             low24h: parseFloat(item.lowPrice24h) || 0,
           };
         })
-        .filter((t) => t.volumeUsd >= minVolume && t.price > 0)
+        .filter((t) => t.volumeUsd >= minVolume && t.volumeUsd <= maxVolume && t.price > 0)
         .sort((a, b) => b.volumeUsd - a.volumeUsd);
 
       if (tickers.length > 0) {
@@ -174,11 +172,13 @@ export async function fetchKlines(
   market: MarketType,
   symbol: string,
   timeframe: Timeframe,
-  limit: number = 70
+  limit: number = 70,
+  startTime?: number,
+  endTime?: number
 ): Promise<Kline[]> {
   const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const safeLimit = Math.min(Math.max(limit, 10), 1000);
-  const cacheKey = `${exchange}:${market}:${cleanSymbol}:${timeframe}:${safeLimit}`;
+  const cacheKey = `${exchange}:${market}:${cleanSymbol}:${timeframe}:${safeLimit}:${startTime || ''}:${endTime || ''}`;
 
   const cached = klinesMemoryCache.get(cacheKey);
   const now = Date.now();
@@ -186,19 +186,22 @@ export async function fetchKlines(
     return cached.data;
   }
 
+  const extraBinance = `${startTime ? `&startTime=${startTime}` : ''}${endTime ? `&endTime=${endTime}` : ''}`;
+  const extraBybit = `${startTime ? `&start=${startTime}` : ''}${endTime ? `&end=${endTime}` : ''}`;
+
   if (exchange === 'binance') {
     const interval = toBinanceInterval(timeframe);
     const mirrors = market === 'futures'
       ? [
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+          `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+          `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+          `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
         ]
       : [
-          `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-          `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+          `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+          `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+          `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
         ];
 
     for (const url of mirrors) {
@@ -247,7 +250,7 @@ export async function fetchKlines(
     for (const cat of categories) {
       for (const host of hosts) {
         try {
-          const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`;
+          const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBybit}`;
           const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(2500) });
           if (!res.ok) continue;
           const json = await res.json();
@@ -588,11 +591,13 @@ export async function fetchMarketCoins(params: {
   exchange?: 'all' | ExchangeId;
   marketType?: 'all' | MarketType;
   minVolumeUsd?: number;
+  maxVolumeUsd?: number;
 }): Promise<MarketCoin[]> {
   const exchange = params.exchange || 'all';
   const marketType = params.marketType || 'all';
-  const minVol = params.minVolumeUsd || 0;
-  const cacheKey = `coins_${exchange}_${marketType}_${minVol}`;
+  const minVol = params.minVolumeUsd !== undefined ? params.minVolumeUsd : 50_000;
+  const maxVol = params.maxVolumeUsd !== undefined ? params.maxVolumeUsd : 10_000_000_000;
+  const cacheKey = `coins_${exchange}_${marketType}_${minVol}_${maxVol}`;
 
   const cached = coinListCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < COIN_LIST_CACHE_TTL) {
@@ -603,19 +608,19 @@ export async function fetchMarketCoins(params: {
 
   if (exchange === 'all' || exchange === 'binance') {
     if (marketType === 'all' || marketType === 'futures') {
-      tickerPromises.push(fetchBinanceTickers('futures', minVol));
+      tickerPromises.push(fetchBinanceTickers('futures', minVol, maxVol));
     }
     if (marketType === 'all' || marketType === 'spot') {
-      tickerPromises.push(fetchBinanceTickers('spot', minVol));
+      tickerPromises.push(fetchBinanceTickers('spot', minVol, maxVol));
     }
   }
 
   if (exchange === 'all' || exchange === 'bybit') {
     if (marketType === 'all' || marketType === 'futures') {
-      tickerPromises.push(fetchBybitTickers('futures', minVol));
+      tickerPromises.push(fetchBybitTickers('futures', minVol, maxVol));
     }
     if (marketType === 'all' || marketType === 'spot') {
-      tickerPromises.push(fetchBybitTickers('spot', minVol));
+      tickerPromises.push(fetchBybitTickers('spot', minVol, maxVol));
     }
   }
 
@@ -627,7 +632,7 @@ export async function fetchMarketCoins(params: {
 
   for (const t of allTickers) {
     const key = `${t.exchange}_${t.symbol}_${t.marketType}`;
-    if (!seenKeys.has(key) && t.volumeUsd >= minVol && t.price > 0) {
+    if (!seenKeys.has(key) && t.volumeUsd >= minVol && t.volumeUsd <= maxVol && t.price > 0) {
       seenKeys.add(key);
 
       const high = t.high24h > 0 ? t.high24h : t.price;
