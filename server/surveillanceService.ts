@@ -49,8 +49,21 @@ export function loadSurveillanceStore(): UserSurveillanceStore {
     if (fs.existsSync(SURVEILLANCE_FILE)) {
       const raw = fs.readFileSync(SURVEILLANCE_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
+      if (Array.isArray(parsed)) {
+        // Migrate legacy array format to user-keyed object format
+        storeCache = {};
+        for (const item of parsed) {
+          if (item && typeof item === 'object') {
+            const uid = (item.userId && String(item.userId).trim()) || 'guest';
+            if (!storeCache[uid]) storeCache[uid] = [];
+            storeCache[uid].push(item);
+          }
+        }
+        saveSurveillanceStore(storeCache);
+      } else if (parsed && typeof parsed === 'object') {
         storeCache = parsed;
+      } else {
+        storeCache = {};
       }
     } else {
       const legacyFile = path.join(DATA_DIR, 'surveillance_legacy.json');
@@ -59,6 +72,7 @@ export function loadSurveillanceStore(): UserSurveillanceStore {
         const list = JSON.parse(raw);
         if (Array.isArray(list)) {
           storeCache = { guest: list };
+          saveSurveillanceStore(storeCache);
         }
       }
     }
@@ -73,8 +87,19 @@ export function loadSurveillanceStore(): UserSurveillanceStore {
 export function saveSurveillanceStore(store: UserSurveillanceStore): boolean {
   try {
     ensureDataDir();
-    storeCache = store;
-    fs.writeFileSync(SURVEILLANCE_FILE, JSON.stringify(store, null, 2), 'utf-8');
+    let safeStore: UserSurveillanceStore = store;
+    if (Array.isArray(store)) {
+      safeStore = {};
+      for (const item of store as any[]) {
+        if (item && typeof item === 'object') {
+          const uid = (item.userId && String(item.userId).trim()) || 'guest';
+          if (!safeStore[uid]) safeStore[uid] = [];
+          safeStore[uid].push(item);
+        }
+      }
+    }
+    storeCache = safeStore;
+    fs.writeFileSync(SURVEILLANCE_FILE, JSON.stringify(safeStore, null, 2), 'utf-8');
     return true;
   } catch (err) {
     console.error('Failed to save surveillance.json:', err);
@@ -83,9 +108,8 @@ export function saveSurveillanceStore(store: UserSurveillanceStore): boolean {
 }
 
 export function loadSurveillanceList(userId?: string): SurveillanceCoin[] {
-  if (!userId || userId === 'guest') return [];
   const store = loadSurveillanceStore();
-  const uid = userId.trim();
+  const uid = (userId && userId.trim() !== '') ? userId.trim() : 'guest';
   const list = store[uid] || [];
   // Normalize triggerModes if migrating
   return list.map((coin) => {
@@ -97,11 +121,44 @@ export function loadSurveillanceList(userId?: string): SurveillanceCoin[] {
 }
 
 export function saveSurveillanceList(userId: string, list: SurveillanceCoin[]): boolean {
-  if (!userId || userId === 'guest') return false;
   const store = loadSurveillanceStore();
-  const uid = userId.trim();
+  const uid = (userId && userId.trim() !== '') ? userId.trim() : 'guest';
   store[uid] = list;
   return saveSurveillanceStore(store);
+}
+
+export function updateSurveillanceCoinActive(
+  id: string,
+  isActive: boolean,
+  preferredUserId?: string
+): SurveillanceCoin | null {
+  const store = loadSurveillanceStore();
+  const found = findSurveillanceCoinById(id, preferredUserId);
+  if (!found) return null;
+
+  const updatedCoin: SurveillanceCoin = {
+    ...found.coin,
+    isActive: Boolean(isActive),
+    updatedAt: new Date().toISOString(),
+  };
+
+  found.list[found.index] = updatedCoin;
+  saveSurveillanceList(found.userId, found.list);
+  return updatedCoin;
+}
+
+export function setAllSurveillanceCoinsActive(userId: string, isActive: boolean): SurveillanceCoin[] {
+  const store = loadSurveillanceStore();
+  const uid = (userId && userId.trim() !== '') ? userId.trim() : 'guest';
+  const list = store[uid] || [];
+  const updatedList = list.map((coin) => ({
+    ...coin,
+    isActive: Boolean(isActive),
+    updatedAt: new Date().toISOString(),
+  }));
+  store[uid] = updatedList;
+  saveSurveillanceStore(store);
+  return updatedList;
 }
 
 export function findSurveillanceCoinById(

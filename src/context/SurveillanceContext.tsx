@@ -20,9 +20,11 @@ interface SurveillanceContextType {
   removeCoinFromSurveillance: (id: string) => Promise<boolean>;
   updateCoinConfig: (id: string, config: Partial<SurveillanceConfig>) => Promise<boolean>;
   toggleCoinActive: (id: string) => Promise<boolean>;
+  toggleAllCoinsActive: (targetActive: boolean) => Promise<boolean>;
   checkCoinNow: (id: string, forceNotify?: boolean) => Promise<SurveillanceCoin | null>;
   checkAllCoinsNow: () => Promise<boolean>;
   isCoinMonitored: (symbol: string, exchange?: ExchangeId) => boolean;
+  isCoinOnSurveillance: (symbol: string, exchange?: ExchangeId) => boolean;
   refresh: () => Promise<void>;
 }
 
@@ -30,18 +32,19 @@ const SurveillanceContext = createContext<SurveillanceContextType | undefined>(u
 
 export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const [coins, setCoins] = useState<SurveillanceCoin[]>([]);
+  const [coins, setCoins] = useState<SurveillanceCoin[]>(() => {
+    try {
+      const cached = localStorage.getItem('signalhook_surveillance_cache');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [loading, setLoading] = useState<boolean>(true);
 
   const fetchCoins = useCallback(async () => {
-    if (!user) {
-      setCoins([]);
-      setLoading(false);
-      return;
-    }
-
+    const userId = user?.uid || 'guest';
     try {
-      const userId = user.uid;
       const res = await fetch(`/api/surveillance?userId=${encodeURIComponent(userId)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -49,12 +52,13 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         setCoins(data.data);
         try {
           localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(data.data));
+          localStorage.setItem('signalhook_surveillance_cache', JSON.stringify(data.data));
         } catch {}
       }
     } catch (err) {
       console.warn('[Surveillance] Fetch error, checking localStorage:', err);
       try {
-        const cached = localStorage.getItem(`signalhook_surveillance_${user.uid}`);
+        const cached = localStorage.getItem(`signalhook_surveillance_${userId}`) || localStorage.getItem('signalhook_surveillance_cache');
         if (cached) {
           setCoins(JSON.parse(cached));
         }
@@ -241,9 +245,37 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   };
 
+  const toggleAllCoinsActive = async (targetActive: boolean): Promise<boolean> => {
+    try {
+      const userId = user?.uid || 'guest';
+      const res = await fetch('/api/surveillance/toggle-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, isActive: targetActive }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setCoins(data.data);
+        try {
+          localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(data.data));
+          localStorage.setItem('signalhook_surveillance_cache', JSON.stringify(data.data));
+        } catch {}
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
   const isCoinMonitored = (symbol: string, exchange?: ExchangeId): boolean => {
     const clean = symbol.toUpperCase().trim();
     return coins.some((c) => c.symbol === clean && (!exchange || c.exchange === exchange) && c.isActive);
+  };
+
+  const isCoinOnSurveillance = (symbol: string, exchange?: ExchangeId): boolean => {
+    const clean = symbol.toUpperCase().trim();
+    return coins.some((c) => c.symbol === clean && (!exchange || c.exchange === exchange));
   };
 
   const activeCount = coins.filter((c) => c.isActive).length;
@@ -258,9 +290,11 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         removeCoinFromSurveillance,
         updateCoinConfig,
         toggleCoinActive,
+        toggleAllCoinsActive,
         checkCoinNow,
         checkAllCoinsNow,
         isCoinMonitored,
+        isCoinOnSurveillance,
         refresh: fetchCoins,
       }}
     >

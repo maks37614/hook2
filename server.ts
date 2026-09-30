@@ -36,6 +36,8 @@ import {
   startSurveillanceMonitor,
   checkAllUserCoins,
   findSurveillanceCoinById,
+  updateSurveillanceCoinActive,
+  setAllSurveillanceCoinsActive,
 } from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
 import { cronManager } from './server/cronService';
@@ -614,11 +616,18 @@ async function startServer() {
   // Surveillance endpoints
   app.get('/api/surveillance', (req, res) => {
     try {
-      const userId = req.query.userId as string | undefined;
-      if (!userId || userId === 'guest') {
-        return res.json({ success: true, data: [] });
+      const requestedId = (req.query.userId as string | undefined)?.trim();
+      const userId = requestedId && requestedId !== '' ? requestedId : 'guest';
+      let list = loadSurveillanceList(userId);
+      // If user just logged in and has no surveillance list yet, inherit guest list if available
+      if (list.length === 0 && userId !== 'guest') {
+        const guestList = loadSurveillanceList('guest');
+        if (guestList.length > 0) {
+          const migrated = guestList.map((c) => ({ ...c, userId }));
+          saveSurveillanceList(userId, migrated);
+          list = migrated;
+        }
       }
-      const list = loadSurveillanceList(userId);
       res.json({ success: true, data: list });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -628,21 +637,27 @@ async function startServer() {
   app.post('/api/surveillance', async (req, res) => {
     try {
       const { symbol, baseAsset, quoteAsset, exchange, marketType, userId, config } = req.body;
-      if (!userId || userId === 'guest') {
-        return res.status(401).json({
-          success: false,
-          error: 'Системний нагляд доступний тільки для зареєстрованих користувачів. Будь ласка, увійдіть.',
-        });
-      }
-      const uid = String(userId).trim();
+      const uid = (userId && String(userId).trim()) || 'guest';
       if (!symbol) {
         return res.status(400).json({ success: false, error: 'Тікер монети не вказано' });
       }
       const cleanSymbol = symbol.toUpperCase().replace('/', '').trim();
       const list = loadSurveillanceList(uid);
 
-      if (list.some((c) => c.symbol === cleanSymbol && c.exchange === (exchange || 'binance'))) {
-        return res.status(400).json({ success: false, error: 'Ця монета вже додана до нагляду' });
+      const existing = list.find((c) => c.symbol === cleanSymbol && c.exchange === (exchange || 'binance'));
+      if (existing) {
+        // Coin already on surveillance: ensure it is active and update config/analysis
+        existing.isActive = true; // Always active upon user add/resume
+        existing.updatedAt = new Date().toISOString();
+        if (config) {
+          existing.config = { ...existing.config, ...config };
+        }
+        const { coin: checked } = await checkCoinSurveillance(existing, true);
+        checked.isActive = true;
+        const idx = list.findIndex((c) => c.id === existing.id);
+        if (idx !== -1) list[idx] = checked;
+        saveSurveillanceList(uid, list);
+        return res.json({ success: true, coin: checked, message: 'Монету активовано для системного нагляду' });
       }
 
       const defaultCfg = getDefaultSurveillanceConfig();
@@ -654,17 +669,18 @@ async function startServer() {
         quoteAsset: quoteAsset || 'USDT',
         exchange: exchange || 'binance',
         marketType: marketType || 'futures',
-        isActive: true,
+        isActive: true, // Always active upon addition until user explicitly pauses or removes
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         config: { ...defaultCfg, ...(config || {}) },
       };
 
       const { coin: checkedCoin } = await checkCoinSurveillance(newCoin, true);
+      checkedCoin.isActive = true;
       list.unshift(checkedCoin);
       saveSurveillanceList(uid, list);
 
-      res.json({ success: true, coin: checkedCoin });
+      res.json({ success: true, coin: checkedCoin, message: 'Монету успішно додано на 24/7 системний нагляд!' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -681,9 +697,10 @@ async function startServer() {
       }
 
       const coin = found.coin;
+      const nextActive = isActive !== undefined ? Boolean(isActive) : coin.isActive;
       const updatedCoin = {
         ...coin,
-        isActive: isActive !== undefined ? Boolean(isActive) : coin.isActive,
+        isActive: nextActive,
         config: config ? { ...coin.config, ...config } : coin.config,
         updatedAt: new Date().toISOString(),
       };
@@ -692,6 +709,18 @@ async function startServer() {
       saveSurveillanceList(found.userId, found.list);
 
       res.json({ success: true, coin: updatedCoin });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Batch toggle all coins active/paused for user
+  app.post('/api/surveillance/toggle-all', (req, res) => {
+    try {
+      const { userId, isActive } = req.body;
+      const uid = (userId && String(userId).trim()) || 'guest';
+      const updatedList = setAllSurveillanceCoinsActive(uid, Boolean(isActive));
+      res.json({ success: true, data: updatedList });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

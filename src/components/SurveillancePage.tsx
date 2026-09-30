@@ -77,6 +77,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     removeCoinFromSurveillance,
     updateCoinConfig,
     toggleCoinActive,
+    toggleAllCoinsActive,
     checkCoinNow,
     checkAllCoinsNow,
     refresh,
@@ -274,6 +275,34 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     }
   };
 
+  const handleToggleActive = async (id: string, symbol: string, currentActive: boolean) => {
+    const ok = await toggleCoinActive(id);
+    if (ok) {
+      if (currentActive) {
+        showToast(`Нагляд за #${symbol} призупинено`, 'info');
+      } else {
+        showToast(`24/7 системний нагляд за #${symbol} увімкнено! Сервер безперервно відстежує монету.`, 'success');
+        checkCoinNow(id, false);
+      }
+    } else {
+      showToast('Не вдалося змінити стан нагляду', 'error');
+    }
+  };
+
+  const handleToggleAll = async (targetActive: boolean) => {
+    if (coins.length === 0) return;
+    const ok = await toggleAllCoinsActive(targetActive);
+    if (ok) {
+      if (targetActive) {
+        showToast(`24/7 системний нагляд увімкнено для всіх монет (${coins.length})!`, 'success');
+      } else {
+        showToast(`Системний нагляд призупинено для всіх монет (${coins.length})`, 'info');
+      }
+    } else {
+      showToast('Не вдалося змінити стан нагляду', 'error');
+    }
+  };
+
   // Run full system scan / overview on all monitored coins
   const handleRunAllSurveillance = async () => {
     if (coins.length === 0) {
@@ -321,12 +350,12 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
           <div className="space-y-1.5">
             <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs font-mono">
               <Radar className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-              <span>Нагляд за монетами</span>
+              <span>Нагляд за монетами (24/7 Автономне стеження)</span>
             </div>
 
             <p className="text-xs sm:text-sm text-slate-400 max-w-3xl leading-relaxed">
               Серверний нагляд за алгоритмом: <strong>структура 4H/1D → рівні → імпульс % → ризик</strong>.
-              Відстежує пробої 6 типів, мульти-режими закриття свічок (4H / 1H / 15m / Realtime), реакцію на Fibonacci 0.618 Golden Pocket та миттєво інформує у ваш Telegram.
+              Сервер автоматично веде безперервний моніторинг кожної доданої монети, аж доки ви її не призупините або не видалите зі списку нагляду.
             </p>
           </div>
 
@@ -335,19 +364,43 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
             <button
               onClick={handleRunAllSurveillance}
               disabled={isRunningAll || coins.length === 0}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-emerald-950/40 transition-all cursor-pointer disabled:opacity-50"
+              className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-emerald-950/40 transition-all cursor-pointer disabled:opacity-50"
               title="Запустити негайний аналіз усіх монет на нагляді"
             >
-              <Play className={`w-4 h-4 fill-current ${isRunningAll ? 'animate-spin' : ''}`} />
-            
+              <RefreshCw className={`w-4 h-4 ${isRunningAll ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Перевірити всі</span>
             </button>
+
+            {/* Batch Toggle Active/Pause */}
+            {coins.length > 0 && (
+              activeCount > 0 ? (
+                <button
+                  onClick={() => handleToggleAll(false)}
+                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs sm:text-sm font-semibold transition-all cursor-pointer shadow-sm"
+                  title="Призупинити нагляд для всіх монет"
+                >
+                  <Pause className="w-3.5 h-3.5 fill-current" />
+                  <span className="hidden sm:inline">Призупинити всі</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleToggleAll(true)}
+                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs sm:text-sm font-semibold transition-all cursor-pointer shadow-sm"
+                  title="Включити системний нагляд для всіх монет"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span className="hidden sm:inline">Включити всі</span>
+                </button>
+              )
+            )}
 
             {/* Add Coin Button */}
             <button
               onClick={() => handleOpenAddModal()}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-cyan-950/40 transition-all cursor-pointer"
+              className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-cyan-950/40 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
+              <span>Додати монету</span>
             </button>
 
             <button
@@ -534,6 +587,17 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                         <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 font-mono">
                           {coin.config.timeframe}
                         </span>
+                        {coin.isActive ? (
+                          <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5 font-mono shadow-xs">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            24/7 Нагляд активний
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 font-mono">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                            Нагляд призупинено
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 font-mono">
                         <span>Ціна:</span>
@@ -570,15 +634,29 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                       <Settings2 className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => toggleCoinActive(coin.id)}
-                      title={coin.isActive ? 'Призупинити нагляд' : 'Увімкнути нагляд'}
-                      className={`p-2 rounded-lg transition-colors cursor-pointer ${
+                      onClick={() => handleToggleActive(coin.id, coin.symbol, coin.isActive)}
+                      title={
                         coin.isActive
-                          ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30'
-                          : 'bg-slate-800 text-slate-500 hover:bg-slate-700'
+                          ? 'Системний нагляд активний 24/7. Натисніть, щоб призупинити нагляд'
+                          : 'Нагляд призупинено. Натисніть, щоб включити 24/7 системний нагляд'
+                      }
+                      className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold shadow-sm ${
+                        coin.isActive
+                          ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                          : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
                       }`}
                     >
-                      {coin.isActive ? <Play className="w-3.5 h-3.5 fill-current" /> : <Pause className="w-3.5 h-3.5" />}
+                      {coin.isActive ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 fill-current" />
+                          <span>Призупинити нагляд</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Включити нагляд</span>
+                        </>
+                      )}
                     </button>
                     <button
                       onClick={() => removeCoinFromSurveillance(coin.id)}
@@ -1103,6 +1181,60 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
             </div>
 
             <div className="p-5 space-y-4 overflow-y-auto flex-1">
+              {/* Surveillance Status Bar (Active / Paused toggle) */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Radar className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Статус нагляду:</span>
+                    {editingCoin.isActive ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-mono">
+                        24/7 Активний
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono">
+                        Призупинено
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {editingCoin.isActive
+                      ? 'Сервер безперервно відстежує рівні та імпульс'
+                      : 'Нагляд тимчасово призупинено'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const nextActive = !editingCoin.isActive;
+                    await toggleCoinActive(editingCoin.id);
+                    setEditingCoin({ ...editingCoin, isActive: nextActive });
+                    if (nextActive) {
+                      showToast(`24/7 системний нагляд за #${editingCoin.symbol} увімкнено!`, 'success');
+                    } else {
+                      showToast(`Нагляд за #${editingCoin.symbol} призупинено`, 'info');
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm ${
+                    editingCoin.isActive
+                      ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                      : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                  }`}
+                >
+                  {editingCoin.isActive ? (
+                    <>
+                      <Pause className="w-3.5 h-3.5 fill-current" />
+                      <span>Призупинити нагляд</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Включити нагляд</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
               {/* Trigger Confirmation Modes (Multi-select) */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
                 <div className="flex items-center justify-between">

@@ -147,7 +147,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
-  const { coins: surveillanceCoins, addCoinToSurveillance, removeCoinFromSurveillance, isCoinMonitored } = useSurveillance();
+  const { coins: surveillanceCoins, addCoinToSurveillance, removeCoinFromSurveillance, isCoinMonitored, isCoinOnSurveillance } = useSurveillance();
   const [surveillanceToast, setSurveillanceToast] = useState<string | null>(null);
 
   const handleSurveillanceToggle = async (e: React.MouseEvent, coin: MarketCoin) => {
@@ -156,20 +156,20 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
       onOpenAuthModal?.('signin', 'general');
       return;
     }
-    const monitored = isCoinMonitored(coin.symbol, coin.exchange);
-    if (monitored) {
+    const onSurveillance = isCoinOnSurveillance(coin.symbol, coin.exchange);
+    if (onSurveillance) {
       const found = surveillanceCoins.find(
         (c) => c.symbol === coin.symbol && c.exchange === coin.exchange
       );
       if (found) {
         await removeCoinFromSurveillance(found.id);
-        setSurveillanceToast(`#${coin.symbol} видалено з системного нагляду`);
+        setSurveillanceToast(`#${coin.symbol} видалено зі системного нагляду`);
         setTimeout(() => setSurveillanceToast(null), 3000);
       }
     } else {
       const res = await addCoinToSurveillance(coin.symbol, coin.exchange, coin.marketType);
       if (res.success) {
-        setSurveillanceToast(`#${coin.symbol} додано на системний нагляд!`);
+        setSurveillanceToast(`Монету #${coin.symbol} додано на 24/7 системний нагляд!`);
         setTimeout(() => setSurveillanceToast(null), 3000);
       } else {
         setSurveillanceToast(res.error || `Не вдалося додати #${coin.symbol}`);
@@ -1111,16 +1111,16 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                             className={`p-1 rounded-lg transition-colors cursor-pointer relative ${
                               isGuest
                                 ? 'bg-slate-800/80 text-slate-400 hover:text-violet-300 hover:bg-slate-800'
-                                : isCoinMonitored(coin.symbol, coin.exchange)
+                                : isCoinOnSurveillance(coin.symbol, coin.exchange)
                                 ? 'bg-violet-500/25 text-violet-300 border border-violet-500/40'
                                 : 'bg-violet-500/10 hover:bg-violet-500/20 text-violet-300/70 hover:text-violet-200'
                             }`}
                             title={
                               isGuest
                                 ? 'Системний нагляд (тільки для зареєстрованих)'
-                                : isCoinMonitored(coin.symbol, coin.exchange)
-                                ? 'Монета на системному нагляді (Натисніть щоб зняти)'
-                                : 'Взяти монету на системний нагляд'
+                                : isCoinOnSurveillance(coin.symbol, coin.exchange)
+                                ? `Монета на системному нагляді (${isCoinMonitored(coin.symbol, coin.exchange) ? 'Активна 24/7' : 'Призупинена'}). Натисніть щоб зняти`
+                                : 'Взяти монету на 24/7 системний нагляд'
                             }
                           >
                             <Radar className={`w-3 h-3 ${!isGuest && isCoinMonitored(coin.symbol, coin.exchange) ? 'animate-pulse' : ''}`} />
@@ -1410,16 +1410,16 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                       className={`p-1.5 rounded-lg transition-colors cursor-pointer border relative ${
                         isGuest
                           ? 'bg-slate-800/80 text-slate-400 hover:text-violet-300 hover:bg-slate-800 border-slate-700/60'
-                          : isCoinMonitored(coin.symbol, coin.exchange)
+                          : isCoinOnSurveillance(coin.symbol, coin.exchange)
                           ? 'bg-violet-500/25 text-violet-300 border-violet-500/40'
                           : 'bg-violet-500/10 hover:bg-violet-500/20 border-violet-500/30 text-violet-300/70 hover:text-violet-200'
                       }`}
                       title={
                         isGuest
                           ? 'Системний нагляд (тільки для зареєстрованих)'
-                          : isCoinMonitored(coin.symbol, coin.exchange)
-                          ? 'Монета на системному нагляді (Натисніть щоб зняти)'
-                          : 'Взяти монету на системний нагляд'
+                          : isCoinOnSurveillance(coin.symbol, coin.exchange)
+                          ? `Монета на системному нагляді (${isCoinMonitored(coin.symbol, coin.exchange) ? 'Активна 24/7' : 'Призупинена'}). Натисніть щоб зняти`
+                          : 'Взяти монету на 24/7 системний нагляд'
                       }
                     >
                       <Radar className={`w-3.5 h-3.5 ${!isGuest && isCoinMonitored(coin.symbol, coin.exchange) ? 'animate-pulse' : ''}`} />

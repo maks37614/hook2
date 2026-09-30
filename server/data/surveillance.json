@@ -1,51 +1,154 @@
-[
-  {
-    "id": "surv_1790212566698_fy8y3",
-    "userId": "guest",
-    "symbol": "BTCUSDT",
-    "baseAsset": "BTC",
-    "quoteAsset": "USDT",
-    "exchange": "binance",
-    "marketType": "futures",
-    "isActive": true,
-    "createdAt": "2026-09-24T01:16:06.698Z",
-    "updatedAt": "2026-09-24T01:16:06.698Z",
-    "config": {
-      "timeframe": "4h",
-      "triggerMode": "bar_close",
-      "levelsEnabled": true,
-      "structureEnabled": true,
-      "momentumEnabled": true,
-      "momentumPct": 2.5,
-      "momentumBars": 3,
-      "momentumTf": "15m",
-      "channelEnabled": true,
-      "fibonacciEnabled": true,
-      "cooldownMinutes": 15
-    },
-    "state": {
-      "currentPrice": 84261.5,
-      "change24h": -0.11,
-      "high1d": 87385.1,
-      "low1d": 62228.8,
-      "swingHigh4h": 87247.3,
-      "swingLow4h": 85080,
-      "localHigh1h": 85932.5,
-      "localLow1h": 83450.1,
-      "rangePositionPct": 58.2,
-      "resistance4h": 87247.3,
-      "support4h": 80095.9,
-      "nextZoneUp": 90823,
-      "nextZoneDown": 76520.19999999998,
-      "fib618": 85907.9086,
-      "fib786": 85543.8022,
-      "structureTrend": "consolidation",
-      "channelUpper": 86564.7,
-      "channelLower": 83450.1,
-      "momentumRecentPct": -0.06,
-      "lastCalculated": 1790212569128,
-      "recentEvents": []
-    },
-    "lastCheckedAt": "2026-09-24T01:16:09.128Z"
-  }
-]
+{
+  "guest": [
+    {
+      "id": "surv_1790212566698_fy8y3",
+      "userId": "guest",
+      "symbol": "BTCUSDT",
+      "baseAsset": "BTC",
+      "quoteAsset": "USDT",
+      "exchange": "binance",
+      "marketType": "futures",
+      "isActive": true,
+      "createdAt": "2026-09-24T01:16:06.698Z",
+      "updatedAt": "2026-09-30T15:54:41.081Z",
+      "config": {
+        "timeframe": "4h",
+        "triggerMode": "bar_close",
+        "levelsEnabled": true,
+        "structureEnabled": true,
+        "momentumEnabled": true,
+        "momentumPct": 2.5,
+        "momentumBars": 3,
+        "momentumTf": "15m",
+        "channelEnabled": true,
+        "fibonacciEnabled": true,
+        "cooldownMinutes": 15,
+        "triggerModes": [
+          "bar_close"
+        ]
+      },
+      "state": {
+        "currentPrice": 84215.9,
+        "change24h": 0.71,
+        "high1d": 87385.1,
+        "low1d": 62268.2,
+        "swingHigh4h": 84554.9,
+        "swingLow4h": 82851.5,
+        "localHigh1h": 85632.7,
+        "localLow1h": 82901.3,
+        "localHigh15m": 85632.7,
+        "localLow15m": 83325.1,
+        "rangePositionPct": 76.5,
+        "resistance4h": 84350,
+        "support4h": 83778.4,
+        "nextZoneUp": 84635.8,
+        "nextZoneDown": 83492.59999999999,
+        "fib618": 83502.1988,
+        "fib786": 83216.0276,
+        "structureTrend": "bullish",
+        "channelUpper": 85632.7,
+        "channelLower": 82901.3,
+        "momentumRecentPct": 0.55,
+        "lastCalculated": 1790783672136,
+        "lastEvent": {
+          "id": "structure_change_1790783672136",
+          "type": "structure",
+          "title": "🔄 Зміна структури ринку (BULLISH)",
+          "description": "Структура змінила тренд на bullish.",
+          "price": 84215.9,
+          "timestamp": 1790783672136,
+          "severity": "critical"
+        },
+        "recentEvents": [
+          {
+            "id": "structure_change_1790783672136",
+            "type": "structure",
+            "title": "🔄 Зміна структури ринку (BULLISH)",
+            "description": "Структура змінила тренд на bullish.",
+            "price": 84215.9,
+            "timestamp": 1790783672136,
+            "severity": "critical"
+          }
+        ]
+      },
+      "lastCheckedAt": "2026-09-30T15:54:32.136Z",
+      "lastNotifiedAt": "2026-09-30T15:54:32.144Z"
+    }
+  ],
+  "usr_hookprof_wkmp9c": [
+    {
+      "id": "surv_1790212566698_fy8y3",
+      "userId": "usr_hookprof_wkmp9c",
+      "symbol": "BTCUSDT",
+      "baseAsset": "BTC",
+      "quoteAsset": "USDT",
+      "exchange": "binance",
+      "marketType": "futures",
+      "isActive": true,
+      "createdAt": "2026-09-24T01:16:06.698Z",
+      "updatedAt": "2026-09-24T01:16:06.698Z",
+      "config": {
+        "timeframe": "4h",
+        "triggerMode": "bar_close",
+        "levelsEnabled": true,
+        "structureEnabled": true,
+        "momentumEnabled": true,
+        "momentumPct": 2.5,
+        "momentumBars": 3,
+        "momentumTf": "15m",
+        "channelEnabled": true,
+        "fibonacciEnabled": true,
+        "cooldownMinutes": 15,
+        "triggerModes": [
+          "bar_close"
+        ]
+      },
+      "state": {
+        "currentPrice": 84215.9,
+        "change24h": 0.71,
+        "high1d": 87385.1,
+        "low1d": 62268.2,
+        "swingHigh4h": 84554.9,
+        "swingLow4h": 82851.5,
+        "localHigh1h": 85632.7,
+        "localLow1h": 82901.3,
+        "localHigh15m": 85632.7,
+        "localLow15m": 83325.1,
+        "rangePositionPct": 76.5,
+        "resistance4h": 84350,
+        "support4h": 83778.4,
+        "nextZoneUp": 84635.8,
+        "nextZoneDown": 83492.59999999999,
+        "fib618": 83502.1988,
+        "fib786": 83216.0276,
+        "structureTrend": "bullish",
+        "channelUpper": 85632.7,
+        "channelLower": 82901.3,
+        "momentumRecentPct": 0.55,
+        "lastCalculated": 1790783672146,
+        "lastEvent": {
+          "id": "structure_change_1790783672146",
+          "type": "structure",
+          "title": "🔄 Зміна структури ринку (BULLISH)",
+          "description": "Структура змінила тренд на bullish.",
+          "price": 84215.9,
+          "timestamp": 1790783672146,
+          "severity": "critical"
+        },
+        "recentEvents": [
+          {
+            "id": "structure_change_1790783672146",
+            "type": "structure",
+            "title": "🔄 Зміна структури ринку (BULLISH)",
+            "description": "Структура змінила тренд на bullish.",
+            "price": 84215.9,
+            "timestamp": 1790783672146,
+            "severity": "critical"
+          }
+        ]
+      },
+      "lastCheckedAt": "2026-09-30T15:54:32.146Z",
+      "lastNotifiedAt": "2026-09-30T15:54:32.147Z"
+    }
+  ]
+}

@@ -42,8 +42,9 @@ export const FormationCard: React.FC<FormationCardProps> = ({
 }) => {
   const { isArchived } = useArchive();
   const archived = isArchived(coin.symbol, formation.id || formation.name);
-  const { isCoinMonitored, addCoinToSurveillance, removeCoinFromSurveillance, coins: survCoins } = useSurveillance();
-  const isMonitored = isCoinMonitored(coin.symbol, coin.exchange);
+  const { isCoinMonitored, isCoinOnSurveillance, addCoinToSurveillance, removeCoinFromSurveillance, coins: survCoins } = useSurveillance();
+  const isMonitored = isCoinOnSurveillance(coin.symbol, coin.exchange);
+  const isActive = isCoinMonitored(coin.symbol, coin.exchange);
 
   const [isChartExpanded, setIsChartExpanded] = useState<boolean>(false);
   const [klines, setKlines] = useState<Kline[]>([]);
@@ -366,7 +367,11 @@ export const FormationCard: React.FC<FormationCardProps> = ({
                     await addCoinToSurveillance(coin.symbol, coin.exchange, coin.marketType);
                   }
                 }}
-                title={isMonitored ? 'Монета на системному нагляді' : 'Взяти на системний нагляд'}
+                title={
+                  isMonitored
+                    ? `Монета на системному нагляді (${isActive ? 'Активна 24/7' : 'Призупинена'}). Натисніть щоб зняти`
+                    : 'Взяти на 24/7 системний нагляд'
+                }
                 className={`p-2 rounded-xl border transition-colors cursor-pointer ${
                   isMonitored
                     ? 'bg-violet-500/20 border-violet-500/40 text-violet-400'
