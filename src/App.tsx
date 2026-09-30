@@ -6,6 +6,7 @@ import { ScreenerTable } from './components/ScreenerTable';
 import { CoinScreenerPage } from './components/CoinScreenerPage';
 import { TerminalPage } from './components/TerminalPage';
 import { SurveillancePage } from './components/SurveillancePage';
+import { ReplayPage } from './components/ReplayPage';
 import { FormationDetailsModal } from './components/FormationDetailsModal';
 import { FormationGuideModal } from './components/FormationGuideModal';
 import { WatchlistDrawer } from './components/WatchlistDrawer';
@@ -78,12 +79,21 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
   useEffect(() => {
-    setFilters((prev) => ({
-      ...prev,
-      exchange: preferences.defaultExchange,
-      marketType: preferences.defaultMarketType,
-      timeframe: preferences.defaultTimeframe,
-    }));
+    setFilters((prev) => {
+      if (
+        prev.exchange === preferences.defaultExchange &&
+        prev.marketType === preferences.defaultMarketType &&
+        prev.timeframe === preferences.defaultTimeframe
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        exchange: preferences.defaultExchange,
+        marketType: preferences.defaultMarketType,
+        timeframe: preferences.defaultTimeframe,
+      };
+    });
   }, [preferences.defaultExchange, preferences.defaultMarketType, preferences.defaultTimeframe]);
 
   // Auth & Profile
@@ -106,8 +116,12 @@ export default function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash;
+      if (hash === '#replay') {
+        setActivePage((prev) => (prev === 'replay' ? prev : 'replay'));
+        return;
+      }
       if (!user) {
-        setActivePage('screener');
+        setActivePage((prev) => (prev === 'screener' ? prev : 'screener'));
         if (hash && hash !== '#screener' && hash !== '') {
           handleOpenAuthModal('signin', 'general');
           window.location.hash = 'screener';
@@ -115,24 +129,26 @@ export default function App() {
         return;
       }
       if (hash === '#patterns') {
-        setActivePage('patterns');
+        setActivePage((prev) => (prev === 'patterns' ? prev : 'patterns'));
       } else if (hash === '#terminal') {
-        setActivePage('terminal');
+        setActivePage((prev) => (prev === 'terminal' ? prev : 'terminal'));
       } else if (hash === '#surveillance') {
-        setActivePage('surveillance');
+        setActivePage((prev) => (prev === 'surveillance' ? prev : 'surveillance'));
+      } else if (hash === '#replay') {
+        setActivePage((prev) => (prev === 'replay' ? prev : 'replay'));
       } else {
         // default / root / #screener
-        setActivePage('screener');
+        setActivePage((prev) => (prev === 'screener' ? prev : 'screener'));
       }
     };
 
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [user, handleOpenAuthModal]);
+  }, [user?.uid, handleOpenAuthModal]);
 
   const handlePageChange = (page: ActivePageType) => {
-    if (!user && page !== 'screener') {
+    if (!user && page !== 'screener' && page !== 'replay') {
       handleOpenAuthModal('signin', 'general');
       return;
     }
@@ -151,15 +167,21 @@ export default function App() {
   // Synchronize watchlist with current logged-in user profile & user-scoped storage (strictly isolated, guests see 0)
   useEffect(() => {
     if (!user) {
-      setWatchlist([]);
+      setWatchlist((prev) => (prev.length === 0 ? prev : []));
       return;
     }
 
     if (profile?.watchlist && Array.isArray(profile.watchlist)) {
-      setWatchlist(Array.from(new Set(profile.watchlist)));
-      try {
-        localStorage.setItem(`crypto_screener_watchlist_${user.uid}`, JSON.stringify(profile.watchlist));
-      } catch {}
+      setWatchlist((prev) => {
+        const next = Array.from(new Set(profile.watchlist));
+        if (prev.length === next.length && prev.every((item, i) => item === next[i])) {
+          return prev;
+        }
+        try {
+          localStorage.setItem(`crypto_screener_watchlist_${user.uid}`, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       return;
     }
 
@@ -169,32 +191,49 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          setWatchlist(Array.from(new Set(parsed)));
+          setWatchlist((prev) => {
+            const next = Array.from(new Set(parsed));
+            if (prev.length === next.length && prev.every((item, i) => item === next[i])) {
+              return prev;
+            }
+            return next;
+          });
           return;
         }
       }
     } catch {}
 
-    setWatchlist([]);
+    setWatchlist((prev) => (prev.length === 0 ? prev : []));
   }, [user?.uid, profile?.watchlist]);
 
   useEffect(() => {
     if (!user) {
-      setWatchlistFolders({});
+      setWatchlistFolders((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       return;
     }
 
     const folders = profile?.watchlistFolders;
     if (folders && typeof folders === 'object') {
-      setWatchlistFolders(folders);
+      setWatchlistFolders((prev) => {
+        if (JSON.stringify(prev) === JSON.stringify(folders)) {
+          return prev;
+        }
+        return folders;
+      });
       return;
     }
 
     try {
       const saved = localStorage.getItem(`crypto_screener_watchlist_folders_${user.uid}`);
-      setWatchlistFolders(saved ? JSON.parse(saved) : {});
+      const parsed = saved ? JSON.parse(saved) : {};
+      setWatchlistFolders((prev) => {
+        if (JSON.stringify(prev) === JSON.stringify(parsed)) {
+          return prev;
+        }
+        return parsed;
+      });
     } catch {
-      setWatchlistFolders({});
+      setWatchlistFolders((prev) => (Object.keys(prev).length === 0 ? prev : {}));
     }
   }, [user?.uid, profile?.watchlistFolders]);
 
@@ -205,7 +244,7 @@ export default function App() {
   });
 
   useEffect(() => {
-    setSoundEnabled(preferences.soundAlertsEnabled);
+    setSoundEnabled((prev) => (prev === preferences.soundAlertsEnabled ? prev : preferences.soundAlertsEnabled));
   }, [preferences.soundAlertsEnabled]);
 
   const [selectedPair, setSelectedPair] = useState<{
@@ -226,9 +265,33 @@ export default function App() {
 
   useEffect(() => {
     if (profile?.metaScalpSettings) {
-      setMetaScalpSettings(profile.metaScalpSettings);
+      setMetaScalpSettings((prev) => {
+        const next = profile.metaScalpSettings!;
+        if (
+          prev.enabled === next.enabled &&
+          prev.port === next.port &&
+          prev.binding === next.binding &&
+          prev.autoSwitchOnClick === next.autoSwitchOnClick &&
+          prev.soundFeedback === next.soundFeedback
+        ) {
+          return prev;
+        }
+        return next;
+      });
     } else if (user?.uid) {
-      setMetaScalpSettings(getStoredMetaScalpSettings(user.uid));
+      const stored = getStoredMetaScalpSettings(user.uid);
+      setMetaScalpSettings((prev) => {
+        if (
+          prev.enabled === stored.enabled &&
+          prev.port === stored.port &&
+          prev.binding === stored.binding &&
+          prev.autoSwitchOnClick === stored.autoSwitchOnClick &&
+          prev.soundFeedback === stored.soundFeedback
+        ) {
+          return prev;
+        }
+        return stored;
+      });
     }
   }, [user?.uid, profile?.metaScalpSettings]);
 
@@ -525,9 +588,10 @@ export default function App() {
     if (!user) {
       setWatchlist((prev) => {
         const uniquePrev = Array.from(new Set(prev));
-        const next = uniquePrev.includes(symbol)
-          ? uniquePrev.filter((s) => s !== symbol)
-          : [...uniquePrev, symbol];
+        const isAdding = !uniquePrev.includes(symbol);
+        const next = isAdding
+          ? [...uniquePrev, symbol]
+          : uniquePrev.filter((s) => s !== symbol);
         const cleanNext = Array.from(new Set(next));
         try {
           localStorage.setItem('crypto_screener_watchlist_guest', JSON.stringify(cleanNext));
@@ -538,13 +602,43 @@ export default function App() {
     }
     setWatchlist((prev) => {
       const uniquePrev = Array.from(new Set(prev));
-      const next = uniquePrev.includes(symbol)
-        ? uniquePrev.filter((s) => s !== symbol)
-        : [...uniquePrev, symbol];
+      const isAdding = !uniquePrev.includes(symbol);
+      const next = isAdding
+        ? [...uniquePrev, symbol]
+        : uniquePrev.filter((s) => s !== symbol);
       const cleanNext = Array.from(new Set(next));
       try {
         localStorage.setItem(`crypto_screener_watchlist_${user.uid}`, JSON.stringify(cleanNext));
       } catch (e) {}
+
+      setWatchlistFolders((prevFolders) => {
+        const entries = Object.entries(prevFolders);
+        if (entries.length === 0) return prevFolders;
+
+        const nextFolders: Record<string, string[]> = {};
+        if (isAdding) {
+          const alreadyAssigned = entries.some(([_, syms]) => Array.isArray(syms) && syms.includes(symbol));
+          entries.forEach(([name, syms], idx) => {
+            const list = Array.isArray(syms) ? [...syms] : [];
+            if (!alreadyAssigned && idx === 0) {
+              if (!list.includes(symbol)) list.push(symbol);
+            }
+            nextFolders[name] = list;
+          });
+        } else {
+          entries.forEach(([name, syms]) => {
+            nextFolders[name] = Array.isArray(syms) ? syms.filter((s) => s !== symbol) : [];
+          });
+        }
+
+        try {
+          localStorage.setItem(`crypto_screener_watchlist_folders_${user.uid}`, JSON.stringify(nextFolders));
+        } catch {}
+        updateProfileData({ watchlistFolders: nextFolders }).catch(() => {});
+
+        return nextFolders;
+      });
+
       updateProfileData({ watchlist: cleanNext }).catch(() => {});
       return cleanNext;
     });
@@ -725,6 +819,11 @@ export default function App() {
             onOpenTelegramAlerts={handleOpenTelegramAlerts}
             onOpenFullscreenModal={(coin, formation) => handleSelectPair(coin, formation)}
             onReturnToPatterns={() => handlePageChange('screener')}
+          />
+        ) : activePage === 'replay' ? (
+          <ReplayPage
+            coins={coins}
+            onNavigateToScreener={() => handlePageChange('screener')}
           />
         ) : activePage === 'surveillance' ? (
           <SurveillancePage

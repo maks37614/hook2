@@ -1,7 +1,7 @@
 export type ExchangeId = 'binance' | 'bybit';
 export type MarketType = 'futures' | 'spot';
 export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
-export type ActivePageType = 'patterns' | 'screener' | 'terminal' | 'surveillance';
+export type ActivePageType = 'patterns' | 'screener' | 'terminal' | 'surveillance' | 'replay';
 
 export type TerminalBlockMode = 'tradingview' | 'pattern' | 'orderbook' | 'combined';
 
@@ -29,8 +29,8 @@ export interface TerminalChartBlock {
 }
 
 export interface TerminalWorkspaceConfig {
-  layoutPreset: '1x1' | '1x2' | '2x1' | '2x2' | '2x3' | 'custom';
-  columns: 1 | 2 | 3 | 4;
+  layoutPreset: '1x1' | '1x2' | '2x1' | '2x2' | '2x3' | '3x3' | '4x4' | '5x5' | '6x6' | 'custom';
+  columns: 1 | 2 | 3 | 4 | 5 | 6;
   autoFitScreen: boolean;
   blocks: TerminalChartBlock[];
   showFormations: boolean;
@@ -715,4 +715,83 @@ export interface AccountBalanceInfo {
   currency?: string;
   assets?: { asset: string; free: number; locked: number }[];
 }
+
+// ==========================================
+// Market Replay & Trading Simulator Types
+// ==========================================
+
+export type ReplayOrderType = 'market' | 'limit' | 'stop';
+export type ReplayOrderSide = 'buy' | 'sell';
+export type ReplayPositionSide = 'long' | 'short';
+
+export interface ReplayPosition {
+  id: string;
+  symbol: string;
+  side: ReplayPositionSide;
+  entryPrice: number;
+  currentPrice: number;
+  sizeUsd: number;
+  marginUsd: number;
+  quantity: number;
+  leverage: number;
+  slPrice?: number;
+  tpPrice?: number;
+  entryTime: number;
+  unrealizedPnlUsd: number;
+  unrealizedPnlPct: number;
+  liquidationPrice: number;
+  tag?: string;
+  entryScreenshot?: string;
+}
+
+export interface ReplayPendingOrder {
+  id: string;
+  symbol: string;
+  side: ReplayOrderSide;
+  orderType: 'limit' | 'stop';
+  price: number;
+  sizeUsd: number;
+  leverage: number;
+  slPrice?: number;
+  tpPrice?: number;
+  tag?: string;
+  createdAtTime: number;
+}
+
+export interface ReplayTradeJournalItem {
+  id: string;
+  symbol: string;
+  exchange: ExchangeId;
+  marketType: MarketType;
+  timeframe: Timeframe;
+  side: ReplayPositionSide;
+  entryPrice: number;
+  exitPrice: number;
+  entryTime: number;
+  exitTime: number;
+  sizeUsd: number;
+  marginUsd: number;
+  leverage: number;
+  slPrice?: number;
+  tpPrice?: number;
+  pnlUsd: number;
+  pnlPct: number;
+  commissionUsd: number;
+  tag: string;
+  notes?: string;
+  screenshotUrl?: string;
+  exitReason: 'tp' | 'sl' | 'manual' | 'liquidation' | 'limit';
+}
+
+export interface ReplaySimulationSettings {
+  balance: number;
+  leverage: number;
+  positionSizeUsd: number;
+  commissionPct: number; // e.g. 0.05
+  spreadPct: number;     // e.g. 0.02
+  slippagePct: number;   // e.g. 0.02
+  autoSlPct?: number;
+  autoTpPct?: number;
+}
+
 
