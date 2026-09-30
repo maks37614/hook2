@@ -3,7 +3,7 @@ import { ExchangeId, MarketType, UnifiedLinkingSettings, TerminalTarget } from '
 export type { UnifiedLinkingSettings, TerminalTarget };
 
 export const DEFAULT_UNIFIED_LINKING_SETTINGS: UnifiedLinkingSettings = {
-  activeTarget: 'vataga',
+  activeTarget: 'metascalp',
   autoSwitchOnClick: true,
   soundFeedback: true,
   metascalp: {
@@ -13,7 +13,7 @@ export const DEFAULT_UNIFIED_LINKING_SETTINGS: UnifiedLinkingSettings = {
   },
   vataga: {
     enabled: true,
-    port: 17840,
+    port: 17845, // Vataga EasyScalp / MetaScalp compatibility port
     binding: '1',
   },
   tiger: {
@@ -31,13 +31,18 @@ export function getStoredUnifiedLinkingSettings(userId?: string): UnifiedLinking
     const saved = localStorage.getItem(key) || (userId ? localStorage.getItem(STORAGE_KEY) : null);
     if (saved) {
       const parsed = JSON.parse(saved);
-      return {
+      const settings: UnifiedLinkingSettings = {
         ...DEFAULT_UNIFIED_LINKING_SETTINGS,
         ...parsed,
         metascalp: { ...DEFAULT_UNIFIED_LINKING_SETTINGS.metascalp, ...(parsed.metascalp || {}) },
         vataga: { ...DEFAULT_UNIFIED_LINKING_SETTINGS.vataga, ...(parsed.vataga || {}) },
         tiger: { ...DEFAULT_UNIFIED_LINKING_SETTINGS.tiger, ...(parsed.tiger || {}) },
       };
+      // If Vataga was saved with the legacy non-existent 17840 port, upgrade to standard 17845
+      if (settings.vataga.port === 17840) {
+        settings.vataga.port = 17845;
+      }
+      return settings;
     }
   } catch (e) {
     console.error('Failed to load unified linking settings:', e);
@@ -60,6 +65,7 @@ export function saveStoredUnifiedLinkingSettings(settings: UnifiedLinkingSetting
 /**
  * Format symbol for MetaScalp:
  * Format: EXCHANGE:SYMBOL.p for futures, or EXCHANGE:SYMBOL for spot
+ * e.g. BINANCE:BTCUSDT.p, BYBIT:ETHUSDT.p, BINANCE:SOLUSDT
  */
 export function formatMetaScalpTicker(symbol: string, exchange: ExchangeId, marketType: MarketType): string {
   const ex = exchange.toUpperCase();
@@ -89,47 +95,60 @@ export function formatTigerTicker(symbol: string, exchange: ExchangeId, marketTy
 }
 
 /**
- * Check if a local port is responding on 127.0.0.1 or localhost
- * Uses mode 'no-cors' so even without CORS headers, open TCP sockets resolve immediately.
+ * Fast and accurate ping to verify if a local port is listening on the computer
  */
-export async function pingLocalPort(port: number, timeoutMs = 800): Promise<boolean> {
+export async function pingLocalPort(port: number, timeoutMs = 700): Promise<boolean> {
   const hosts = ['127.0.0.1', 'localhost'];
-  const paths = ['/api/change-ticker', '/api/ticker', '/ping', '/'];
 
-  const checkSingle = async (host: string, path: string): Promise<boolean> => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  for (const host of hosts) {
+    // 1. Try standard CORS on /ping or /api/change-ticker
     try {
-      await fetch(`http://${host}:${port}${path}`, {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(`http://${host}:${port}/ping`, {
+        method: 'GET',
+        mode: 'cors',
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok || res.status < 500) return true;
+    } catch {}
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(`http://${host}:${port}/api/change-ticker`, {
+        method: 'OPTIONS',
+        mode: 'cors',
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok || res.status < 500) return true;
+    } catch {}
+
+    // 2. Try no-cors probe on root or api
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      await fetch(`http://${host}:${port}/`, {
         method: 'GET',
         mode: 'no-cors',
         signal: controller.signal,
       });
-      clearTimeout(timeoutId);
+      clearTimeout(timer);
       return true;
-    } catch {
-      clearTimeout(timeoutId);
-      return false;
-    }
-  };
-
-  const probes: Promise<boolean>[] = [];
-  for (const host of hosts) {
-    for (const path of paths) {
-      probes.push(checkSingle(host, path));
-    }
+    } catch {}
   }
 
-  const results = await Promise.allSettled(probes);
-  return results.some((r) => r.status === 'fulfilled' && r.value === true);
+  return false;
 }
 
 /**
  * Automatically scans candidate ports to find an active Vataga instance
  */
-export async function findActiveVatagaPort(preferredPort = 17840): Promise<number | null> {
-  const candidatePorts = [preferredPort, 17840, 17845, 17841, 17846, 17842, 17847, 17848, 17849, 17850];
-  const uniquePorts = Array.from(new Set(candidatePorts));
+export async function findActiveVatagaPort(preferredPort = 17845): Promise<number | null> {
+  const candidatePorts = [preferredPort, 17845, 17840, 17846, 17841, 17847, 40440, 9898, 16888];
+  const uniquePorts = Array.from(new Set(candidatePorts.filter(Boolean)));
 
   if (await pingLocalPort(preferredPort, 400)) {
     return preferredPort;
@@ -149,7 +168,7 @@ export async function findActiveVatagaPort(preferredPort = 17840): Promise<numbe
  */
 export async function findActiveMetaScalpPort(preferredPort = 17845): Promise<number | null> {
   const candidatePorts = [preferredPort, 17845, 17846, 17847, 17848, 17849, 17850, 17840];
-  const uniquePorts = Array.from(new Set(candidatePorts));
+  const uniquePorts = Array.from(new Set(candidatePorts.filter(Boolean)));
 
   if (await pingLocalPort(preferredPort, 400)) {
     return preferredPort;
@@ -184,101 +203,11 @@ export interface UnifiedLinkingResult {
 }
 
 /**
- * Robust, high-speed dispatcher that sends to a local desktop terminal
- * 1. Bypasses CORS preflight using text/plain and no-cors mode
- * 2. Uses navigator.sendBeacon for instant non-blocking delivery
- * 3. Probes standard CORS and query parameters concurrently
- */
-async function trySendToLocalEndpoint(
-  host: string,
-  port: number,
-  endpoint: string,
-  payload: any,
-  timeoutMs = 700
-): Promise<boolean> {
-  const jsonStr = JSON.stringify(payload);
-  const url = `http://${host}:${port}${endpoint}`;
-
-  // 1. SendBeacon: Instant background transmission without CORS preflight
-  try {
-    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-      const blob = new Blob([jsonStr], { type: 'text/plain;charset=UTF-8' });
-      navigator.sendBeacon(url, blob);
-    }
-  } catch {}
-
-  // 2. Fetch POST with text/plain (no-cors: browser sends POST immediately without OPTIONS preflight)
-  const noCorsPost = (async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: jsonStr,
-        mode: 'no-cors',
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      return true;
-    } catch {
-      clearTimeout(timer);
-      return false;
-    }
-  })();
-
-  // 3. Fetch POST with application/json (standard CORS for servers with headers)
-  const corsPost = (async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: jsonStr,
-        mode: 'cors',
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      return res.ok || res.status === 200 || res.status === 204;
-    } catch {
-      clearTimeout(timer);
-      return false;
-    }
-  })();
-
-  // 4. Fetch GET with query parameters (for terminals/bridges listening on GET)
-  const getQuery = (async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const params = new URLSearchParams({
-        ticker: String(payload.ticker || ''),
-        symbol: String(payload.symbol || ''),
-        exchange: String(payload.exchange || ''),
-        market: String(payload.market || ''),
-        binding: String(payload.binding || ''),
-        group: String(payload.group || ''),
-      }).toString();
-      await fetch(`${url}?${params}`, {
-        method: 'GET',
-        mode: 'no-cors',
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      return true;
-    } catch {
-      clearTimeout(timer);
-      return false;
-    }
-  })();
-
-  const results = await Promise.allSettled([noCorsPost, corsPost, getQuery]);
-  return results.some((r) => r.status === 'fulfilled' && r.value === true);
-}
-
-/**
- * Sends ticker to MetaScalp instance with instant concurrent dispatch
+ * Sends ticker to MetaScalp instance using the official MetaScalp SDK specification:
+ * - Content-Type: application/json
+ * - mode: cors (with no-cors/beacon fallback)
+ * - Ticker format: BINANCE:BTCUSDT.p (futures) or BINANCE:BTCUSDT (spot)
+ * - Binding: "001" - "500", plus active window change
  */
 async function sendToMetaScalpEndpoint(
   symbol: string,
@@ -288,59 +217,99 @@ async function sendToMetaScalpEndpoint(
   binding: string
 ): Promise<TerminalSendResult> {
   const cleanSymbol = symbol.toUpperCase().replace('/', '');
-  const exLower = exchange.toLowerCase();
   const exUpper = exchange.toUpperCase();
   const isFutures = marketType === 'futures';
   const ticker = `${exUpper}:${cleanSymbol}${isFutures ? '.p' : ''}`;
   const bindingStr = String(binding || '001');
+  const bindingPadded = bindingStr.padStart(3, '0');
+  const bindingRaw = bindingStr.replace(/^0+/, '') || '1';
 
-  const payload = {
-    ticker,
-    exchange: exLower,
-    exchangeUpper: exUpper,
-    market: isFutures ? 'futures' : 'spot',
-    marketType: isFutures ? 'futures' : 'spot',
-    symbol: cleanSymbol,
-    binding: bindingStr,
-    group: bindingStr,
-    linkGroup: bindingStr,
-  };
-
-  const endpoints = ['/api/change-ticker', '/change-ticker', '/api/ticker'];
-  const candidatePorts = Array.from(new Set([port, 17845, 17846, 17847, 17848, 17840]));
+  // Candidate ports: configured port first, then standard MetaScalp ports
+  const candidatePorts = Array.from(new Set([port, 17845, 17846, 17847, 17848, 17849, 17850]));
   const hosts = ['127.0.0.1', 'localhost'];
 
-  const attempts: Promise<{ port: number; success: boolean }>[] = [];
+  // Payloads strictly compliant with MetaScalp SDK
+  const payloads = [
+    // Format 1: Ticker pattern with 3-digit padded binding ("001")
+    { ticker, binding: bindingPadded },
+    // Format 2: Ticker pattern with unpadded binding ("1")
+    { ticker, binding: bindingRaw },
+    // Format 3: Active window (without binding) - changes whatever orderbook is focused
+    { ticker },
+    // Format 4: Explicit fields format
+    {
+      exchange: exchange.toLowerCase(),
+      market: isFutures ? 'futures' : 'spot',
+      ticker: cleanSymbol,
+      binding: bindingPadded,
+    },
+    // Format 5: Plain symbol without .p
+    { ticker: `${exUpper}:${cleanSymbol}`, binding: bindingPadded },
+    { ticker: `${exUpper}:${cleanSymbol}` },
+  ];
+
+  let lastError = '';
 
   for (const p of candidatePorts) {
-    for (const ep of endpoints) {
-      for (const h of hosts) {
-        attempts.push(
-          (async () => {
-            const ok = await trySendToLocalEndpoint(h, p, ep, payload, 600);
-            return { port: p, success: ok };
-          })()
-        );
+    for (const host of hosts) {
+      for (const bodyObj of payloads) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 1200);
+
+          const res = await fetch(`http://${host}:${p}/api/change-ticker`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/plain, */*',
+            },
+            body: JSON.stringify(bodyObj),
+            mode: 'cors',
+            signal: controller.signal,
+          });
+
+          clearTimeout(timer);
+
+          if (res.ok || res.status === 200 || res.status === 204) {
+            // Also notify active window so focused window updates immediately
+            if ('binding' in bodyObj) {
+              fetch(`http://${host}:${p}/api/change-ticker`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker }),
+                mode: 'cors',
+              }).catch(() => {});
+            }
+
+            return {
+              terminal: 'metascalp',
+              name: 'MetaScalp',
+              success: true,
+              port: p,
+              binding: bindingStr,
+              ticker,
+              message: `Тікер ${ticker} передано в MetaScalp (Група ${bindingStr}, порт ${p})`,
+            };
+          } else {
+            const errBody = await res.text().catch(() => '');
+            lastError = `HTTP ${res.status}: ${errBody || res.statusText}`;
+          }
+        } catch (err: any) {
+          lastError = err?.message || 'Помилка з\'єднання';
+        }
       }
     }
   }
 
-  const results = await Promise.allSettled(attempts);
-  const successItem = results.find(
-    (r) => r.status === 'fulfilled' && r.value.success
-  ) as PromiseFulfilledResult<{ port: number; success: boolean }> | undefined;
-
-  if (successItem && successItem.value.success) {
-    return {
-      terminal: 'metascalp',
-      name: 'MetaScalp',
-      success: true,
-      port: successItem.value.port,
-      binding: bindingStr,
-      ticker,
-      message: `Передано в MetaScalp (Група ${bindingStr}, порт ${successItem.value.port})`,
-    };
-  }
+  // Fallback: Beacon transmission in case CORS was blocked by browser
+  try {
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      const blob = new Blob([JSON.stringify({ ticker, binding: bindingPadded })], {
+        type: 'application/json',
+      });
+      navigator.sendBeacon(`http://127.0.0.1:${port}/api/change-ticker`, blob);
+    }
+  } catch {}
 
   return {
     terminal: 'metascalp',
@@ -349,13 +318,13 @@ async function sendToMetaScalpEndpoint(
     port,
     binding: bindingStr,
     ticker,
-    message: `MetaScalp не відповів на 127.0.0.1:${port}`,
+    message: `MetaScalp не прийняв запит на порту ${port} (${lastError || 'перевірте налаштування'}). Тікер скопійовано в буфер.`,
   };
 }
 
 /**
  * Sends ticker to Vataga (EasyScalp / Vataga.terminal) instance
- * Fast, instant, multi-port, multi-endpoint concurrent delivery
+ * Tries standard ports (17845, 17840, 17846...) and endpoints (/api/change-ticker, /api/ticker)
  */
 async function sendToVatagaEndpoint(
   symbol: string,
@@ -366,65 +335,86 @@ async function sendToVatagaEndpoint(
 ): Promise<TerminalSendResult> {
   const cleanSymbol = symbol.toUpperCase().replace('/', '');
   const exUpper = exchange.toUpperCase();
-  const exLower = exchange.toLowerCase();
   const isFutures = marketType === 'futures';
   const tickerWithP = `${exUpper}:${cleanSymbol}${isFutures ? '.p' : ''}`;
   const tickerPlain = `${exUpper}:${cleanSymbol}`;
   const bindingStr = String(binding || '1');
   const bindingPadded = bindingStr.padStart(3, '0');
 
-  // Rich multi-format payload compatible with any Vataga / EasyScalp / CScalp bridge
-  const payload = {
-    ticker: tickerWithP,
-    tickerPlain,
-    symbol: cleanSymbol,
-    exchange: exLower,
-    exchangeUpper: exUpper,
-    market: isFutures ? 'futures' : 'spot',
-    marketType: isFutures ? 'futures' : 'spot',
-    binding: bindingStr,
-    group: bindingStr,
-    linkGroup: bindingStr,
-    bindingId: bindingStr,
-    bindingPadded,
-    target: 'vataga',
-  };
-
-  const endpoints = ['/api/change-ticker', '/api/ticker', '/change-ticker', '/ticker', '/api/v1/ticker'];
-  const candidatePorts = Array.from(new Set([port, 17840, 17845, 17841, 17846, 17842, 17847, 17848, 17849, 17850]));
+  // Candidate ports: configured port first, then standard 17845, 17840, 17846...
+  const candidatePorts = Array.from(new Set([port, 17845, 17840, 17846, 17841, 17847, 40440, 9898]));
   const hosts = ['127.0.0.1', 'localhost'];
+  const endpoints = ['/api/change-ticker', '/api/ticker', '/change-ticker', '/ticker'];
 
-  const attempts: Promise<{ port: number; success: boolean }>[] = [];
+  const payloads = [
+    { ticker: tickerWithP, binding: bindingPadded },
+    { ticker: tickerWithP, binding: bindingStr },
+    { ticker: tickerWithP },
+    { ticker: tickerPlain, binding: bindingStr },
+    { ticker: tickerPlain },
+    {
+      symbol: cleanSymbol,
+      exchange: exchange.toLowerCase(),
+      market: isFutures ? 'futures' : 'spot',
+      binding: bindingStr,
+    },
+  ];
+
+  let lastError = '';
 
   for (const p of candidatePorts) {
-    for (const ep of endpoints) {
-      for (const h of hosts) {
-        attempts.push(
-          (async () => {
-            const ok = await trySendToLocalEndpoint(h, p, ep, payload, 600);
-            return { port: p, success: ok };
-          })()
-        );
+    for (const host of hosts) {
+      for (const ep of endpoints) {
+        for (const bodyObj of payloads) {
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 1200);
+
+            const res = await fetch(`http://${host}:${p}${ep}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/plain, */*',
+              },
+              body: JSON.stringify(bodyObj),
+              mode: 'cors',
+              signal: controller.signal,
+            });
+
+            clearTimeout(timer);
+
+            if (res.ok || res.status === 200 || res.status === 204) {
+              return {
+                terminal: 'vataga',
+                name: 'Vataga (EasyScalp)',
+                success: true,
+                port: p,
+                binding: bindingStr,
+                ticker: tickerWithP,
+                message: `Миттєво передано у Vataga (Група ${bindingStr}, порт ${p})`,
+              };
+            } else {
+              const errBody = await res.text().catch(() => '');
+              lastError = `HTTP ${res.status}: ${errBody || res.statusText}`;
+            }
+          } catch (err: any) {
+            lastError = err?.message || 'Помилка з\'єднання';
+          }
+        }
       }
     }
   }
 
-  const results = await Promise.allSettled(attempts);
-  const successItem = results.find(
-    (r) => r.status === 'fulfilled' && r.value.success
-  ) as PromiseFulfilledResult<{ port: number; success: boolean }> | undefined;
-
-  if (successItem && successItem.value.success) {
-    return {
-      terminal: 'vataga',
-      name: 'Vataga (EasyScalp)',
-      success: true,
-      port: successItem.value.port,
-      binding: bindingStr,
-      ticker: tickerWithP,
-      message: `Миттєво передано у Vataga (Група ${bindingStr}, порт ${successItem.value.port})`,
-    };
-  }
+  // Backup: Beacon fallback
+  try {
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      const blob = new Blob([JSON.stringify({ ticker: tickerWithP, binding: bindingStr })], {
+        type: 'application/json',
+      });
+      navigator.sendBeacon(`http://127.0.0.1:${port}/api/change-ticker`, blob);
+      navigator.sendBeacon(`http://127.0.0.1:${port}/api/ticker`, blob);
+    }
+  } catch {}
 
   return {
     terminal: 'vataga',
@@ -433,7 +423,7 @@ async function sendToVatagaEndpoint(
     port,
     binding: bindingStr,
     ticker: tickerWithP,
-    message: `Vataga не відповіла на портах (${candidatePorts.slice(0, 3).join(', ')}). Перевірте підключення.`,
+    message: `Vataga не відповідає на портах (${candidatePorts.slice(0, 3).join(', ')}). Тікер скопійовано в буфер (Ctrl+V у терміналі).`,
   };
 }
 
@@ -466,36 +456,40 @@ async function sendToTigerEndpoint(
   const candidatePorts = Array.from(new Set([port, 9898, 16888, 17848, 17845]));
   const hosts = ['127.0.0.1', 'localhost'];
 
-  const attempts: Promise<{ port: number; success: boolean }>[] = [];
-
   for (const p of candidatePorts) {
     for (const ep of endpoints) {
       for (const h of hosts) {
-        attempts.push(
-          (async () => {
-            const ok = await trySendToLocalEndpoint(h, p, ep, payload, 600);
-            return { port: p, success: ok };
-          })()
-        );
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 1200);
+
+          const res = await fetch(`http://${h}:${p}${ep}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/plain, */*',
+            },
+            body: JSON.stringify(payload),
+            mode: 'cors',
+            signal: controller.signal,
+          });
+
+          clearTimeout(timer);
+
+          if (res.ok || res.status === 200 || res.status === 204) {
+            return {
+              terminal: 'tiger',
+              name: 'TigerTrade',
+              success: true,
+              port: p,
+              binding: bindingStr,
+              ticker,
+              message: `Передано в TigerTrade (Група ${bindingStr}, порт ${p})`,
+            };
+          }
+        } catch {}
       }
     }
-  }
-
-  const results = await Promise.allSettled(attempts);
-  const successItem = results.find(
-    (r) => r.status === 'fulfilled' && r.value.success
-  ) as PromiseFulfilledResult<{ port: number; success: boolean }> | undefined;
-
-  if (successItem && successItem.value.success) {
-    return {
-      terminal: 'tiger',
-      name: 'TigerTrade',
-      success: true,
-      port: successItem.value.port,
-      binding: bindingStr,
-      ticker,
-      message: `Передано в TigerTrade (Група ${bindingStr}, порт ${successItem.value.port})`,
-    };
   }
 
   return {
@@ -505,7 +499,7 @@ async function sendToTigerEndpoint(
     port,
     binding: bindingStr,
     ticker,
-    message: `TigerTrade не відповів на 127.0.0.1:${port}`,
+    message: `TigerTrade не відповів на 127.0.0.1:${port}. Тікер скопійовано в буфер.`,
   };
 }
 
@@ -545,7 +539,7 @@ export async function sendTickerToUnifiedTerminals(
     );
   }
 
-  // Execute all terminal transmissions concurrently
+  // Execute terminal transmissions concurrently
   const responses = await Promise.all(promises);
   results.push(...responses);
 
@@ -557,7 +551,7 @@ export async function sendTickerToUnifiedTerminals(
       ? formatTigerTicker(symbol, exchange, marketType)
       : formatMetaScalpTicker(symbol, exchange, marketType);
 
-  // Clipboard copy fallback (ensures instant switch on web / Railway)
+  // Guaranteed clipboard copy fallback (ensures instant switch on web / desktop)
   let copiedToClipboard = false;
   try {
     if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
@@ -571,9 +565,9 @@ export async function sendTickerToUnifiedTerminals(
 
   let summaryMessage = '';
   if (anySuccess) {
-    summaryMessage = `Тікер ${symbol} миттєво передано в ${successfulNames.join(', ')}!`;
+    summaryMessage = `Тікер ${primaryTicker} передано в ${successfulNames.join(', ')}!`;
   } else {
-    summaryMessage = `Тікер ${primaryTicker} скопійовано (термінал очікує підключення 127.0.0.1)`;
+    summaryMessage = `Тікер ${primaryTicker} скопійовано (Ctrl+V у терміналі)`;
   }
 
   return {

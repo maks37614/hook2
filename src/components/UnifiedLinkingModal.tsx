@@ -521,7 +521,7 @@ export const UnifiedLinkingModal: React.FC<UnifiedLinkingModalProps> = ({
                     HTTP Порт локального API Vataga:
                   </label>
                   <div className="flex items-center gap-1.5 mb-2">
-                    {[17840, 17845, 17841, 17846].map((p) => (
+                    {[17845, 17840, 17846, 17841, 40440].map((p) => (
                       <button
                         key={p}
                         type="button"
@@ -547,13 +547,13 @@ export const UnifiedLinkingModal: React.FC<UnifiedLinkingModalProps> = ({
                     onChange={(e) =>
                       handleUpdate({
                         ...currentSettings,
-                        vataga: { ...currentSettings.vataga, port: parseInt(e.target.value, 10) || 17840 },
+                        vataga: { ...currentSettings.vataga, port: parseInt(e.target.value, 10) || 17845 },
                       })
                     }
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
                   />
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    Стандартні порти: 17840 (Vataga) або 17845 (EasyScalp/MetaScalp)
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Основний порт для Vataga / EasyScalp: <strong className="text-emerald-300">17845</strong> (якщо не підходить, спробуйте 17840 або 17846)
                   </p>
                 </div>
 
@@ -604,8 +604,21 @@ export const UnifiedLinkingModal: React.FC<UnifiedLinkingModalProps> = ({
                 className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer border border-emerald-500/20"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
-                <span>Перевірити з'єднання з Vataga (порт {currentSettings.vataga.port})</span>
+                <span>Перевірити з'єднання або знайти порт Vataga (поточний: {currentSettings.vataga.port})</span>
               </button>
+
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5 text-[11px] text-slate-400">
+                <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Як працює лінковка Vataga:</span>
+                </div>
+                <p>
+                  • <strong>Vataga (EasyScalp):</strong> Використовує порт <strong>17845</strong>. Тікери передаються миттєво через локальний API.
+                </p>
+                <p>
+                  • <strong>Vataga.terminal:</strong> Працює через миттєвий буфер обміну: при кожному кліку на монету в скрінері тікер одразу копіюється, і в терміналі Vataga достатньо натиснути <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-200 font-mono text-[10px]">Ctrl+V</kbd> для миттєвого відкриття стакана.
+                </p>
+              </div>
             </div>
           )}
 

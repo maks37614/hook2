@@ -116,13 +116,22 @@ export async function sendTickerToMetaScalp(
   const binding = settings.binding || '001';
   const ticker = formatMetaScalpTicker(symbol, exchange, marketType);
 
-  const payload = {
-    ticker,
-    exchange: exchange.toLowerCase(),
-    market: marketType === 'futures' ? 'futures' : 'spot',
-    symbol: symbol.toUpperCase(),
-    binding,
-  };
+  const bindingPadded = String(binding || '001').padStart(3, '0');
+  const bindingRaw = String(binding || '001').replace(/^0+/, '') || '1';
+  const cleanSymbol = symbol.toUpperCase().replace('/', '');
+  const isFutures = marketType === 'futures';
+
+  const payloads = [
+    { ticker, binding: bindingPadded },
+    { ticker, binding: bindingRaw },
+    { ticker },
+    {
+      exchange: exchange.toLowerCase(),
+      market: isFutures ? 'futures' : 'spot',
+      ticker: cleanSymbol,
+      binding: bindingPadded,
+    },
+  ];
 
   const portsToTry = [port];
   for (let p = 17845; p <= 17855; p++) {
@@ -132,36 +141,49 @@ export async function sendTickerToMetaScalp(
   let lastError: any = null;
 
   for (const currentPort of portsToTry.slice(0, 3)) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1800);
+    for (const bodyObj of payloads) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1200);
 
-      const res = await fetch(`http://127.0.0.1:${currentPort}/api/change-ticker`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        mode: 'cors',
-        signal: controller.signal,
-      });
+        const res = await fetch(`http://127.0.0.1:${currentPort}/api/change-ticker`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+          },
+          body: JSON.stringify(bodyObj),
+          mode: 'cors',
+          signal: controller.signal,
+        });
 
-      clearTimeout(timeoutId);
+        clearTimeout(timeoutId);
 
-      if (res.ok || res.status === 200 || res.status === 204) {
-        return {
-          success: true,
-          message: `Тікер ${ticker} передано в MetaScalp (Група ${binding})`,
-          ticker,
-          binding,
-          portUsed: currentPort,
-        };
-      } else {
-        const errorText = await res.text().catch(() => '');
-        lastError = new Error(`HTTP ${res.status}: ${errorText || res.statusText}`);
+        if (res.ok || res.status === 200 || res.status === 204) {
+          // Also notify active window
+          if ('binding' in bodyObj) {
+            fetch(`http://127.0.0.1:${currentPort}/api/change-ticker`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ticker }),
+              mode: 'cors',
+            }).catch(() => {});
+          }
+
+          return {
+            success: true,
+            message: `Тікер ${ticker} передано в MetaScalp (Група ${binding})`,
+            ticker,
+            binding,
+            portUsed: currentPort,
+          };
+        } else {
+          const errorText = await res.text().catch(() => '');
+          lastError = new Error(`HTTP ${res.status}: ${errorText || res.statusText}`);
+        }
+      } catch (err: any) {
+        lastError = err;
       }
-    } catch (err: any) {
-      lastError = err;
     }
   }
 
