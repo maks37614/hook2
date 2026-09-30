@@ -139,8 +139,8 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   const [marketType, setMarketType] = useState<'all' | MarketType>(() => getStoredPreferences().defaultMarketType);
 
   useEffect(() => {
-    setExchange(preferences.defaultExchange);
-    setMarketType(preferences.defaultMarketType);
+    setExchange((prev) => (prev === preferences.defaultExchange ? prev : preferences.defaultExchange));
+    setMarketType((prev) => (prev === preferences.defaultMarketType ? prev : preferences.defaultMarketType));
   }, [preferences.defaultExchange, preferences.defaultMarketType]);
   const [minVolumeUsd, setMinVolumeUsd] = useState<number>(0);
   const [sortBy, setSortBy] = useState<ScreenerSortBy>('volume');
@@ -745,7 +745,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 <option value="volume" className="bg-slate-900 text-white">Об'єм 24г</option>
                 <option value="priceChange" className="bg-slate-900 text-white">Зміна 24г (%)</option>
                 <option value="price" className="bg-slate-900 text-white">Ціна ($)</option>
-                <option value="volatility" className="bg-slate-900 text-white">Волатильність (5m)</option>
+                <option value="volatility" className="bg-slate-900 text-white">Волатильність</option>
                 <option value="distanceToHigh" className="bg-slate-900 text-white">Близькість до High</option>
                 <option value="distanceToLow" className="bg-slate-900 text-white">Близькість до Low</option>
               </select>
@@ -955,7 +955,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                 >
                   <div className="flex items-center justify-end gap-1.5">
                     <span>{t('volatility')}</span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 font-bold tracking-wider">
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 font-bold tracking-wider">
                       5m
                     </span>
                     {sortBy === 'volatility' && (sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-cyan-400" /> : <ChevronUp className="w-3 h-3 text-cyan-400" />)}
@@ -1055,7 +1055,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
 
                           <div className="flex items-center gap-1 mt-0.5">
                             <span
-                              className={`text-[9px] px-1 py-0.2 rounded font-sans font-bold uppercase ${
+                              className={`text-[8px] px-1 py-0 rounded font-sans font-bold uppercase ${
                                 coin.exchange === 'binance'
                                   ? 'bg-amber-950/80 text-amber-400 border border-amber-800/60'
                                   : 'bg-orange-950/80 text-orange-400 border border-orange-800/60'
@@ -1063,7 +1063,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                             >
                               {coin.exchange}
                             </span>
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-slate-800 text-slate-400 font-sans uppercase">
+                            <span className="text-[8px] px-1 py-0 rounded bg-slate-800 text-slate-400 font-sans uppercase">
                               {coin.marketType}
                             </span>
                           </div>
@@ -1197,7 +1197,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                             >
                               {vol.toFixed(2)}%
                             </span>
-                            <span className="text-[9px] text-slate-500 font-sans">5m</span>
+                            <span className="text-[9px] text-slate-500 font-sans"></span>
                           </div>
                         );
                       })()}
@@ -1429,16 +1429,6 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
                         </span>
                       )}
                     </button>
-                    <a
-                      href={coin.exchangeUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
-                      title="Біржа"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
                   </div>
                 </div>
               </div>

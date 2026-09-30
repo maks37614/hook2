@@ -17,11 +17,14 @@ import {
   Radar,
   Globe,
   Lock,
+  History,
+  Maximize2,
 } from 'lucide-react';
 import { MetaScalpSettings } from '../utils/metaScalpService';
 import { useAuth } from '../context/AuthContext';
 import { ActivePageType } from '../types';
 import { useLanguage, SupportedLanguage } from '../context/LanguageContext';
+import { toggleFullscreenSafe } from '../utils/fullscreenUtils';
 
 interface HeaderProps {
   isLoading: boolean;
@@ -77,6 +80,10 @@ export const Header: React.FC<HeaderProps> = ({
   const { user, profile } = useAuth();
   const { language, setLanguage, t } = useLanguage();
 
+  const toggleFullScreen = () => {
+    toggleFullscreenSafe();
+  };
+
   const isLinkingEnabled = metaScalpSettings?.enabled ?? true;
   const linkingBadge = metaScalpSettings?.binding ? `MS:${metaScalpSettings.binding}` : 'MS:001';
   return (
@@ -96,19 +103,30 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </button>
 
-    {/* Language Switcher */}
-            <div className="relative">
-              <select
-                value={language}
-                onChange={(e) => setLanguage(e.target.value as SupportedLanguage)}
-                className="bg-slate-900 border border-slate-800 text-xs font-mono font-bold text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-cyan-500 cursor-pointer"
-                title={t('language')}
+            {/* Fullscreen & Language Switcher */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={toggleFullScreen}
+                className="p-1 rounded bg-transparent border-0 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                title="На весь екран (Fullscreen)"
               >
-                <option value="uk">🇺🇦 UA</option>
-                <option value="en">🇬🇧 EN</option>
-                <option value="ru">🇷🇺 RU</option>
-                <option value="pl">🇵🇱 PL</option>
-              </select>
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="relative">
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value as SupportedLanguage)}
+                  className="bg-slate-900 border-0 text-xs font-mono font-bold text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none cursor-pointer"
+                  title={t('language')}
+                >
+                  <option value="uk">🇺🇦 UA</option>
+                  <option value="en">🇬🇧 EN</option>
+                  <option value="ru">🇷🇺 RU</option>
+                  <option value="pl">🇵🇱 PL</option>
+                </select>
+              </div>
             </div>
 
             {/* Navigation Category Tabs */}
@@ -151,6 +169,25 @@ export const Header: React.FC<HeaderProps> = ({
                     {formationsCount}
                   </span>
                 ) : null}
+              </button>
+
+              <button
+                id="nav-category-replay-btn"
+                onClick={() => onPageChange('replay')}
+                className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                  activePage === 'replay'
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-sm shadow-amber-900/40 font-bold'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+                title="Market Replay: симулятор ринку та відтворення історії свічка за свічкою"
+              >
+                <History className={`w-3.5 h-3.5 ${activePage === 'replay' ? 'text-slate-950 stroke-[2.5]' : 'text-amber-400'}`} />
+                <span>Replay</span>
+                <span className={`px-1 py-0.2 rounded text-[9px] font-mono font-extrabold ${
+                  activePage === 'replay' ? 'bg-amber-950/30 text-amber-950' : 'bg-amber-500/20 text-amber-300'
+                }`}>
+                  SIM
+                </span>
               </button>
 
               <button

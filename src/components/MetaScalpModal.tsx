@@ -46,9 +46,11 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
   const [copiedTestTicker, setCopiedTestTicker] = useState<boolean>(false);
 
   useEffect(() => {
-    setCustomBinding(settings.binding || '001');
-    setActivePort(settings.port || 17845);
-  }, [settings]);
+    const nextBinding = settings.binding || '001';
+    const nextPort = settings.port || 17845;
+    setCustomBinding((prev) => (prev === nextBinding ? prev : nextBinding));
+    setActivePort((prev) => (prev === nextPort ? prev : nextPort));
+  }, [settings.binding, settings.port]);
 
   if (!isOpen) return null;
 

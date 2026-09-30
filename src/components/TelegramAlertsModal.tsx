@@ -123,10 +123,10 @@ export const TelegramAlertsModal: React.FC<TelegramAlertsModalProps> = ({
 
   useEffect(() => {
     if (profile) {
-      if (profile.telegramBotToken) setBotToken(profile.telegramBotToken);
-      if (profile.telegramChatId) setChatId(profile.telegramChatId);
+      if (profile.telegramBotToken) setBotToken((prev) => (prev === profile.telegramBotToken ? prev : profile.telegramBotToken!));
+      if (profile.telegramChatId) setChatId((prev) => (prev === profile.telegramChatId ? prev : profile.telegramChatId!));
     }
-  }, [profile]);
+  }, [profile?.telegramBotToken, profile?.telegramChatId]);
 
   // Fetch Telegram Status & auto-sync if local storage has credentials
   const fetchTelegramStatus = async () => {

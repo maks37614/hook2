@@ -155,7 +155,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     setSelectedExchange(ex);
     setSelectedMarketType(m);
     setFormConfig((prev) => ({ ...prev, timeframe: preferences.defaultTimeframe }));
-  }, [preferences]);
+  }, [preferences.defaultExchange, preferences.defaultMarketType, preferences.defaultTimeframe]);
 
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setNotificationToast({ message, type });

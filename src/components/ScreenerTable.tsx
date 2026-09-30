@@ -260,15 +260,6 @@ export const ScreenerTable: React.FC<ScreenerTableProps> = ({
                     >
                       <BarChart2 className="w-3.5 h-3.5" />
                     </button>
-                    <a
-                      href={coin.exchangeUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-1 sm:p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors hidden xs:inline-flex"
-                      title={`Відкрити на ${coin.exchange}`}
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
                   </div>
                 </td>
               </tr>
