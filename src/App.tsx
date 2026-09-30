@@ -9,7 +9,7 @@ import { SurveillancePage } from './components/SurveillancePage';
 import { FormationDetailsModal } from './components/FormationDetailsModal';
 import { FormationGuideModal } from './components/FormationGuideModal';
 import { WatchlistDrawer } from './components/WatchlistDrawer';
-import { UnifiedLinkingModal } from './components/UnifiedLinkingModal';
+import { MetaScalpModal } from './components/MetaScalpModal';
 import { MetaScalpToast, MetaScalpToastState } from './components/MetaScalpToast';
 import { TelegramAlertsModal } from './components/TelegramAlertsModal';
 import { AuthModal, AuthPromptReason } from './components/AuthModal';
@@ -27,13 +27,7 @@ import {
   saveStoredMetaScalpSettings,
   sendTickerToMetaScalp,
 } from './utils/metaScalpService';
-import {
-  DEFAULT_UNIFIED_LINKING_SETTINGS,
-  getStoredUnifiedLinkingSettings,
-  saveStoredUnifiedLinkingSettings,
-  sendTickerToUnifiedTerminals,
-} from './utils/terminalLinkingService';
-import { ScannedCoin, DetectedFormation, ScreenerFilterState, PriceAlert, ArchivedFormation, ActivePageType, UnifiedLinkingSettings } from './types';
+import { ScannedCoin, DetectedFormation, ScreenerFilterState, PriceAlert, ArchivedFormation, ActivePageType } from './types';
 import { runDirectClientScan, getFallbackScannedCoins } from './utils/directExchangeClient';
 import {
   AlertCircle,
@@ -223,35 +217,9 @@ export default function App() {
   const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
-  // Unified terminal linking state (MetaScalp, Vataga, Tiger - isolated per user)
-  const [unifiedLinkingSettings, setUnifiedLinkingSettings] = useState<UnifiedLinkingSettings>(() =>
-    getStoredUnifiedLinkingSettings(user?.uid)
-  );
-
-  useEffect(() => {
-    if (!user) return;
-    if (profile?.unifiedLinkingSettings) {
-      setUnifiedLinkingSettings(profile.unifiedLinkingSettings);
-      saveStoredUnifiedLinkingSettings(profile.unifiedLinkingSettings, user.uid);
-    } else {
-      const userSettings = getStoredUnifiedLinkingSettings(user.uid);
-      setUnifiedLinkingSettings(userSettings);
-    }
-  }, [user?.uid, profile?.unifiedLinkingSettings]);
-
-  const handleUnifiedLinkingSettingsChange = (newSettings: UnifiedLinkingSettings) => {
-    setUnifiedLinkingSettings(newSettings);
-    if (user) {
-      saveStoredUnifiedLinkingSettings(newSettings, user.uid);
-      updateProfileData({ unifiedLinkingSettings: newSettings }).catch(() => {});
-    }
-  };
-
+  // MetaScalp terminal settings state (isolated per user)
   const [isLinkingModalOpen, setIsLinkingModalOpen] = useState<boolean>(false);
   const [metaScalpToast, setMetaScalpToast] = useState<MetaScalpToastState | null>(null);
-
-  // MetaScalp terminal settings state (isolated per user)
-  const [isMetaScalpModalOpen, setIsMetaScalpModalOpen] = useState<boolean>(false);
   const [metaScalpSettings, setMetaScalpSettings] = useState<MetaScalpSettings>(() => {
     return profile?.metaScalpSettings || getStoredMetaScalpSettings(user?.uid);
   });
@@ -347,65 +315,49 @@ export default function App() {
     }
   }, [metaScalpToast]);
 
-  // Send ticker to Unified Terminals (MetaScalp, Vataga, Tiger Trade)
+  // Send ticker to MetaScalp terminal
   const handleSendToMetaScalp = useCallback(
     async (coin: ScannedCoin) => {
       if (!user) {
         handleOpenAuthModal('signin', 'linking');
         return;
       }
-      const activeTerminalKey = unifiedLinkingSettings.activeTarget;
-      const isEnabled = activeTerminalKey === 'all'
-        ? true
-        : unifiedLinkingSettings[activeTerminalKey]?.enabled;
 
-      if (!isEnabled) {
+      if (!metaScalpSettings.enabled) {
         setIsLinkingModalOpen(true);
         return;
       }
 
-      const res = await sendTickerToUnifiedTerminals(
+      const res = await sendTickerToMetaScalp(
         coin.symbol,
         coin.exchange,
         coin.marketType,
-        unifiedLinkingSettings
+        metaScalpSettings
       );
-
-      const targetTitle = activeTerminalKey === 'all'
-        ? 'Всі термінали (3x)'
-        : activeTerminalKey === 'vataga'
-        ? 'Vataga (EasyScalp)'
-        : activeTerminalKey === 'tiger'
-        ? 'TigerTrade'
-        : 'MetaScalp';
-
-      const bindingInfo = activeTerminalKey === 'all'
-        ? 'MS/VT/TG'
-        : unifiedLinkingSettings[activeTerminalKey]?.binding || '1';
 
       if (res.success) {
         setMetaScalpToast({
           id: Date.now(),
           type: 'success',
-          title: `${targetTitle} Оновлено`,
-          ticker: res.primaryTicker,
-          binding: bindingInfo,
-          message: res.summaryMessage,
+          title: 'MetaScalp Оновлено',
+          ticker: res.ticker,
+          binding: res.binding,
+          message: res.message,
         });
       } else {
         setMetaScalpToast({
           id: Date.now(),
           type: 'warning',
-          title: targetTitle,
-          ticker: res.primaryTicker,
-          binding: bindingInfo,
+          title: 'MetaScalp',
+          ticker: res.ticker,
+          binding: res.binding,
           message: res.copiedToClipboard
-            ? `${res.summaryMessage} (Ctrl+V для вставки)`
-            : res.summaryMessage,
+            ? `${res.message} (Тікер скопійовано у буфер: Ctrl+V)`
+            : res.message,
         });
       }
     },
-    [user, unifiedLinkingSettings, handleOpenAuthModal]
+    [user, metaScalpSettings, handleOpenAuthModal]
   );
 
   // Handler when selecting pair for details modal
@@ -418,16 +370,13 @@ export default function App() {
       setSelectedArchivedItem(null);
       setSelectedPair({ coin, formation: formation || coin.formations[0] });
       const shouldAutoSwitch =
-        (unifiedLinkingSettings.autoSwitchOnClick &&
-          (unifiedLinkingSettings.activeTarget === 'all' ||
-            unifiedLinkingSettings[unifiedLinkingSettings.activeTarget]?.enabled)) ||
-        (metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick);
+        metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick;
 
       if (shouldAutoSwitch) {
         handleSendToMetaScalp(coin);
       }
     },
-    [user, unifiedLinkingSettings, metaScalpSettings, handleSendToMetaScalp, handleOpenAuthModal]
+    [user, metaScalpSettings, handleSendToMetaScalp, handleOpenAuthModal]
   );
 
   // Handler when selecting archived formation to restore
@@ -467,16 +416,13 @@ export default function App() {
       });
       setIsArchiveModalOpen(false);
       const shouldAutoSwitch =
-        (unifiedLinkingSettings.autoSwitchOnClick &&
-          (unifiedLinkingSettings.activeTarget === 'all' ||
-            unifiedLinkingSettings[unifiedLinkingSettings.activeTarget]?.enabled)) ||
-        (metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick);
+        metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick;
 
       if (shouldAutoSwitch) {
         handleSendToMetaScalp(matchingCoin);
       }
     },
-    [coins, unifiedLinkingSettings, metaScalpSettings, handleSendToMetaScalp]
+    [coins, metaScalpSettings, handleSendToMetaScalp]
   );
 
   // Play a gentle alert tone using Web Audio API
@@ -756,7 +702,7 @@ export default function App() {
           }
           setIsLinkingModalOpen(true);
         }}
-        unifiedLinkingSettings={unifiedLinkingSettings}
+        metaScalpSettings={metaScalpSettings}
         onOpenTelegramAlerts={() => handleOpenTelegramAlerts()}
         telegramAlertsCount={activeAlertsCount}
         surveillanceCount={surveillanceActiveCount}
@@ -1035,15 +981,15 @@ export default function App() {
         folders={watchlistFolders}
         onFoldersChange={handleWatchlistFoldersChange}
         onSendMetaScalp={handleSendToMetaScalp}
-        metaScalpBinding={unifiedLinkingSettings.activeTarget === 'all' ? '3x' : unifiedLinkingSettings[unifiedLinkingSettings.activeTarget]?.binding || '1'}
+        metaScalpBinding={metaScalpSettings.binding}
       />
 
-      {/* Unified Terminal Linking Modal (MetaScalp, Vataga, Tiger) */}
-      <UnifiedLinkingModal
+      {/* MetaScalp Terminal Linking Modal */}
+      <MetaScalpModal
         isOpen={isLinkingModalOpen}
         onClose={() => setIsLinkingModalOpen(false)}
-        settings={unifiedLinkingSettings}
-        onSettingsChange={handleUnifiedLinkingSettingsChange}
+        settings={metaScalpSettings}
+        onSettingsChange={handleMetaScalpSettingsChange}
         currentSymbol={selectedPair?.coin.symbol || coins[0]?.symbol || 'BTCUSDT'}
       />
 

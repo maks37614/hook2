@@ -16,7 +16,7 @@ import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { cleanForFirestore } from '../lib/firestoreUtils';
 import { verifyAccessCode, normalizeAccessCode } from '../utils/accessCodes';
 import { getStoredPreferences, saveStoredPreferences } from '../utils/userPreferences';
-import { DEFAULT_UNIFIED_LINKING_SETTINGS, saveStoredUnifiedLinkingSettings } from '../utils/terminalLinkingService';
+import { DEFAULT_METASCALP_SETTINGS, saveStoredMetaScalpSettings } from '../utils/metaScalpService';
 
 function getLocalUserId(email: string): string {
   let hash = 0;
@@ -86,8 +86,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           defaultTimeframe: storedPrefs.defaultTimeframe,
           watchlist: [],
           watchlistFolders: {},
-          metaScalpSettings: { enabled: true, port: 17845, binding: '001', autoSwitchOnClick: true },
-          unifiedLinkingSettings: DEFAULT_UNIFIED_LINKING_SETTINGS,
+          metaScalpSettings: DEFAULT_METASCALP_SETTINGS,
           chartTradeMarkers: { showEntry: true, showTarget: true, showStop: true },
           chartLabelSettings: { entry: true, target: true, stop: true },
           orderbookSettings: { depth: 'all', compression: 1, soundAlertEnabled: true, heightPreset: 'lg' },
@@ -99,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         await setDoc(userDocRef, cleanForFirestore(newProfile));
         setProfile(newProfile);
-        saveStoredUnifiedLinkingSettings(newProfile.unifiedLinkingSettings!, firebaseUser.uid);
+        saveStoredMetaScalpSettings(newProfile.metaScalpSettings!, firebaseUser.uid);
       } else {
         const loadedProfile = snap.data() as UserProfile;
         setProfile(loadedProfile);
@@ -111,8 +110,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             ...(loadedProfile.defaultTimeframe ? { defaultTimeframe: loadedProfile.defaultTimeframe } : {}),
             ...(loadedProfile.soundAlertsEnabled !== undefined ? { soundAlertsEnabled: loadedProfile.soundAlertsEnabled } : {}),
           });
-          if (loadedProfile.unifiedLinkingSettings) {
-            saveStoredUnifiedLinkingSettings(loadedProfile.unifiedLinkingSettings, firebaseUser.uid);
+          if (loadedProfile.metaScalpSettings) {
+            saveStoredMetaScalpSettings(loadedProfile.metaScalpSettings, firebaseUser.uid);
           }
         }
       }

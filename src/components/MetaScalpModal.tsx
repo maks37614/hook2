@@ -7,17 +7,17 @@ import {
   RefreshCw,
   Copy,
   ExternalLink,
-  Settings2,
-  Layers,
   HelpCircle,
+  Volume2,
 } from 'lucide-react';
 import {
   MetaScalpSettings,
   saveStoredMetaScalpSettings,
-  pingMetaScalpPort,
   findActiveMetaScalpPort,
   sendTickerToMetaScalp,
+  playMetaScalpClickSound,
 } from '../utils/metaScalpService';
+import { useAuth } from '../context/AuthContext';
 
 interface MetaScalpModalProps {
   isOpen: boolean;
@@ -28,6 +28,7 @@ interface MetaScalpModalProps {
 }
 
 const PRESET_BINDINGS = ['001', '002', '003', '004', '005'];
+const PRESET_PORTS = [17845, 17846, 17847, 17848];
 
 export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
   isOpen,
@@ -36,19 +37,28 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
   onSettingsChange,
   currentSymbol = 'BTCUSDT',
 }) => {
+  const { user, updateProfileData } = useAuth();
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState<string>('');
-  const [activePort, setActivePort] = useState<number>(settings.port);
-  const [customBinding, setCustomBinding] = useState<string>(settings.binding);
+  const [activePort, setActivePort] = useState<number>(settings.port || 17845);
+  const [customBinding, setCustomBinding] = useState<string>(settings.binding || '001');
   const [copiedTestTicker, setCopiedTestTicker] = useState<boolean>(false);
 
   useEffect(() => {
-    setCustomBinding(settings.binding);
-    setActivePort(settings.port);
+    setCustomBinding(settings.binding || '001');
+    setActivePort(settings.port || 17845);
   }, [settings]);
 
   if (!isOpen) return null;
+
+  const handleSave = (updated: MetaScalpSettings) => {
+    onSettingsChange(updated);
+    saveStoredMetaScalpSettings(updated, user?.uid);
+    if (user) {
+      updateProfileData({ metaScalpSettings: updated }).catch(() => {});
+    }
+  };
 
   // Run ping test
   const handleTestConnection = async () => {
@@ -57,18 +67,17 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
     setTestMessage('Сканування локального сервера MetaScalp (17845-17855)...');
 
     try {
-      const foundPort = await findActiveMetaScalpPort(settings.port);
+      const foundPort = await findActiveMetaScalpPort(activePort);
       if (foundPort) {
         setActivePort(foundPort);
         const updated = { ...settings, port: foundPort };
-        onSettingsChange(updated);
-        saveStoredMetaScalpSettings(updated);
+        handleSave(updated);
         setTestStatus('success');
         setTestMessage(`З'єднання встановлено! MetaScalp активний на порту ${foundPort}`);
       } else {
         setTestStatus('error');
         setTestMessage(
-          `Не вдалося підключитися до 127.0.0.1:${settings.port}. Переконайтеся, що термінал MetaScalp запущений на вашому комп'ютері.`
+          `Не вдалося підключитися до 127.0.0.1:${activePort}. Переконайтеся, що термінал MetaScalp запущений на вашому комп'ютері.`
         );
       }
     } catch (e: any) {
@@ -86,6 +95,7 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
       const res = await sendTickerToMetaScalp(currentSymbol, 'binance', 'futures', {
         port: activePort,
         binding: customBinding,
+        soundFeedback: settings.soundFeedback ?? true,
       });
 
       if (res.success) {
@@ -95,7 +105,7 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
         setTestStatus('error');
         setTestMessage(
           `MetaScalp не прийняв команду на 127.0.0.1:${activePort}. ${
-            res.copiedToClipboard ? 'Тікер скопійовано в буфер обміну.' : ''
+            res.copiedToClipboard ? 'Тікер скопійовано в буфер обміну (Ctrl+V).' : ''
           }`
         );
       }
@@ -110,35 +120,42 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
   const handleUpdateBinding = (val: string) => {
     setCustomBinding(val);
     const updated = { ...settings, binding: val };
-    onSettingsChange(updated);
-    saveStoredMetaScalpSettings(updated);
+    handleSave(updated);
   };
 
   const handleToggleAutoSwitch = () => {
     const updated = { ...settings, autoSwitchOnClick: !settings.autoSwitchOnClick };
-    onSettingsChange(updated);
-    saveStoredMetaScalpSettings(updated);
+    handleSave(updated);
+  };
+
+  const handleToggleSoundFeedback = () => {
+    const current = settings.soundFeedback ?? true;
+    const updated = { ...settings, soundFeedback: !current };
+    if (!current) {
+      playMetaScalpClickSound();
+    }
+    handleSave(updated);
   };
 
   const handleToggleEnabled = () => {
     const updated = { ...settings, enabled: !settings.enabled };
-    onSettingsChange(updated);
-    saveStoredMetaScalpSettings(updated);
+    handleSave(updated);
   };
 
   const handlePortChange = (newPort: number) => {
     setActivePort(newPort);
     const updated = { ...settings, port: newPort };
-    onSettingsChange(updated);
-    saveStoredMetaScalpSettings(updated);
+    handleSave(updated);
   };
 
   const testTickerStr = `BINANCE:${currentSymbol}.p`;
 
   const copyTestTicker = () => {
-    navigator.clipboard.writeText(testTickerStr);
-    setCopiedTestTicker(true);
-    setTimeout(() => setCopiedTestTicker(false), 2000);
+    try {
+      navigator.clipboard.writeText(testTickerStr);
+      setCopiedTestTicker(true);
+      setTimeout(() => setCopiedTestTicker(false), 2000);
+    } catch {}
   };
 
   return (
@@ -147,8 +164,8 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800/80 bg-slate-950/60">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-sm">
-              <Zap className="w-5 h-5" />
+            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-sm">
+              <Zap className="w-5 h-5 fill-amber-400/20" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -158,13 +175,13 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Синхронізація стаканів і графіків терміналу в 1 клік
+                Синхронізація стаканів і графіків терміналу MetaScalp в 1 клік
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -173,7 +190,7 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
         {/* Content */}
         <div className="p-5 space-y-5 text-xs text-slate-300">
           {/* Main Master Switch */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+          <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
             <div>
               <span className="font-semibold text-white block">Інтеграція з MetaScalp</span>
               <span className="text-[11px] text-slate-400">
@@ -182,7 +199,7 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
             </div>
             <button
               onClick={handleToggleEnabled}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
                 settings.enabled ? 'bg-amber-500' : 'bg-slate-700'
               }`}
             >
@@ -233,7 +250,7 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
               <button
                 onClick={handleTestConnection}
                 disabled={isTesting}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition-colors text-xs border border-slate-700"
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition-colors text-xs border border-slate-700 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
                 <span>Перевірити з'єднання</span>
@@ -241,7 +258,7 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
               <button
                 onClick={handleSendTestTicker}
                 disabled={isTesting}
-                className="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold transition-colors text-xs border border-amber-500/30"
+                className="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold transition-colors text-xs border border-amber-500/30 cursor-pointer disabled:opacity-50"
               >
                 <Zap className="w-3.5 h-3.5" />
                 <span>Тест ({currentSymbol})</span>
@@ -259,8 +276,9 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
               {PRESET_BINDINGS.map((b) => (
                 <button
                   key={b}
+                  type="button"
                   onClick={() => handleUpdateBinding(b)}
-                  className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all border ${
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all border cursor-pointer ${
                     customBinding === b
                       ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
                       : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
@@ -286,7 +304,7 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
           </div>
 
           {/* Auto-switch on click */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+          <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
             <div>
               <span className="font-semibold text-white block">Автоперемикання при виборі</span>
               <span className="text-[11px] text-slate-400">
@@ -294,8 +312,9 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
               </span>
             </div>
             <button
+              type="button"
               onClick={handleToggleAutoSwitch}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
                 settings.autoSwitchOnClick ? 'bg-cyan-600' : 'bg-slate-700'
               }`}
             >
@@ -307,21 +326,64 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
             </button>
           </div>
 
+          {/* Sound Feedback */}
+          <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <Volume2 className="w-4 h-4 text-amber-400" />
+              <div>
+                <span className="font-semibold text-white block">Звуковий відгук при перемиканні</span>
+                <span className="text-[11px] text-slate-400">
+                  Відтворювати короткий клік при кожній зміні тікера
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleSoundFeedback}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                (settings.soundFeedback ?? true) ? 'bg-cyan-600' : 'bg-slate-700'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  (settings.soundFeedback ?? true) ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
           {/* Port Settings & Manual Copy Fallback */}
           <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-slate-400">Локальний порт:</span>
+              <span className="text-[11px] text-slate-400">Порт API:</span>
+              <div className="flex items-center gap-1">
+                {PRESET_PORTS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => handlePortChange(p)}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                      activePort === p
+                        ? 'bg-amber-500 text-slate-950 font-bold'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
               <input
                 type="number"
                 value={activePort}
-                onChange={(e) => handlePortChange(parseInt(e.target.value) || 17845)}
-                className="w-20 px-2 py-1 bg-slate-950 border border-slate-800 rounded text-xs font-mono text-slate-200 text-center"
+                onChange={(e) => handlePortChange(parseInt(e.target.value, 10) || 17845)}
+                className="w-16 px-1.5 py-0.5 bg-slate-950 border border-slate-800 rounded text-xs font-mono text-slate-200 text-center"
               />
             </div>
 
             <button
+              type="button"
               onClick={copyTestTicker}
-              className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-amber-300 py-1 px-2 rounded bg-slate-950 border border-slate-800 transition-colors"
+              className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-amber-300 py-1 px-2 rounded bg-slate-950 border border-slate-800 transition-colors cursor-pointer"
               title="Скопіювати формат тікера для ручної вставки"
             >
               <Copy className="w-3 h-3" />
@@ -359,8 +421,9 @@ export const MetaScalpModal: React.FC<MetaScalpModalProps> = ({
             <ExternalLink className="w-3 h-3" />
           </a>
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs transition-colors shadow-sm"
+            className="px-4 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs transition-colors shadow-sm cursor-pointer"
           >
             Готово
           </button>

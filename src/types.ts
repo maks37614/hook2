@@ -184,23 +184,7 @@ export interface MetaScalpSettings {
   port: number;
   binding: string; // '001' - '500'
   autoSwitchOnClick: boolean;
-}
-
-export type TerminalTarget = 'metascalp' | 'vataga' | 'tiger' | 'all';
-
-export interface SingleTerminalConfig {
-  enabled: boolean;
-  port: number;
-  binding: string;
-}
-
-export interface UnifiedLinkingSettings {
-  activeTarget: TerminalTarget;
-  autoSwitchOnClick: boolean;
-  soundFeedback: boolean;
-  metascalp: SingleTerminalConfig;
-  vataga: SingleTerminalConfig;
-  tiger: SingleTerminalConfig;
+  soundFeedback?: boolean;
 }
 
 export interface ChartTradeMarkerSettings {
@@ -251,7 +235,6 @@ export interface UserProfile {
   watchlist?: string[];
   watchlistFolders?: Record<string, string[]>;
   metaScalpSettings?: MetaScalpSettings;
-  unifiedLinkingSettings?: UnifiedLinkingSettings;
   chartTradeMarkers?: ChartTradeMarkerSettings;
   orderbookSettings?: OrderbookUserSettings;
   terminalSettings?: TerminalWorkspaceSettings;

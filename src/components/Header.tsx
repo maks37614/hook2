@@ -19,7 +19,6 @@ import {
   Lock,
 } from 'lucide-react';
 import { MetaScalpSettings } from '../utils/metaScalpService';
-import { UnifiedLinkingSettings } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { ActivePageType } from '../types';
 import { useLanguage, SupportedLanguage } from '../context/LanguageContext';
@@ -40,7 +39,6 @@ interface HeaderProps {
   onOpenGuide: () => void;
   onOpenMetaScalp: () => void;
   metaScalpSettings?: MetaScalpSettings;
-  unifiedLinkingSettings?: UnifiedLinkingSettings;
   lastUpdated: number | null;
   telegramAlertsCount?: number;
   surveillanceCount?: number;
@@ -67,7 +65,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenGuide,
   onOpenMetaScalp,
   metaScalpSettings,
-  unifiedLinkingSettings,
   lastUpdated,
   telegramAlertsCount = 0,
   surveillanceCount = 0,
@@ -80,16 +77,8 @@ export const Header: React.FC<HeaderProps> = ({
   const { user, profile } = useAuth();
   const { language, setLanguage, t } = useLanguage();
 
-  const isLinkingEnabled = unifiedLinkingSettings
-    ? (unifiedLinkingSettings.activeTarget === 'all' || unifiedLinkingSettings[unifiedLinkingSettings.activeTarget as 'metascalp' | 'vataga' | 'tiger']?.enabled)
-    : (metaScalpSettings?.enabled ?? true);
-
-  const linkingBadge = unifiedLinkingSettings ? (
-    unifiedLinkingSettings.activeTarget === 'all' ? '3x' :
-    unifiedLinkingSettings.activeTarget === 'vataga' ? `VT:${unifiedLinkingSettings.vataga.binding}` :
-    unifiedLinkingSettings.activeTarget === 'tiger' ? `TG:${unifiedLinkingSettings.tiger.binding}` :
-    `MS:${unifiedLinkingSettings.metascalp.binding}`
-  ) : (metaScalpSettings?.binding ?? '001');
+  const isLinkingEnabled = metaScalpSettings?.enabled ?? true;
+  const linkingBadge = metaScalpSettings?.binding ? `MS:${metaScalpSettings.binding}` : 'MS:001';
   return (
     <header className="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-30">
       <div className="max-w-[1720px] mx-auto px-2.5 sm:px-4 lg:px-6 py-1.5 sm:py-2">
@@ -278,7 +267,7 @@ export const Header: React.FC<HeaderProps> = ({
                   ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300 shadow-sm'
                   : 'bg-slate-900/60 hover:bg-slate-800 border-slate-800 text-slate-400'
               }`}
-              title={!user ? 'Лінковка (MetaScalp, Vataga, Tiger) — доступна після реєстрації' : 'Об\'єднана лінковка: MetaScalp, Vataga, Tiger Trade'}
+              title={!user ? 'Лінковка MetaScalp — доступна після реєстрації' : `Лінковка MetaScalp (Група ${metaScalpSettings?.binding || '001'})`}
             >
               <Zap className={`w-3.5 h-3.5 ${isLinkingEnabled ? 'text-amber-400 fill-amber-400/20' : 'text-slate-500'}`} />
               {!user ? (

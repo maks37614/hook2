@@ -5,6 +5,7 @@ export interface MetaScalpSettings {
   port: number;
   binding: string; // '001' - '500'
   autoSwitchOnClick: boolean;
+  soundFeedback?: boolean;
 }
 
 export const DEFAULT_METASCALP_SETTINGS: MetaScalpSettings = {
@@ -12,7 +13,29 @@ export const DEFAULT_METASCALP_SETTINGS: MetaScalpSettings = {
   port: 17845,
   binding: '001',
   autoSwitchOnClick: true,
+  soundFeedback: true,
 };
+
+export function playMetaScalpClickSound(): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.05);
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.06);
+    setTimeout(() => ctx.close().catch(() => {}), 150);
+  } catch {}
+}
 
 const STORAGE_KEY = 'crypto_screener_metascalp_settings';
 
@@ -170,6 +193,10 @@ export async function sendTickerToMetaScalp(
             }).catch(() => {});
           }
 
+          if (settings.soundFeedback) {
+            playMetaScalpClickSound();
+          }
+
           return {
             success: true,
             message: `Тікер ${ticker} передано в MetaScalp (Група ${binding})`,
@@ -187,6 +214,16 @@ export async function sendTickerToMetaScalp(
     }
   }
 
+  // Fallback: Beacon transmission in case CORS was blocked by browser
+  try {
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      const blob = new Blob([JSON.stringify({ ticker, binding: bindingPadded })], {
+        type: 'application/json',
+      });
+      navigator.sendBeacon(`http://127.0.0.1:${port}/api/change-ticker`, blob);
+    }
+  } catch {}
+
   // Fallback: Copy to clipboard if local API is not answering
   let copied = false;
   try {
@@ -198,9 +235,13 @@ export async function sendTickerToMetaScalp(
     console.warn('Clipboard write failed:', clipErr);
   }
 
+  if (settings.soundFeedback) {
+    playMetaScalpClickSound();
+  }
+
   return {
     success: false,
-    message: lastError?.message || 'MetaScalp не відповідає на 127.0.0.1',
+    message: lastError?.message || `MetaScalp не прийняв запит на порту ${port}`,
     ticker,
     binding,
     copiedToClipboard: copied,
