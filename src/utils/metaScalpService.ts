@@ -16,27 +16,6 @@ export const DEFAULT_METASCALP_SETTINGS: MetaScalpSettings = {
   soundFeedback: true,
 };
 
-export function playMetaScalpClickSound(): void {
-  try {
-    if (typeof window === 'undefined') return;
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.05);
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.06);
-    setTimeout(() => ctx.close().catch(() => {}), 150);
-  } catch {}
-}
-
 const STORAGE_KEY = 'crypto_screener_metascalp_settings';
 
 export function getStoredMetaScalpSettings(userId?: string): MetaScalpSettings {
@@ -139,22 +118,13 @@ export async function sendTickerToMetaScalp(
   const binding = settings.binding || '001';
   const ticker = formatMetaScalpTicker(symbol, exchange, marketType);
 
-  const bindingPadded = String(binding || '001').padStart(3, '0');
-  const bindingRaw = String(binding || '001').replace(/^0+/, '') || '1';
-  const cleanSymbol = symbol.toUpperCase().replace('/', '');
-  const isFutures = marketType === 'futures';
-
-  const payloads = [
-    { ticker, binding: bindingPadded },
-    { ticker, binding: bindingRaw },
-    { ticker },
-    {
-      exchange: exchange.toLowerCase(),
-      market: isFutures ? 'futures' : 'spot',
-      ticker: cleanSymbol,
-      binding: bindingPadded,
-    },
-  ];
+  const payload = {
+    ticker,
+    exchange: exchange.toLowerCase(),
+    market: marketType === 'futures' ? 'futures' : 'spot',
+    symbol: symbol.toUpperCase(),
+    binding,
+  };
 
   const portsToTry = [port];
   for (let p = 17845; p <= 17855; p++) {
@@ -164,65 +134,38 @@ export async function sendTickerToMetaScalp(
   let lastError: any = null;
 
   for (const currentPort of portsToTry.slice(0, 3)) {
-    for (const bodyObj of payloads) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1200);
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1800);
 
-        const res = await fetch(`http://127.0.0.1:${currentPort}/api/change-ticker`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/plain, */*',
-          },
-          body: JSON.stringify(bodyObj),
-          mode: 'cors',
-          signal: controller.signal,
-        });
+      const res = await fetch(`http://127.0.0.1:${currentPort}/api/change-ticker`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        mode: 'cors',
+        signal: controller.signal,
+      });
 
-        clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
 
-        if (res.ok || res.status === 200 || res.status === 204) {
-          // Also notify active window
-          if ('binding' in bodyObj) {
-            fetch(`http://127.0.0.1:${currentPort}/api/change-ticker`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ticker }),
-              mode: 'cors',
-            }).catch(() => {});
-          }
-
-          if (settings.soundFeedback) {
-            playMetaScalpClickSound();
-          }
-
-          return {
-            success: true,
-            message: `Тікер ${ticker} передано в MetaScalp (Група ${binding})`,
-            ticker,
-            binding,
-            portUsed: currentPort,
-          };
-        } else {
-          const errorText = await res.text().catch(() => '');
-          lastError = new Error(`HTTP ${res.status}: ${errorText || res.statusText}`);
-        }
-      } catch (err: any) {
-        lastError = err;
+      if (res.ok || res.status === 200 || res.status === 204) {
+        return {
+          success: true,
+          message: `Тікер ${ticker} передано в MetaScalp (Група ${binding})`,
+          ticker,
+          binding,
+          portUsed: currentPort,
+        };
+      } else {
+        const errorText = await res.text().catch(() => '');
+        lastError = new Error(`HTTP ${res.status}: ${errorText || res.statusText}`);
       }
+    } catch (err: any) {
+      lastError = err;
     }
   }
-
-  // Fallback: Beacon transmission in case CORS was blocked by browser
-  try {
-    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-      const blob = new Blob([JSON.stringify({ ticker, binding: bindingPadded })], {
-        type: 'application/json',
-      });
-      navigator.sendBeacon(`http://127.0.0.1:${port}/api/change-ticker`, blob);
-    }
-  } catch {}
 
   // Fallback: Copy to clipboard if local API is not answering
   let copied = false;
@@ -235,15 +178,30 @@ export async function sendTickerToMetaScalp(
     console.warn('Clipboard write failed:', clipErr);
   }
 
-  if (settings.soundFeedback) {
-    playMetaScalpClickSound();
-  }
-
   return {
     success: false,
-    message: lastError?.message || `MetaScalp не прийняв запит на порту ${port}`,
+    message: lastError?.message || 'MetaScalp не відповідає на 127.0.0.1',
     ticker,
     binding,
     copiedToClipboard: copied,
   };
+}
+
+export function playMetaScalpClickSound(): void {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.05);
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.05);
+  } catch (e) {
+    // Audio context may be blocked before user interaction
+  }
 }

@@ -88,25 +88,37 @@ function getExchangeUrl(exchange: ExchangeId, market: MarketType, symbol: string
 /**
  * Direct client-side fetch from Binance (with multi-mirror fallback)
  */
+/**
+ * Direct client-side fetch from Binance (Futures + Spot multi-mirror)
+ */
 export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
-  const mirrors = [
+  const futuresMirrors = [
+    'https://fapi.binance.com/fapi/v1/ticker/24hr',
+    'https://fapi1.binance.com/fapi/v1/ticker/24hr',
+  ];
+  const spotMirrors = [
     'https://data-api.binance.vision/api/v3/ticker/24hr',
     'https://api.binance.com/api/v3/ticker/24hr',
     'https://api1.binance.com/api/v3/ticker/24hr',
-    'https://api2.binance.com/api/v3/ticker/24hr',
   ];
 
-  for (const url of mirrors) {
+  const coins: MarketCoin[] = [];
+  const seen = new Set<string>();
+
+  // 1. Fetch Binance Futures
+  for (const url of futuresMirrors) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) continue;
       const data = await res.json();
-      if (!Array.isArray(data)) continue;
+      if (!Array.isArray(data) || data.length === 0) continue;
 
-      const coins: MarketCoin[] = [];
       for (const item of data) {
         if (!item.symbol || !item.symbol.endsWith('USDT')) continue;
         const symbol = item.symbol;
+        const key = `binance_${symbol}_futures`;
+        if (seen.has(key)) continue;
+
         const base = symbol.replace('USDT', '');
         const price = parseFloat(item.lastPrice) || 0;
         const volumeUsd = parseFloat(item.quoteVolume) || 0;
@@ -114,7 +126,8 @@ export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
         const high = parseFloat(item.highPrice) || price;
         const low = parseFloat(item.lowPrice) || price;
 
-        if (price <= 0 || volumeUsd < 1000) continue;
+        if (price <= 0 || volumeUsd < 50_000 || volumeUsd > 10_000_000_000) continue;
+        seen.add(key);
 
         const distanceToHighPct = high > 0 ? Math.max(0, ((high - price) / high) * 100) : 0;
         const distanceToLowPct = low > 0 ? Math.max(0, ((price - low) / low) * 100) : 0;
@@ -141,48 +154,33 @@ export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
           exchangeUrl: getExchangeUrl('binance', 'futures', symbol),
         });
       }
-
-      if (coins.length > 0) {
-        coins.sort((a, b) => b.volumeUsd - a.volumeUsd);
-        return coins;
-      }
-    } catch {
-      // Try next mirror
-    }
+      if (coins.length > 0) break;
+    } catch {}
   }
 
-  return [];
-}
-
-/**
- * Direct client-side fetch from Bybit
- */
-export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
-  const mirrors = [
-    'https://api.bybit.com/v5/market/tickers?category=linear',
-    'https://api.bytick.com/v5/market/tickers?category=linear',
-  ];
-
-  for (const url of mirrors) {
+  // 2. Fetch Binance Spot
+  for (const url of spotMirrors) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) continue;
-      const json = await res.json();
-      const list = json?.result?.list;
-      if (!Array.isArray(list)) continue;
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) continue;
 
-      const coins: MarketCoin[] = [];
-      for (const item of list) {
+      for (const item of data) {
         if (!item.symbol || !item.symbol.endsWith('USDT')) continue;
         const symbol = item.symbol;
+        const key = `binance_${symbol}_spot`;
+        if (seen.has(key)) continue;
+
         const base = symbol.replace('USDT', '');
         const price = parseFloat(item.lastPrice) || 0;
-        const volumeUsd = parseFloat(item.turnover24h) || 0;
-        const change24h = (parseFloat(item.price24hPcnt) || 0) * 100;
-        const high = parseFloat(item.highPrice24h) || price;
-        const low = parseFloat(item.lowPrice24h) || price;
+        const volumeUsd = parseFloat(item.quoteVolume) || 0;
+        const change24h = parseFloat(item.priceChangePercent) || 0;
+        const high = parseFloat(item.highPrice) || price;
+        const low = parseFloat(item.lowPrice) || price;
 
-        if (price <= 0 || volumeUsd < 1000) continue;
+        if (price <= 0 || volumeUsd < 50_000 || volumeUsd > 10_000_000_000) continue;
+        seen.add(key);
 
         const distanceToHighPct = high > 0 ? Math.max(0, ((high - price) / high) * 100) : 0;
         const distanceToLowPct = low > 0 ? Math.max(0, ((price - low) / low) * 100) : 0;
@@ -192,8 +190,8 @@ export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
           symbol,
           baseAsset: base,
           quoteAsset: 'USDT',
-          exchange: 'bybit',
-          marketType: 'futures',
+          exchange: 'binance',
+          marketType: 'spot',
           price,
           change24h: Number(change24h.toFixed(2)),
           volumeUsd,
@@ -206,20 +204,91 @@ export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
           isNearHigh: distanceToHighPct <= 2.5,
           isNearLow: distanceToLowPct <= 2.5,
           isActiveCoin: (volatility24hPct >= 4 && volumeUsd >= 2_000_000) || Math.abs(change24h) >= 5,
-          exchangeUrl: getExchangeUrl('bybit', 'futures', symbol),
+          exchangeUrl: getExchangeUrl('binance', 'spot', symbol),
         });
       }
+      break;
+    } catch {}
+  }
 
-      if (coins.length > 0) {
-        coins.sort((a, b) => b.volumeUsd - a.volumeUsd);
-        return coins;
-      }
-    } catch {
-      // Try next mirror
+  coins.sort((a, b) => b.volumeUsd - a.volumeUsd);
+  return coins;
+}
+
+/**
+ * Direct client-side fetch from Bybit (Linear Futures + Spot)
+ */
+export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
+  const categories = [
+    { cat: 'linear', market: 'futures' as MarketType },
+    { cat: 'spot', market: 'spot' as MarketType },
+  ];
+  const mirrors = [
+    'https://api.bybit.com',
+    'https://api.bytick.com',
+  ];
+
+  const coins: MarketCoin[] = [];
+  const seen = new Set<string>();
+
+  for (const { cat, market } of categories) {
+    for (const host of mirrors) {
+      try {
+        const url = `${host}/v5/market/tickers?category=${cat}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const list = json?.result?.list;
+        if (!Array.isArray(list) || list.length === 0) continue;
+
+        for (const item of list) {
+          if (!item.symbol || !item.symbol.endsWith('USDT')) continue;
+          const symbol = item.symbol;
+          const key = `bybit_${symbol}_${market}`;
+          if (seen.has(key)) continue;
+
+          const base = symbol.replace('USDT', '');
+          const price = parseFloat(item.lastPrice) || 0;
+          const volumeUsd = parseFloat(item.turnover24h) || 0;
+          const change24h = (parseFloat(item.price24hPcnt) || 0) * 100;
+          const high = parseFloat(item.highPrice24h) || price;
+          const low = parseFloat(item.lowPrice24h) || price;
+
+          if (price <= 0 || volumeUsd < 50_000 || volumeUsd > 10_000_000_000) continue;
+          seen.add(key);
+
+          const distanceToHighPct = high > 0 ? Math.max(0, ((high - price) / high) * 100) : 0;
+          const distanceToLowPct = low > 0 ? Math.max(0, ((price - low) / low) * 100) : 0;
+          const volatility24hPct = low > 0 ? Math.max(0, ((high - low) / low) * 100) : 0;
+
+          coins.push({
+            symbol,
+            baseAsset: base,
+            quoteAsset: 'USDT',
+            exchange: 'bybit',
+            marketType: market,
+            price,
+            change24h: Number(change24h.toFixed(2)),
+            volumeUsd,
+            high24h: high,
+            low24h: low,
+            distanceToHighPct: Number(distanceToHighPct.toFixed(2)),
+            distanceToLowPct: Number(distanceToLowPct.toFixed(2)),
+            volatility24hPct: Number(volatility24hPct.toFixed(2)),
+            volatility5mPct: Number((volatility24hPct * 0.12).toFixed(2)),
+            isNearHigh: distanceToHighPct <= 2.5,
+            isNearLow: distanceToLowPct <= 2.5,
+            isActiveCoin: (volatility24hPct >= 4 && volumeUsd >= 2_000_000) || Math.abs(change24h) >= 5,
+            exchangeUrl: getExchangeUrl('bybit', market, symbol),
+          });
+        }
+        break; // Successfully loaded this category
+      } catch {}
     }
   }
 
-  return [];
+  coins.sort((a, b) => b.volumeUsd - a.volumeUsd);
+  return coins;
 }
 
 // Fast client-side memory cache for direct exchange kline calls
@@ -234,17 +303,22 @@ export async function fetchDirectKlines(
   market: MarketType,
   symbol: string,
   timeframe: Timeframe,
-  limit: number = 70
+  limit: number = 70,
+  startTime?: number,
+  endTime?: number
 ): Promise<Kline[]> {
   const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const safeLimit = Math.min(Math.max(limit, 10), 1000);
-  const cacheKey = `${exchange}:${market}:${cleanSymbol}:${timeframe}:${safeLimit}`;
+  const cacheKey = `${exchange}:${market}:${cleanSymbol}:${timeframe}:${safeLimit}:${startTime || ''}:${endTime || ''}`;
 
   const cached = directKlinesCache.get(cacheKey);
   const now = Date.now();
   if (cached && now - cached.timestamp < CLIENT_CACHE_TTL_MS && cached.data.length > 0) {
     return cached.data;
   }
+
+  const extraBybit = `${startTime ? `&start=${startTime}` : ''}${endTime ? `&end=${endTime}` : ''}`;
+  const extraBinance = `${startTime ? `&startTime=${startTime}` : ''}${endTime ? `&endTime=${endTime}` : ''}`;
 
   if (exchange === 'bybit') {
     const interval = toBybitInterval(timeframe);
@@ -261,7 +335,7 @@ export async function fetchDirectKlines(
     for (const cat of categories) {
       for (const host of hosts) {
         try {
-          const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`;
+          const url = `${host}/v5/market/kline?category=${cat}&symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBybit}`;
           const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
           if (!res.ok) continue;
           const json = await res.json();
@@ -294,15 +368,15 @@ export async function fetchDirectKlines(
   const interval = toBinanceInterval(timeframe);
   const mirrors = market === 'futures'
     ? [
-        `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-        `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-        `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+        `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+        `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+        `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
       ]
     : [
-        `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
-        `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}`,
+        `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
+        `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
       ];
 
   for (const url of mirrors) {

@@ -134,3 +134,15 @@ export function formatPercent(pct: number | undefined | null, includeSign: boole
   const sign = includeSign && pct > 0 ? '+' : '';
   return `${sign}${pct.toFixed(2)}%`;
 }
+
+/**
+ * Format large numbers for displays (e.g. 1.25M, 450K, or locale formatted)
+ */
+export function formatLargeNumber(val: number | undefined | null): string {
+  if (val === undefined || val === null || isNaN(val)) return '0';
+  if (val >= 1_000_000_000) return `${(val / 1_000_000_000).toFixed(2)}B`;
+  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(2)}M`;
+  if (val >= 1_000) return `${(val / 1_000).toFixed(1)}K`;
+  return val.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+

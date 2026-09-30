@@ -50,6 +50,11 @@ export function getStoredPreferences(): AppPreferences {
  */
 export function saveStoredPreferences(updates: Partial<AppPreferences>): AppPreferences {
   const current = getStoredPreferences();
+  const hasChanges = Object.entries(updates).some(([key, val]) => (current as any)[key] !== val);
+  if (!hasChanges) {
+    return current;
+  }
+
   const next: AppPreferences = {
     ...current,
     ...updates,
@@ -78,16 +83,28 @@ export function useAppPreferences() {
   useEffect(() => {
     const handleUpdate = (e: Event) => {
       const customEvent = e as CustomEvent<AppPreferences>;
-      if (customEvent.detail) {
-        setPreferences(customEvent.detail);
-      } else {
-        setPreferences(getStoredPreferences());
-      }
+      const next = customEvent.detail || getStoredPreferences();
+      setPreferences((prev) => {
+        const isSame =
+          prev.defaultExchange === next.defaultExchange &&
+          prev.defaultMarketType === next.defaultMarketType &&
+          prev.defaultTimeframe === next.defaultTimeframe &&
+          prev.soundAlertsEnabled === next.soundAlertsEnabled;
+        return isSame ? prev : next;
+      });
     };
 
     const handleStorage = (e: StorageEvent) => {
       if (e.key === PREFERENCES_STORAGE_KEY) {
-        setPreferences(getStoredPreferences());
+        const next = getStoredPreferences();
+        setPreferences((prev) => {
+          const isSame =
+            prev.defaultExchange === next.defaultExchange &&
+            prev.defaultMarketType === next.defaultMarketType &&
+            prev.defaultTimeframe === next.defaultTimeframe &&
+            prev.soundAlertsEnabled === next.soundAlertsEnabled;
+          return isSame ? prev : next;
+        });
       }
     };
 
@@ -102,7 +119,14 @@ export function useAppPreferences() {
 
   const updatePreferences = useCallback((updates: Partial<AppPreferences>) => {
     const next = saveStoredPreferences(updates);
-    setPreferences(next);
+    setPreferences((prev) => {
+      const isSame =
+        prev.defaultExchange === next.defaultExchange &&
+        prev.defaultMarketType === next.defaultMarketType &&
+        prev.defaultTimeframe === next.defaultTimeframe &&
+        prev.soundAlertsEnabled === next.soundAlertsEnabled;
+      return isSame ? prev : next;
+    });
     return next;
   }, []);
 
