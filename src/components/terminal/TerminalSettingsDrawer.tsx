@@ -80,24 +80,37 @@ export const TerminalSettingsDrawer: React.FC<TerminalSettingsDrawerProps> = ({
             </label>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { id: '1x1', label: '1x1', sub: '1 на весь екран' },
-                { id: '1x2', label: '1x2', sub: '2 горизонтально' },
-                { id: '2x1', label: '2x1', sub: '2 вертикально' },
-                { id: '2x2', label: '2x2', sub: '4 квадрант' },
+                { id: '1x1', label: '1х', sub: '1 графік' },
+                { id: '1x2', label: '1x2', sub: 'Горизонтально' },
+                { id: '2x1', label: '2x1', sub: 'Вертикально' },
+                { id: '2x2', label: '2x2', sub: '4 сітка' },
                 { id: '2x3', label: '2x3', sub: '6 сітка' },
-                { id: 'custom', label: 'Вільний', sub: 'Гнучкий розмір' },
+                { id: '3x3', label: '3x3', sub: '9 сітка' },
+                { id: '4x4', label: '4x4', sub: '16 сітка' },
+                { id: '5x5', label: '5x5', sub: '25 сітка' },
+                { id: '6x6', label: '6x6', sub: '36 сітка' },
+                { id: 'custom', label: 'Вільний', sub: 'Гнучкий' },
               ].map((item) => (
                 <button
                   key={item.id}
-                  onClick={() => onUpdateConfig({ layoutPreset: item.id as any })}
-                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                  onClick={() => {
+                    let cols = config.columns;
+                    if (item.id === '1x1' || item.id === '2x1') cols = 1;
+                    else if (item.id === '1x2' || item.id === '2x2') cols = 2;
+                    else if (item.id === '2x3' || item.id === '3x3') cols = 3;
+                    else if (item.id === '4x4') cols = 4;
+                    else if (item.id === '5x5') cols = 5;
+                    else if (item.id === '6x6') cols = 6;
+                    onUpdateConfig({ layoutPreset: item.id as any, columns: cols as any });
+                  }}
+                  className={`p-2 rounded-xl border text-left transition-all cursor-pointer ${
                     config.layoutPreset === item.id
                       ? 'bg-cyan-950/60 border-cyan-500/60 text-white shadow-sm'
                       : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
                   }`}
                 >
-                  <div className="font-mono font-bold text-sm text-cyan-300">{item.label}</div>
-                  <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{item.sub}</div>
+                  <div className="font-mono font-bold text-xs text-cyan-300">{item.label}</div>
+                  <div className="text-[9px] text-slate-400 mt-0.5 leading-tight truncate">{item.sub}</div>
                 </button>
               ))}
             </div>
@@ -109,8 +122,8 @@ export const TerminalSettingsDrawer: React.FC<TerminalSettingsDrawerProps> = ({
               <Columns className="w-3.5 h-3.5 text-cyan-400" />
               <span>Кількість колонок на екрані</span>
             </label>
-            <div className="grid grid-cols-4 gap-2">
-              {([1, 2, 3, 4] as (1 | 2 | 3 | 4)[]).map((col) => (
+            <div className="grid grid-cols-6 gap-1.5">
+              {([1, 2, 3, 4, 5, 6] as (1 | 2 | 3 | 4 | 5 | 6)[]).map((col) => (
                 <button
                   key={col}
                   onClick={() => onUpdateConfig({ columns: col })}
