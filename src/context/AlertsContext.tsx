@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import {
   collection,
   doc,
@@ -60,6 +60,13 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     return 'default';
   });
+
+  const alertsRef = useRef(alerts);
+  alertsRef.current = alerts;
+  const userRef = useRef(user);
+  userRef.current = user;
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
 
   const requestNotificationPermission = useCallback(async (): Promise<NotificationPermission> => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -172,7 +179,12 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } finally {
       setLoadingHistory(false);
     }
-  }, [user]);
+  }, [user?.uid]);
+
+  const fetchHistoryRef = useRef(fetchHistory);
+  fetchHistoryRef.current = fetchHistory;
+  const handleServerAlertTriggeredRef = useRef(handleServerAlertTriggered);
+  handleServerAlertTriggeredRef.current = handleServerAlertTriggered;
 
   // Sync with Firestore or local storage depending on whether user is Firebase or local
   useEffect(() => {
@@ -279,18 +291,20 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     fetchHistory();
 
     return () => unsubscribe();
-  }, [user, profile?.telegramBotToken, profile?.telegramChatId, fetchHistory]);
+  }, [user?.uid, profile?.telegramBotToken, profile?.telegramChatId]);
 
   // Active client-side CRON polling to sync with server alerts monitor every 5 seconds
   useEffect(() => {
-    if (!user) return;
+    if (!user?.uid) return;
 
     const pollSync = async () => {
       try {
-        const isLocal = Boolean((user as any).isLocalUser);
-        let currentAlertsList = alerts;
+        const currentUser = userRef.current;
+        if (!currentUser) return;
+        const isLocal = Boolean((currentUser as any).isLocalUser);
+        let currentAlertsList = alertsRef.current;
         if (isLocal) {
-          const saved = localStorage.getItem(`signalhook_user_alerts_${user.uid}`);
+          const saved = localStorage.getItem(`signalhook_user_alerts_${currentUser.uid}`);
           if (saved) {
             try { currentAlertsList = JSON.parse(saved); } catch {}
           }
@@ -300,9 +314,9 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            userId: user.uid,
-            telegramBotToken: profile?.telegramBotToken,
-            telegramChatId: profile?.telegramChatId,
+            userId: currentUser.uid,
+            telegramBotToken: profileRef.current?.telegramBotToken,
+            telegramChatId: profileRef.current?.telegramChatId,
             alerts: currentAlertsList,
           }),
         });
@@ -316,10 +330,10 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const localMatch = currentAlertsList.find((a) => a.id === serverAlert.id);
             if (localMatch && serverAlert.triggered && !localMatch.triggered) {
               hasNewlyTriggered = true;
-              handleServerAlertTriggered(serverAlert);
+              handleServerAlertTriggeredRef.current(serverAlert);
 
               if (!isLocal) {
-                const docRef = doc(db, 'users', user.uid, 'alerts', serverAlert.id);
+                const docRef = doc(db, 'users', currentUser.uid, 'alerts', serverAlert.id);
                 updateDoc(
                   docRef,
                   cleanForFirestore({
@@ -334,14 +348,17 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
 
           if (isLocal) {
-            setAlerts(data.alerts);
+            setAlerts((prev) => {
+              if (JSON.stringify(prev) === JSON.stringify(data.alerts)) return prev;
+              return data.alerts;
+            });
             try {
-              localStorage.setItem(`signalhook_user_alerts_${user.uid}`, JSON.stringify(data.alerts));
+              localStorage.setItem(`signalhook_user_alerts_${currentUser.uid}`, JSON.stringify(data.alerts));
             } catch {}
           }
 
           if (hasNewlyTriggered) {
-            fetchHistory();
+            fetchHistoryRef.current();
           }
         }
       } catch {
@@ -351,7 +368,7 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const interval = setInterval(pollSync, 5000);
     return () => clearInterval(interval);
-  }, [user, profile?.telegramBotToken, profile?.telegramChatId, alerts, handleServerAlertTriggered, fetchHistory]);
+  }, [user?.uid]);
 
   // Migrate local alerts to user profile on first login if any
   useEffect(() => {
