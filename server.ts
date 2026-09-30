@@ -180,12 +180,14 @@ async function startServer() {
     try {
       const exchange = (req.query.exchange as 'all' | ExchangeId) || 'all';
       const marketType = (req.query.marketType as 'all' | MarketType) || 'all';
-      const minVolumeUsd = req.query.minVolume !== undefined ? parseFloat(req.query.minVolume as string) : 0;
+      const minVolumeUsd = req.query.minVolume !== undefined ? parseFloat(req.query.minVolume as string) : 50_000;
+      const maxVolumeUsd = req.query.maxVolume !== undefined ? parseFloat(req.query.maxVolume as string) : 10_000_000_000;
 
       const coins = await fetchMarketCoins({
         exchange,
         marketType,
         minVolumeUsd,
+        maxVolumeUsd,
       });
 
       res.json({
@@ -244,8 +246,10 @@ async function startServer() {
       const symbol = rawSymbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
       const timeframe = (req.query.timeframe as Timeframe) || '1h';
       const limit = req.query.limit ? Math.min(Math.max(parseInt(req.query.limit as string, 10) || 500, 10), 1000) : 500;
+      const startTime = req.query.startTime ? parseInt(req.query.startTime as string, 10) : undefined;
+      const endTime = req.query.endTime ? parseInt(req.query.endTime as string, 10) : undefined;
 
-      const klines = await fetchKlines(exchange, market, symbol, timeframe, limit);
+      const klines = await fetchKlines(exchange, market, symbol, timeframe, limit, startTime, endTime);
       res.json({ success: true, symbol, exchange, timeframe, data: klines });
     } catch (err: any) {
       console.error('Error fetching klines:', err);
