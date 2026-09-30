@@ -21,6 +21,8 @@ import {
   saveStoredUnifiedLinkingSettings,
   pingLocalPort,
   sendTickerToUnifiedTerminals,
+  findActiveVatagaPort,
+  findActiveMetaScalpPort,
   TerminalTarget,
 } from '../utils/terminalLinkingService';
 import { useAuth } from '../context/AuthContext';
@@ -85,8 +87,30 @@ export const UnifiedLinkingModal: React.FC<UnifiedLinkingModalProps> = ({
         setTestSuccess(true);
         setTestResult(`Порт ${port} активний! З'єднання з ${terminal.toUpperCase()} успішне.`);
       } else {
-        setTestSuccess(false);
-        setTestResult(`Порт ${port} не відповідає. Запустіть ${terminal.toUpperCase()} на вашому комп'ютері.`);
+        // Automatically check alternative candidate ports
+        let autoFoundPort: number | null = null;
+        if (terminal === 'vataga') {
+          autoFoundPort = await findActiveVatagaPort(port);
+        } else if (terminal === 'metascalp') {
+          autoFoundPort = await findActiveMetaScalpPort(port);
+        }
+
+        if (autoFoundPort && autoFoundPort !== port) {
+          const updated = {
+            ...currentSettings,
+            [terminal]: { ...currentSettings[terminal], port: autoFoundPort },
+          };
+          handleUpdate(updated);
+          setTestSuccess(true);
+          setTestResult(
+            `Знайдено активний термінал на порту ${autoFoundPort}! Налаштування для ${terminal.toUpperCase()} автоматично перемкнуто на порт ${autoFoundPort}.`
+          );
+        } else {
+          setTestSuccess(false);
+          setTestResult(
+            `Порт ${port} не відповідає. Переконайтеся, що ${terminal.toUpperCase()} запущено на вашому комп'ютері (перевірте порти 17840 або 17845).`
+          );
+        }
       }
     } catch (e: any) {
       setTestSuccess(false);
@@ -496,6 +520,27 @@ export const UnifiedLinkingModal: React.FC<UnifiedLinkingModalProps> = ({
                   <label className="block text-xs font-medium text-slate-300 mb-1">
                     HTTP Порт локального API Vataga:
                   </label>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    {[17840, 17845, 17841, 17846].map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() =>
+                          handleUpdate({
+                            ...currentSettings,
+                            vataga: { ...currentSettings.vataga, port: p },
+                          })
+                        }
+                        className={`px-2 py-1 rounded text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                          currentSettings.vataga.port === p
+                            ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                            : 'bg-slate-950 text-slate-400 border border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
                   <input
                     type="number"
                     value={currentSettings.vataga.port}
@@ -507,7 +552,9 @@ export const UnifiedLinkingModal: React.FC<UnifiedLinkingModalProps> = ({
                     }
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
                   />
-                  <p className="text-[10px] text-slate-500 mt-1">За замовчуванням: 17840</p>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Стандартні порти: 17840 (Vataga) або 17845 (EasyScalp/MetaScalp)
+                  </p>
                 </div>
 
                 <div>

@@ -813,19 +813,6 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
         >
           {/* Actions & Tools */}
           <div className="flex flex-wrap items-center gap-1.5">
-            {/* Drawing Toolbar */}
-            <button
-              onClick={handleToggleToolbar}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors border cursor-pointer ${
-                showDrawingToolbar
-                  ? 'bg-cyan-950/60 text-cyan-300 border-cyan-600/50'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-              }`}
-            >
-              {showDrawingToolbar ? <PanelLeftClose className="w-3 h-3" /> : <PanelLeftOpen className="w-3 h-3" />}
-              <span>{showDrawingToolbar ? 'Малювання: увімк' : 'Малювання'}</span>
-            </button>
-
             {/* MetaScalp */}
             {coin && onSendMetaScalp && (
               <button

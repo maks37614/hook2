@@ -417,11 +417,17 @@ export default function App() {
       }
       setSelectedArchivedItem(null);
       setSelectedPair({ coin, formation: formation || coin.formations[0] });
-      if (metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick) {
+      const shouldAutoSwitch =
+        (unifiedLinkingSettings.autoSwitchOnClick &&
+          (unifiedLinkingSettings.activeTarget === 'all' ||
+            unifiedLinkingSettings[unifiedLinkingSettings.activeTarget]?.enabled)) ||
+        (metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick);
+
+      if (shouldAutoSwitch) {
         handleSendToMetaScalp(coin);
       }
     },
-    [user, metaScalpSettings, handleSendToMetaScalp, handleOpenAuthModal]
+    [user, unifiedLinkingSettings, metaScalpSettings, handleSendToMetaScalp, handleOpenAuthModal]
   );
 
   // Handler when selecting archived formation to restore
@@ -460,11 +466,17 @@ export default function App() {
         formation: archived.formation,
       });
       setIsArchiveModalOpen(false);
-      if (metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick) {
+      const shouldAutoSwitch =
+        (unifiedLinkingSettings.autoSwitchOnClick &&
+          (unifiedLinkingSettings.activeTarget === 'all' ||
+            unifiedLinkingSettings[unifiedLinkingSettings.activeTarget]?.enabled)) ||
+        (metaScalpSettings.enabled && metaScalpSettings.autoSwitchOnClick);
+
+      if (shouldAutoSwitch) {
         handleSendToMetaScalp(matchingCoin);
       }
     },
-    [coins, metaScalpSettings, handleSendToMetaScalp]
+    [coins, unifiedLinkingSettings, metaScalpSettings, handleSendToMetaScalp]
   );
 
   // Play a gentle alert tone using Web Audio API
