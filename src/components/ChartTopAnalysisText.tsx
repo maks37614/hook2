@@ -395,22 +395,22 @@ export const ChartTopAnalysisText: React.FC<ChartTopAnalysisTextProps> = ({
           </div>
 
           <div>
-            <span className="text-slate-400">Підтримка: </span>
-            <span className="font-mono font-bold text-emerald-400">
-              ${formatCryptoPrice(analysis.strongDemand)}
-            </span>
-            <span className="font-mono text-slate-400 text-[11px] ml-1">
-              ({analysis.demandDistPct.toFixed(2)}%)
-            </span>
-          </div>
-
-          <div>
             <span className="text-slate-400">Супротив: </span>
             <span className="font-mono font-bold text-rose-400">
               ${formatCryptoPrice(analysis.strongSupply)}
             </span>
             <span className="font-mono text-slate-400 text-[11px] ml-1">
               (+{analysis.supplyDistPct.toFixed(2)}%)
+            </span>
+          </div>
+
+          <div>
+            <span className="text-slate-400">Підтримка: </span>
+            <span className="font-mono font-bold text-emerald-400">
+              ${formatCryptoPrice(analysis.strongDemand)}
+            </span>
+            <span className="font-mono text-slate-400 text-[11px] ml-1">
+              ({analysis.demandDistPct.toFixed(2)}%)
             </span>
           </div>
 
