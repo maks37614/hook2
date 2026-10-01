@@ -2,6 +2,7 @@ import { checkAlertsOnce, loadAlerts, getAllAlerts } from './alertService';
 import { checkCoinSurveillance, getAllActiveSurveillanceCoins, loadSurveillanceStore, saveSurveillanceStore } from './surveillanceService';
 import { runScreenerScan } from './marketService';
 import { sendTelegramMessage, getEffectiveTelegramConfig } from './telegramService';
+import { surveillanceManager } from './surveillance/surveillanceManager';
 
 export interface CronJobStatus {
   id: string;
@@ -74,6 +75,11 @@ class CronManager {
 
   public init() {
     console.log('[CRON] Initializing unified background notification cron system...');
+    try {
+      surveillanceManager.start();
+    } catch (e) {
+      console.error('[CRON] Error starting surveillanceManager:', e);
+    }
     this.startPriceAlertsCron();
     this.startSurveillanceCron();
     this.startScreenerCron();

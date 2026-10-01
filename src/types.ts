@@ -615,6 +615,16 @@ export interface SurveillanceConfig {
   channelEnabled: boolean; // Donchian/Bollinger breakout
   fibonacciEnabled: boolean; // 0.618 Golden Pocket zones
   cooldownMinutes: number; // Minutes between alerts for same event
+  densityMode?: 'AUTO' | 'MANUAL' | 'HYBRID';
+  manualDensityThresholdUsd?: number;
+  formationThreshold?: number;
+  confluenceThreshold?: number;
+  thirdTouchAlerts?: boolean;
+  densityAlerts?: boolean;
+  oiAlerts?: boolean;
+  newsAlerts?: boolean;
+  setupsEnabled?: boolean;
+  telegramEnabled?: boolean;
 }
 
 export interface SurveillanceEvent {
@@ -655,6 +665,29 @@ export interface SurveillanceState {
   lastEvent?: SurveillanceEvent;
   recentEvents?: SurveillanceEvent[];
   lastCalculated?: number;
+  // 24/7 Engine Live Properties
+  engineStatus?: 'LIVE' | 'SYNCING' | 'CONNECTING' | 'STALE' | 'ERROR';
+  spreadPct?: number;
+  bestBid?: number;
+  bestAsk?: number;
+  densitiesCount?: number;
+  topDensityUsd?: number;
+  topDensityPrice?: number;
+  topDensitySide?: 'BID' | 'ASK';
+  thirdTouchState?: string;
+  thirdTouchDistancePct?: number;
+  activeSetupType?: string;
+  activeSetupStage?: string;
+  activeSetupConfluence?: number;
+  oiRegime?: string;
+  oiChange15mPct?: number;
+  oiAnomaly?: boolean;
+  tradeFlowBuyUsd?: number;
+  tradeFlowSellUsd?: number;
+  tradeFlowImbalance?: number;
+  btcTrend4h?: string;
+  formationName?: string;
+  formationScore?: number;
 }
 
 export interface SurveillanceCoin {

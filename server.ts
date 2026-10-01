@@ -41,6 +41,8 @@ import {
 } from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
 import { cronManager } from './server/cronService';
+import { surveillanceManager } from './server/surveillance/surveillanceManager';
+import { surveillanceReplayEngine } from './server/surveillance/replayEngine';
 
 async function startServer() {
   const app = express();
@@ -779,6 +781,68 @@ async function startServer() {
       saveSurveillanceList(found.userId, found.list);
 
       res.json({ success: true, coin: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Granular live worker snapshot (orderbook, trade flow, densities, setups, OI)
+  app.get('/api/surveillance/worker/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const snapshot = surveillanceManager.getWorkerSnapshot(id);
+      if (!snapshot) {
+        return res.status(404).json({ success: false, error: 'Worker not found or not active' });
+      }
+      res.json({ success: true, data: snapshot });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Causal historical replay / backtest without look-ahead bias
+  app.post('/api/surveillance/backtest', async (req, res) => {
+    try {
+      const { symbol, exchange, marketType, timeframe } = req.body;
+      const sym = (symbol || 'BTCUSDT').toUpperCase().trim();
+      const ex = exchange || 'binance';
+      const mkt = marketType || 'futures';
+      const tf = timeframe || '15m';
+
+      const klines = await fetchKlines(ex, mkt, sym, tf, 200).catch(() => []);
+      const result = surveillanceReplayEngine.runCausalBacktest(sym, klines, tf);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get aggregated surveillance events across all tracked coins for user
+  app.get('/api/surveillance/events', (req, res) => {
+    try {
+      const { userId } = req.query;
+      const uid = typeof userId === 'string' && userId.trim() ? userId.trim() : 'guest';
+      const coins = loadSurveillanceList(uid);
+      const allEvents: any[] = [];
+
+      for (const coin of coins) {
+        if (coin.state?.recentEvents && Array.isArray(coin.state.recentEvents)) {
+          for (const ev of coin.state.recentEvents) {
+            allEvents.push({
+              ...ev,
+              coinId: coin.id,
+              symbol: coin.symbol,
+              baseAsset: coin.baseAsset,
+              quoteAsset: coin.quoteAsset,
+              exchange: coin.exchange,
+              marketType: coin.marketType,
+            });
+          }
+        }
+      }
+
+      allEvents.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      res.json({ success: true, data: allEvents });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

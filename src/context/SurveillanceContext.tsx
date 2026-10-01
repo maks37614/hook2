@@ -1,14 +1,25 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import {
   SurveillanceCoin,
   SurveillanceConfig,
+  SurveillanceEvent,
   ExchangeId,
   MarketType,
 } from '../types';
 
+export interface AggregatedSurveillanceEvent extends SurveillanceEvent {
+  coinId: string;
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  exchange: ExchangeId;
+  marketType: MarketType;
+}
+
 interface SurveillanceContextType {
   coins: SurveillanceCoin[];
+  allEvents: AggregatedSurveillanceEvent[];
   loading: boolean;
   activeCount: number;
   addCoinToSurveillance: (
@@ -23,6 +34,8 @@ interface SurveillanceContextType {
   toggleAllCoinsActive: (targetActive: boolean) => Promise<boolean>;
   checkCoinNow: (id: string, forceNotify?: boolean) => Promise<SurveillanceCoin | null>;
   checkAllCoinsNow: () => Promise<boolean>;
+  getWorkerSnapshot: (id: string) => Promise<any | null>;
+  runBacktest: (symbol: string, exchange?: ExchangeId, marketType?: MarketType, timeframe?: string) => Promise<any | null>;
   isCoinMonitored: (symbol: string, exchange?: ExchangeId) => boolean;
   isCoinOnSurveillance: (symbol: string, exchange?: ExchangeId) => boolean;
   refresh: () => Promise<void>;
@@ -72,9 +85,40 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     fetchCoins();
     const interval = setInterval(() => {
       fetchCoins();
-    }, 20000);
+    }, 6000);
     return () => clearInterval(interval);
   }, [fetchCoins]);
+
+  const getWorkerSnapshot = async (id: string): Promise<any | null> => {
+    try {
+      const res = await fetch(`/api/surveillance/worker/${encodeURIComponent(id)}`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.success ? json.data : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const runBacktest = async (
+    symbol: string,
+    exchange: ExchangeId = 'binance',
+    marketType: MarketType = 'futures',
+    timeframe = '15m'
+  ): Promise<any | null> => {
+    try {
+      const res = await fetch('/api/surveillance/backtest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, exchange, marketType, timeframe }),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.success ? json.data : null;
+    } catch {
+      return null;
+    }
+  };
 
   const addCoinToSurveillance = async (
     symbol: string,
@@ -280,10 +324,31 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const activeCount = coins.filter((c) => c.isActive).length;
 
+  const allEvents = useMemo<AggregatedSurveillanceEvent[]>(() => {
+    const list: AggregatedSurveillanceEvent[] = [];
+    for (const coin of coins) {
+      if (coin.state?.recentEvents && Array.isArray(coin.state.recentEvents)) {
+        for (const ev of coin.state.recentEvents) {
+          list.push({
+            ...ev,
+            coinId: coin.id,
+            symbol: coin.symbol,
+            baseAsset: coin.baseAsset,
+            quoteAsset: coin.quoteAsset,
+            exchange: coin.exchange,
+            marketType: coin.marketType,
+          });
+        }
+      }
+    }
+    return list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  }, [coins]);
+
   return (
     <SurveillanceContext.Provider
       value={{
         coins,
+        allEvents,
         loading,
         activeCount,
         addCoinToSurveillance,
@@ -293,6 +358,8 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         toggleAllCoinsActive,
         checkCoinNow,
         checkAllCoinsNow,
+        getWorkerSnapshot,
+        runBacktest,
         isCoinMonitored,
         isCoinOnSurveillance,
         refresh: fetchCoins,

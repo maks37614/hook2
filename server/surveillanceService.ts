@@ -13,6 +13,7 @@ import {
 import { fetchKlines } from './marketService';
 import { sendTelegramMessage } from './telegramService';
 import { getUserTelegram } from './alertService';
+import { surveillanceManager } from './surveillance/surveillanceManager';
 
 const DATA_DIR = path.join(process.cwd(), 'server', 'data');
 const SURVEILLANCE_FILE = path.join(DATA_DIR, 'surveillance.json');
@@ -111,11 +112,91 @@ export function loadSurveillanceList(userId?: string): SurveillanceCoin[] {
   const store = loadSurveillanceStore();
   const uid = (userId && userId.trim() !== '') ? userId.trim() : 'guest';
   const list = store[uid] || [];
-  // Normalize triggerModes if migrating
+
   return list.map((coin) => {
     if (!coin.config.triggerModes) {
       coin.config.triggerModes = coin.config.triggerMode ? [coin.config.triggerMode] : ['bar_close'];
     }
+
+    // Ensure worker is running if coin is active
+    if (coin.isActive) {
+      surveillanceManager.startWorkerForCoin(coin);
+    }
+
+    // Merge live metrics from worker if available
+    const snapshot = surveillanceManager.getWorkerSnapshot(coin.id);
+    if (snapshot && coin.state) {
+      const topDensity = snapshot.densities[0];
+      const activeSetup = snapshot.setups[0];
+      const activePattern = snapshot.patterns[0];
+      const activeThirdTouch = snapshot.thirdTouches[0];
+
+      // Convert worker EngineAlertEvents to SurveillanceEvents
+      const workerEvents: SurveillanceEvent[] = (snapshot.recentEvents || []).map((e: any) => ({
+        id: e.eventId || `worker_evt_${e.timestamp}`,
+        type: (e.type?.toLowerCase().includes('level') || e.type?.toLowerCase().includes('retest'))
+          ? 'level'
+          : (e.type?.toLowerCase().includes('structure') || e.type?.toLowerCase().includes('bos') || e.type?.toLowerCase().includes('choch'))
+          ? 'structure'
+          : (e.type?.toLowerCase().includes('impulse') || e.type?.toLowerCase().includes('momentum'))
+          ? 'momentum'
+          : 'risk',
+        title: e.title || `Подія ${e.type}`,
+        description: e.description || '',
+        price: e.price || snapshot.currentPrice,
+        timestamp: e.timestamp || Date.now(),
+        severity: (e.severity === 'CRITICAL' || e.severity === 'HIGH')
+          ? 'critical'
+          : (e.severity === 'IMPORTANT' || e.severity === 'WATCH')
+          ? 'warning'
+          : 'info',
+        details: {
+          timeframe: e.timeframe,
+          confluenceScore: e.confluenceScore,
+          type: e.type,
+          evidence: e.evidence,
+        },
+      }));
+
+      const existingEvents: SurveillanceEvent[] = coin.state.recentEvents || [];
+      const combinedEvents = [...workerEvents, ...existingEvents];
+      const seenIds = new Set<string>();
+      const dedupedEvents = combinedEvents.filter((ev) => {
+        if (!ev.id || seenIds.has(ev.id)) return false;
+        seenIds.add(ev.id);
+        return true;
+      }).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 25);
+
+      coin.state = {
+        ...coin.state,
+        engineStatus: snapshot.status as any,
+        currentPrice: snapshot.currentPrice > 0 ? snapshot.currentPrice : coin.state.currentPrice,
+        spreadPct: snapshot.orderBookState?.spreadPct,
+        bestBid: snapshot.orderBookState?.bestBid,
+        bestAsk: snapshot.orderBookState?.bestAsk,
+        densitiesCount: snapshot.densities.length,
+        topDensityUsd: topDensity?.notionalUsd,
+        topDensityPrice: topDensity?.price,
+        topDensitySide: topDensity?.side,
+        thirdTouchState: activeThirdTouch?.state,
+        thirdTouchDistancePct: activeThirdTouch?.distancePct,
+        activeSetupType: activeSetup?.type,
+        activeSetupStage: activeSetup?.stage,
+        activeSetupConfluence: activeSetup?.confluenceScore,
+        oiRegime: snapshot.oiSnapshot?.regime,
+        oiChange15mPct: snapshot.oiSnapshot?.change15mPct,
+        oiAnomaly: snapshot.oiSnapshot?.isAnomaly,
+        tradeFlowBuyUsd: snapshot.tradeFlow?.aggressiveBuyUsd,
+        tradeFlowSellUsd: snapshot.tradeFlow?.aggressiveSellUsd,
+        tradeFlowImbalance: snapshot.tradeFlow?.imbalanceRatio,
+        formationName: activePattern?.name,
+        formationScore: activePattern?.score,
+        lastCalculated: snapshot.lastAnalysisTimestamp || Date.now(),
+        recentEvents: dedupedEvents,
+        lastEvent: dedupedEvents[0] || coin.state.lastEvent,
+      };
+    }
+
     return coin;
   });
 }
@@ -142,6 +223,12 @@ export function updateSurveillanceCoinActive(
     updatedAt: new Date().toISOString(),
   };
 
+  if (Boolean(isActive)) {
+    surveillanceManager.startWorkerForCoin(updatedCoin);
+  } else {
+    surveillanceManager.stopWorkerForCoin(id);
+  }
+
   found.list[found.index] = updatedCoin;
   saveSurveillanceList(found.userId, found.list);
   return updatedCoin;
@@ -151,11 +238,19 @@ export function setAllSurveillanceCoinsActive(userId: string, isActive: boolean)
   const store = loadSurveillanceStore();
   const uid = (userId && userId.trim() !== '') ? userId.trim() : 'guest';
   const list = store[uid] || [];
-  const updatedList = list.map((coin) => ({
-    ...coin,
-    isActive: Boolean(isActive),
-    updatedAt: new Date().toISOString(),
-  }));
+  const updatedList = list.map((coin) => {
+    const updated = {
+      ...coin,
+      isActive: Boolean(isActive),
+      updatedAt: new Date().toISOString(),
+    };
+    if (Boolean(isActive)) {
+      surveillanceManager.startWorkerForCoin(updated);
+    } else {
+      surveillanceManager.stopWorkerForCoin(coin.id);
+    }
+    return updated;
+  });
   store[uid] = updatedList;
   saveSurveillanceStore(store);
   return updatedList;
@@ -749,6 +844,13 @@ export function startSurveillanceMonitor(intervalMs = 25000) {
   if (isLoopRunning) return;
   isLoopRunning = true;
   console.log(`[Surveillance] 24/7 Monitor started with interval ${intervalMs}ms`);
+
+  // Start 24/7 Realtime Surveillance Engine
+  try {
+    surveillanceManager.start();
+  } catch (e) {
+    console.error('[Surveillance] Error starting surveillanceManager:', e);
+  }
 
   setInterval(async () => {
     try {

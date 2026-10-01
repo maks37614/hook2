@@ -27,6 +27,17 @@ import {
   AlertCircle,
   HelpCircle,
   Sparkles,
+  ArrowUpRight,
+  ArrowDownRight,
+  Send,
+  PieChart,
+  History,
+  CheckCircle2,
+  AlertTriangle,
+  PlayCircle,
+  ChevronDown,
+  ChevronUp,
+  Filter,
 } from 'lucide-react';
 import { useSurveillance } from '../context/SurveillanceContext';
 import { getStoredPreferences, useAppPreferences } from '../utils/userPreferences';
@@ -56,10 +67,30 @@ function formatPrice(val?: number): string {
   return val.toFixed(8);
 }
 
+function formatNotionalUsd(val?: number): string {
+  if (!val) return '$0';
+  if (val >= 1_000_000_000) return `$${(val / 1_000_000_000).toFixed(2)}B`;
+  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
+  if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}K`;
+  return `$${Math.round(val)}`;
+}
+
+function formatTimeAgo(timestamp?: number): string {
+  if (!timestamp) return 'щойно';
+  const diffSec = Math.floor((Date.now() - timestamp) / 1000);
+  if (diffSec < 60) return `${Math.max(1, diffSec)} с тому`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} хв тому`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours} год тому`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} д тому`;
+}
+
 const TRIGGER_MODE_OPTIONS: { id: TriggerModeType; label: string; desc: string }[] = [
-  { id: 'bar_close', label: 'Закриття бару 4H', desc: 'Один раз за закриттям 4h свічки' },
-  { id: 'bar_close_1h', label: 'Закриття бару 1H', desc: 'Свічка 1h закрилась за рівнем' },
-  { id: 'bar_close_15m', label: 'Закриття бару 15m', desc: 'Свічка 15m закрилась за рівнем' },
+  { id: 'bar_close', label: 'Закриття 4H', desc: 'За закриттям 4h свічки' },
+  { id: 'bar_close_1h', label: 'Закриття 1H', desc: 'Свічка 1h закрилась за рівнем' },
+  { id: 'bar_close_15m', label: 'Закриття 15m', desc: 'Свічка 15m закрилась за рівнем' },
   { id: 'realtime', label: 'Realtime (Миттєво)', desc: 'В момент перетину ціною' },
 ];
 
@@ -71,6 +102,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 }) => {
   const {
     coins,
+    allEvents,
     loading,
     activeCount,
     addCoinToSurveillance,
@@ -80,6 +112,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     toggleAllCoinsActive,
     checkCoinNow,
     checkAllCoinsNow,
+    getWorkerSnapshot,
+    runBacktest,
     refresh,
   } = useSurveillance();
 
@@ -95,6 +129,20 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   const [isCheckingMap, setIsCheckingMap] = useState<Record<string, boolean>>({});
   const [isRunningAll, setIsRunningAll] = useState(false);
   const [notificationToast, setNotificationToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+
+  // Recent surveillance events feed state
+  const [isEventsExpanded, setIsEventsExpanded] = useState(true);
+  const [eventsTypeFilter, setEventsTypeFilter] = useState<'all' | 'critical' | 'level' | 'structure' | 'density' | 'setup'>('all');
+  const [eventsCoinFilter, setEventsCoinFilter] = useState<string>('all');
+  const [eventsDisplayLimit, setEventsDisplayLimit] = useState(8);
+  const [expandedCoinEventsMap, setExpandedCoinEventsMap] = useState<Record<string, boolean>>({});
+
+  // Granular worker details & backtest modal state
+  const [detailedCoin, setDetailedCoin] = useState<SurveillanceCoin | null>(null);
+  const [workerData, setWorkerData] = useState<any | null>(null);
+  const [loadingWorkerData, setLoadingWorkerData] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<any | null>(null);
+  const [loadingBacktest, setLoadingBacktest] = useState(false);
 
   // Screener coins list for selection
   const screenerCoinsList = useMemo(() => {
@@ -119,7 +167,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   // Config modal state (for add or edit)
   const [formConfig, setFormConfig] = useState<SurveillanceConfig>({
     timeframe: prefs.defaultTimeframe,
-    triggerModes: ['bar_close'],
+    triggerModes: ['bar_close', 'realtime'],
     triggerMode: 'bar_close',
     levelsEnabled: true,
     structureEnabled: true,
@@ -130,6 +178,16 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     channelEnabled: true,
     fibonacciEnabled: true,
     cooldownMinutes: 15,
+    densityMode: 'AUTO',
+    manualDensityThresholdUsd: 1000000,
+    formationThreshold: 75,
+    confluenceThreshold: 75,
+    thirdTouchAlerts: true,
+    densityAlerts: true,
+    oiAlerts: true,
+    newsAlerts: true,
+    setupsEnabled: true,
+    telegramEnabled: true,
   });
 
   const toggleTriggerMode = (mode: TriggerModeType) => {
@@ -139,7 +197,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
         : (prev.triggerMode ? [prev.triggerMode as TriggerModeType] : ['bar_close']);
       let next: TriggerModeType[];
       if (current.includes(mode)) {
-        if (current.length === 1) return prev; // keep at least 1 selected
+        if (current.length === 1) return prev;
         next = current.filter((m) => m !== mode);
       } else {
         next = [...current, mode];
@@ -148,48 +206,18 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     });
   };
 
-  useEffect(() => {
-    setExchangeFilter(preferences.defaultExchange);
-    const ex = preferences.defaultExchange === 'all' ? 'binance' : preferences.defaultExchange;
-    const m = preferences.defaultMarketType === 'all' ? 'futures' : preferences.defaultMarketType;
-    setSelectedExchange(ex);
-    setSelectedMarketType(m);
-    setFormConfig((prev) => ({ ...prev, timeframe: preferences.defaultTimeframe }));
-  }, [preferences.defaultExchange, preferences.defaultMarketType, preferences.defaultTimeframe]);
-
-  const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
-    setNotificationToast({ message, type });
-    setTimeout(() => setNotificationToast(null), 4000);
-  };
-
-  // Filtered coins in list
-  const filteredCoins = useMemo(() => {
-    return coins.filter((coin) => {
-      const matchSearch =
-        !searchQuery ||
-        coin.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        coin.baseAsset.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchExchange = exchangeFilter === 'all' || coin.exchange === exchangeFilter;
-      return matchSearch && matchExchange;
-    });
-  }, [coins, searchQuery, exchangeFilter]);
-
-  const handleOpenAddModal = (initialSymbol?: string) => {
-    const target = initialSymbol
-      ? screenerCoinsList.find((c) => c.symbol === initialSymbol) || screenerCoinsList[0]
-      : screenerCoinsList[0];
-
-    if (target) {
-      setSelectedSymbolInput(target.symbol);
-      setSelectedExchange(target.exchange);
-      setSelectedMarketType(target.marketType);
-    } else {
-      setSelectedSymbolInput(initialSymbol || 'BTCUSDT');
+  const handleOpenAddModal = (prefillSymbol?: string) => {
+    if (prefillSymbol) {
+      setSelectedSymbolInput(prefillSymbol);
+      const match = screenerCoinsList.find((c) => c.symbol === prefillSymbol);
+      if (match) {
+        setSelectedExchange(match.exchange);
+        setSelectedMarketType(match.marketType);
+      }
     }
-
     setFormConfig({
-      timeframe: '4h',
-      triggerModes: ['bar_close'],
+      timeframe: prefs.defaultTimeframe,
+      triggerModes: ['bar_close', 'realtime'],
       triggerMode: 'bar_close',
       levelsEnabled: true,
       structureEnabled: true,
@@ -200,66 +228,76 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
       channelEnabled: true,
       fibonacciEnabled: true,
       cooldownMinutes: 15,
+      densityMode: 'AUTO',
+      manualDensityThresholdUsd: 1000000,
+      formationThreshold: 75,
+      confluenceThreshold: 75,
+      thirdTouchAlerts: true,
+      densityAlerts: true,
+      oiAlerts: true,
+      newsAlerts: true,
+      setupsEnabled: true,
+      telegramEnabled: true,
     });
+    setEditingCoin(null);
     setIsAddModalOpen(true);
   };
 
   const handleOpenEditModal = (coin: SurveillanceCoin) => {
     setEditingCoin(coin);
-    const modes: TriggerModeType[] = Array.isArray(coin.config.triggerModes) && coin.config.triggerModes.length > 0
-      ? (coin.config.triggerModes as TriggerModeType[])
-      : (coin.config.triggerMode ? [coin.config.triggerMode as TriggerModeType] : ['bar_close']);
-    setFormConfig({ ...coin.config, triggerModes: modes, triggerMode: modes[0] });
+    setFormConfig({
+      ...coin.config,
+      triggerModes: Array.isArray(coin.config.triggerModes) && coin.config.triggerModes.length > 0
+        ? coin.config.triggerModes
+        : [coin.config.triggerMode || 'bar_close'],
+      densityMode: coin.config.densityMode || 'AUTO',
+      manualDensityThresholdUsd: coin.config.manualDensityThresholdUsd || 1000000,
+      formationThreshold: coin.config.formationThreshold || 75,
+      confluenceThreshold: coin.config.confluenceThreshold || 75,
+      thirdTouchAlerts: coin.config.thirdTouchAlerts ?? true,
+      densityAlerts: coin.config.densityAlerts ?? true,
+      oiAlerts: coin.config.oiAlerts ?? true,
+      newsAlerts: coin.config.newsAlerts ?? true,
+      setupsEnabled: coin.config.setupsEnabled ?? true,
+      telegramEnabled: coin.config.telegramEnabled ?? true,
+    });
+    setIsAddModalOpen(true);
   };
 
-  const handleSaveAddCoin = async () => {
-    const symbolToUse = selectedSymbolInput.trim().toUpperCase() || (screenerCoinsList[0]?.symbol ?? 'BTCUSDT');
-    if (!symbolToUse) {
-      showToast('Будь ласка, оберіть монету зі списку Скрінера', 'error');
-      return;
-    }
-
-    const modes: TriggerModeType[] = Array.isArray(formConfig.triggerModes) && formConfig.triggerModes.length > 0
-      ? (formConfig.triggerModes as TriggerModeType[])
-      : ['bar_close'];
-
-    const configToSave: SurveillanceConfig = {
-      ...formConfig,
-      triggerModes: modes,
-      triggerMode: modes[0],
-    };
-
-    const res = await addCoinToSurveillance(symbolToUse, selectedExchange, selectedMarketType, configToSave);
-    if (res.success && res.coin) {
-      checkCoinNow(res.coin.id, true);
-      showToast(`Монету #${symbolToUse} успішно додано на системний нагляд!`, 'success');
-      setIsAddModalOpen(false);
+  const handleSaveCoin = async () => {
+    if (editingCoin) {
+      const ok = await updateCoinConfig(editingCoin.id, formConfig);
+      if (ok) {
+        setNotificationToast({ message: `Налаштування #${editingCoin.symbol} успішно оновлено`, type: 'success' });
+        setIsAddModalOpen(false);
+      } else {
+        setNotificationToast({ message: 'Помилка оновлення налаштувань', type: 'error' });
+      }
     } else {
-      showToast(res.error || 'Не вдалося додати монету', 'error');
+      const res = await addCoinToSurveillance(
+        selectedSymbolInput,
+        selectedExchange,
+        selectedMarketType,
+        formConfig
+      );
+      if (res.success) {
+        setNotificationToast({ message: `Монету #${selectedSymbolInput} взято на 24/7 системний нагляд!`, type: 'success' });
+        setIsAddModalOpen(false);
+      } else {
+        setNotificationToast({ message: res.error || 'Не вдалося додати монету', type: 'error' });
+      }
     }
+    setTimeout(() => setNotificationToast(null), 3500);
   };
 
-  const handleSaveEditConfig = async () => {
-    if (!editingCoin) return;
-    const modes: TriggerModeType[] = Array.isArray(formConfig.triggerModes) && formConfig.triggerModes.length > 0
-      ? (formConfig.triggerModes as TriggerModeType[])
-      : ['bar_close'];
-
-    const configToSave: SurveillanceConfig = {
-      ...editingCoin.config,
-      ...formConfig,
-      triggerModes: modes,
-      triggerMode: modes[0],
-    };
-
-    const ok = await updateCoinConfig(editingCoin.id, configToSave);
+  const handleToggleActive = async (id: string, symbol: string, currentActive: boolean) => {
+    const ok = await toggleCoinActive(id);
     if (ok) {
-      showToast(`Налаштування для #${editingCoin.symbol} успішно збережено!`, 'success');
-      setEditingCoin(null);
-      // Run quick check to recalculate state with new thresholds
-      checkCoinNow(editingCoin.id, false);
-    } else {
-      showToast('Помилка збереження налаштувань', 'error');
+      setNotificationToast({
+        message: currentActive ? `Нагляд за #${symbol} призупинено` : `24/7 Нагляд за #${symbol} активовано!`,
+        type: currentActive ? 'info' : 'success',
+      });
+      setTimeout(() => setNotificationToast(null), 3000);
     }
   };
 
@@ -268,240 +306,483 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     try {
       const updated = await checkCoinNow(id, true);
       if (updated) {
-        showToast(`Аналіз #${symbol} оновлено з біржі`, 'info');
+        setNotificationToast({ message: `Стан #${symbol} оновлено з біржі`, type: 'success' });
       }
     } finally {
       setIsCheckingMap((prev) => ({ ...prev, [id]: false }));
+      setTimeout(() => setNotificationToast(null), 3000);
     }
   };
 
-  const handleToggleActive = async (id: string, symbol: string, currentActive: boolean) => {
-    const ok = await toggleCoinActive(id);
-    if (ok) {
-      if (currentActive) {
-        showToast(`Нагляд за #${symbol} призупинено`, 'info');
-      } else {
-        showToast(`24/7 системний нагляд за #${symbol} увімкнено! Сервер безперервно відстежує монету.`, 'success');
-        checkCoinNow(id, false);
-      }
-    } else {
-      showToast('Не вдалося змінити стан нагляду', 'error');
-    }
-  };
-
-  const handleToggleAll = async (targetActive: boolean) => {
-    if (coins.length === 0) return;
-    const ok = await toggleAllCoinsActive(targetActive);
-    if (ok) {
-      if (targetActive) {
-        showToast(`24/7 системний нагляд увімкнено для всіх монет (${coins.length})!`, 'success');
-      } else {
-        showToast(`Системний нагляд призупинено для всіх монет (${coins.length})`, 'info');
-      }
-    } else {
-      showToast('Не вдалося змінити стан нагляду', 'error');
-    }
-  };
-
-  // Run full system scan / overview on all monitored coins
-  const handleRunAllSurveillance = async () => {
-    if (coins.length === 0) {
-      showToast('Список нагляду порожній. Додайте монету зі скрінера', 'info');
-      return;
-    }
-
-    setIsRunningAll(true);
+  const handleOpenDetails = async (coin: SurveillanceCoin) => {
+    setDetailedCoin(coin);
+    setWorkerData(null);
+    setBacktestResult(null);
+    setLoadingWorkerData(true);
     try {
-      const ok = await checkAllCoinsNow();
-      if (ok) {
-        showToast(`Запуск системного огляду виконано для ${coins.length} монет!`, 'success');
-      } else {
-        showToast('Не вдалося оновити системний нагляд', 'error');
-      }
-    } catch {
-      showToast('Помилка під час запуску системного огляду', 'error');
+      const snapshot = await getWorkerSnapshot(coin.id);
+      setWorkerData(snapshot);
     } finally {
-      setIsRunningAll(false);
+      setLoadingWorkerData(false);
     }
   };
+
+  const handleRunCausalBacktest = async (coin: SurveillanceCoin) => {
+    setLoadingBacktest(true);
+    try {
+      const res = await runBacktest(coin.symbol, coin.exchange, coin.marketType, '15m');
+      setBacktestResult(res);
+    } finally {
+      setLoadingBacktest(false);
+    }
+  };
+
+  const filteredCoins = useMemo(() => {
+    return coins.filter((c) => {
+      const matchSearch =
+        c.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        c.baseAsset.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchExchange = exchangeFilter === 'all' || c.exchange === exchangeFilter;
+      return matchSearch && matchExchange;
+    });
+  }, [coins, searchQuery, exchangeFilter]);
+
+  // Aggregate and filter surveillance events across all tracked coins
+  const eventCoinsList = useMemo(() => {
+    const set = new Set<string>();
+    for (const ev of allEvents) {
+      if (ev.symbol) set.add(ev.symbol);
+    }
+    return Array.from(set);
+  }, [allEvents]);
+
+  const eventsCountMap = useMemo(() => {
+    const critical = allEvents.filter((e) => e.severity === 'critical').length;
+    const level = allEvents.filter((e) => e.type === 'level' || e.title.toLowerCase().includes('опор') || e.title.toLowerCase().includes('підтримк') || e.title.toLowerCase().includes('fib')).length;
+    const structure = allEvents.filter((e) => e.type === 'structure' || e.title.toLowerCase().includes('структур') || e.title.toLowerCase().includes('bos') || e.title.toLowerCase().includes('choch')).length;
+    const density = allEvents.filter((e) => e.title.toLowerCase().includes('щільніст') || e.title.toLowerCase().includes('стакан') || e.title.toLowerCase().includes('density')).length;
+    const setup = allEvents.filter((e) => e.title.toLowerCase().includes('сетап') || e.title.toLowerCase().includes('touch') || e.title.toLowerCase().includes('retest')).length;
+    return {
+      all: allEvents.length,
+      critical,
+      level,
+      structure,
+      density,
+      setup,
+    };
+  }, [allEvents]);
+
+  const filteredEvents = useMemo(() => {
+    return allEvents.filter((ev) => {
+      if (eventsCoinFilter !== 'all' && ev.symbol !== eventsCoinFilter) {
+        return false;
+      }
+      if (eventsTypeFilter === 'all') return true;
+      if (eventsTypeFilter === 'critical') return ev.severity === 'critical';
+      if (eventsTypeFilter === 'level') return ev.type === 'level' || ev.title.toLowerCase().includes('опор') || ev.title.toLowerCase().includes('підтримк') || ev.title.toLowerCase().includes('fib');
+      if (eventsTypeFilter === 'structure') return ev.type === 'structure' || ev.title.toLowerCase().includes('структур') || ev.title.toLowerCase().includes('bos') || ev.title.toLowerCase().includes('choch');
+      if (eventsTypeFilter === 'density') return ev.title.toLowerCase().includes('щільніст') || ev.title.toLowerCase().includes('стакан') || ev.title.toLowerCase().includes('density');
+      if (eventsTypeFilter === 'setup') return ev.title.toLowerCase().includes('сетап') || ev.title.toLowerCase().includes('touch') || ev.title.toLowerCase().includes('retest');
+      return true;
+    });
+  }, [allEvents, eventsCoinFilter, eventsTypeFilter]);
 
   return (
-    <div className="max-w-[1720px] mx-auto px-2.5 sm:px-4 lg:px-6 py-4 space-y-5">
-      {/* Toast */}
+    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+      {/* Toast Notification */}
       {notificationToast && (
         <div
-          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl border shadow-xl text-xs font-semibold animate-in fade-in slide-in-from-bottom-3 ${
-            notificationToast.type === 'error'
-              ? 'bg-rose-950/90 border-rose-700 text-rose-200'
-              : notificationToast.type === 'info'
-              ? 'bg-sky-950/90 border-sky-700 text-sky-200'
-              : 'bg-emerald-950/90 border-emerald-700 text-emerald-200'
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-2xl border text-xs font-bold animate-in fade-in slide-in-from-top-2 flex items-center gap-2 ${
+            notificationToast.type === 'success'
+              ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50 shadow-emerald-950/50'
+              : notificationToast.type === 'error'
+              ? 'bg-rose-950/90 text-rose-300 border-rose-500/50 shadow-rose-950/50'
+              : 'bg-cyan-950/90 text-cyan-300 border-cyan-500/50 shadow-cyan-950/50'
           }`}
         >
-          <Radar className="w-4 h-4 shrink-0 text-cyan-400 animate-spin" />
+          <span className="w-2 h-2 rounded-full bg-current animate-ping" />
           <span>{notificationToast.message}</span>
         </div>
       )}
 
-      {/* Hero Header */}
-      <div className="rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-slate-800 p-4 sm:p-6 shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs font-mono">
-              <Radar className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-              <span>Нагляд за монетами (24/7 Автономне стеження)</span>
+      {/* Top Header & 24/7 Engine Status Bar (#90, #92) */}
+      <div className="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-slate-950 border border-slate-800 p-5 shadow-xl space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                <Radar className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xl font-black text-white tracking-tight">24/7 Моніторинг</h1>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 font-mono">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    LIVE ENGINE
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Постійний фоновий моніторинг ринку на серверах Signalhook: Local Order Book, Multi-Timeframe структура, рівні, щільності та Telegram алерти
+                </p>
+              </div>
             </div>
-
-            <p className="text-xs sm:text-sm text-slate-400 max-w-3xl leading-relaxed">
-              Серверний нагляд за алгоритмом: <strong>структура 4H/1D → рівні → імпульс % → ризик</strong>.
-              Сервер автоматично веде безперервний моніторинг кожної доданої монети, аж доки ви її не призупините або не видалите зі списку нагляду.
-            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Run All Surveillance Button */}
-            <button
-              onClick={handleRunAllSurveillance}
-              disabled={isRunningAll || coins.length === 0}
-              className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-emerald-950/40 transition-all cursor-pointer disabled:opacity-50"
-              title="Запустити негайний аналіз усіх монет на нагляді"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRunningAll ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Перевірити всі</span>
-            </button>
-
-            {/* Batch Toggle Active/Pause */}
-            {coins.length > 0 && (
-              activeCount > 0 ? (
-                <button
-                  onClick={() => handleToggleAll(false)}
-                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs sm:text-sm font-semibold transition-all cursor-pointer shadow-sm"
-                  title="Призупинити нагляд для всіх монет"
-                >
-                  <Pause className="w-3.5 h-3.5 fill-current" />
-                  <span className="hidden sm:inline">Призупинити всі</span>
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleToggleAll(true)}
-                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs sm:text-sm font-semibold transition-all cursor-pointer shadow-sm"
-                  title="Включити системний нагляд для всіх монет"
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span className="hidden sm:inline">Включити всі</span>
-                </button>
-              )
-            )}
-
-            {/* Add Coin Button */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => handleOpenAddModal()}
-              className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-cyan-950/40 transition-all cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-950/50 transition-all active:scale-95 flex items-center gap-2 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>Додати монету</span>
             </button>
-
+            {onOpenTelegramSettings && (
+              <button
+                onClick={onOpenTelegramSettings}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700 transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5 text-sky-400" />
+              </button>
+            )}
             <button
               onClick={() => refresh()}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
               title="Оновити дані"
-              className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer border border-slate-700"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-cyan-400' : ''}`} />
             </button>
           </div>
         </div>
 
-        {/* Stats bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-4 mt-5 pt-4 border-t border-slate-800/80">
-          <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-              <Eye className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Всього</span>
-            </div>
-            <div className="text-lg font-bold font-mono text-white mt-0.5">{coins.length}</div>
-          </div>
-          <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-              <Play className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Активні</span>
-            </div>
-            <div className="text-lg font-bold font-mono text-emerald-400 mt-0.5">{activeCount}</div>
-          </div>
-          <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Режими підтвердження</span>
-            </div>
-            <div className="text-xs font-bold text-indigo-300 mt-1">Мульти-вибір (4H • 1H • 15m • Realtime)</div>
-          </div>
-          <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-              <Bell className="w-3.5 h-3.5 text-sky-400" />
-              <span>Канал сповіщень</span>
-            </div>
-            <div className="text-xs font-bold text-sky-300 mt-1 flex items-center gap-1">
-              <span>Telegram Бот</span>
-              <button
-                onClick={onOpenTelegramSettings}
-                className="text-[10px] text-cyan-400 underline hover:text-cyan-300 ml-1 cursor-pointer"
-              >
-                (Налаштування)
-              </button>
+        <div className="flex items-center gap-2 pt-3 border-t border-slate-800/80 font-mono text-[11px]">
+          <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <div>
+              <div className="text-[9px] text-slate-500 uppercase">Стеження</div>
+              <div className="font-bold text-cyan-300">{activeCount} МОНЕТ</div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Control / Filter Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-        <div className="flex items-center gap-2 flex-1 min-w-[240px]">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+      {/* SECTION: Останні події нагляду (Recent Surveillance Events Feed) */}
+      <div className="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-slate-950 border border-slate-800 shadow-xl overflow-hidden">
+        {/* Panel Header */}
+        <div className="p-4 border-b border-slate-800/80 bg-slate-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <Activity className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-extrabold text-white tracking-tight flex items-center gap-2">
+                  <span>Останні події нагляду</span>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    {allEvents.length} {allEvents.length === 1 ? 'подія' : allEvents.length >= 2 && allEvents.length <= 4 ? 'події' : 'подій'}
+                  </span>
+                </h2>
+                <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 text-[10px] font-mono">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  LIVE СТРІЧКА 24/7
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Хронологічний лог тестів рівнів, щільностей стакану, пробоїв, змін структури та сигналів сетапів
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              onClick={() => refresh()}
+              title="Оновити події"
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setIsEventsExpanded((prev) => !prev)}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5"
+            >
+              <span>{isEventsExpanded ? 'Згорнути' : 'Розгорнути'}</span>
+              {isEventsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Panel Content (Expandable) */}
+        {isEventsExpanded && (
+          <div className="p-4 space-y-4">
+            {/* Filter Chips Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pb-1 border-b border-slate-800/60">
+              {/* Category Filters */}
+              <div className="flex flex-wrap items-center gap-1.5 text-xs font-mono">
+                <button
+                  onClick={() => setEventsTypeFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                    eventsTypeFilter === 'all'
+                      ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Всі ({eventsCountMap.all})
+                </button>
+                <button
+                  onClick={() => setEventsTypeFilter('critical')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    eventsTypeFilter === 'critical'
+                      ? 'bg-rose-500 text-white font-bold shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-800 text-rose-400 hover:text-rose-300'
+                  }`}
+                >
+                  <AlertCircle className="w-3 h-3" />
+                  <span>Критичні ({eventsCountMap.critical})</span>
+                </button>
+                <button
+                  onClick={() => setEventsTypeFilter('level')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    eventsTypeFilter === 'level'
+                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-800 text-emerald-400 hover:text-emerald-300'
+                  }`}
+                >
+                  <Target className="w-3 h-3" />
+                  <span>Рівні ({eventsCountMap.level})</span>
+                </button>
+                <button
+                  onClick={() => setEventsTypeFilter('structure')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    eventsTypeFilter === 'structure'
+                      ? 'bg-indigo-500 text-white font-bold shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-800 text-indigo-400 hover:text-indigo-300'
+                  }`}
+                >
+                  <Shield className="w-3 h-3" />
+                  <span>Структура ({eventsCountMap.structure})</span>
+                </button>
+                <button
+                  onClick={() => setEventsTypeFilter('density')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    eventsTypeFilter === 'density'
+                      ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-800 text-cyan-400 hover:text-cyan-300'
+                  }`}
+                >
+                  <Layers className="w-3 h-3" />
+                  <span>Щільності ({eventsCountMap.density})</span>
+                </button>
+                <button
+                  onClick={() => setEventsTypeFilter('setup')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    eventsTypeFilter === 'setup'
+                      ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-800 text-amber-400 hover:text-amber-300'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>Сетапи ({eventsCountMap.setup})</span>
+                </button>
+              </div>
+
+              {/* Coin Filter Selector */}
+              {eventCoinsList.length > 1 && (
+                <div className="flex items-center gap-1.5 text-xs font-mono">
+                  <span className="text-slate-500 text-[11px]">Фільтр монети:</span>
+                  <select
+                    value={eventsCoinFilter}
+                    onChange={(e) => setEventsCoinFilter(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
+                  >
+                    <option value="all">Всі монети ({eventCoinsList.length})</option>
+                    {eventCoinsList.map((sym) => (
+                      <option key={sym} value={sym}>
+                        #{sym}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Events List */}
+            {filteredEvents.length === 0 ? (
+              <div className="p-8 rounded-xl bg-slate-950/40 border border-slate-800/80 text-center space-y-2">
+                <div className="w-10 h-10 rounded-xl bg-slate-800/50 flex items-center justify-center mx-auto text-slate-400">
+                  <Bell className="w-5 h-5" />
+                </div>
+                <div className="text-xs font-bold text-slate-300">
+                  {allEvents.length === 0
+                    ? 'Подій нагляду поки що не зафіксовано'
+                    : 'Немає подій за обраним фільтром'}
+                </div>
+                <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+                  {allEvents.length === 0
+                    ? '24/7 сервер аналізує стакан, рівні та структуру ринку. Щойно зʼявиться реакція на рівень, щільність або зміна тренду — сповіщення зʼявиться тут та надійде в Telegram.'
+                    : 'Спробуйте обрати «Всі події» або інший фільтр категорій.'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {filteredEvents.slice(0, eventsDisplayLimit).map((ev) => {
+                    const isCritical = ev.severity === 'critical';
+                    const isWarning = ev.severity === 'warning';
+                    const matchedCoin = coins.find((c) => c.id === ev.coinId || c.symbol === ev.symbol);
+
+                    return (
+                      <div
+                        key={ev.id}
+                        className={`p-3.5 rounded-xl border transition-all flex flex-col justify-between gap-2.5 ${
+                          isCritical
+                            ? 'bg-rose-950/20 border-rose-500/40 hover:border-rose-500/60 shadow-lg shadow-rose-950/20'
+                            : isWarning
+                            ? 'bg-amber-950/15 border-amber-500/30 hover:border-amber-500/50'
+                            : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        {/* Event Header */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="px-2 py-0.5 rounded font-black font-mono text-xs bg-slate-800 text-white border border-slate-700">
+                              #{ev.symbol}
+                            </span>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase bg-slate-900 text-amber-300 border border-slate-800">
+                              {ev.exchange} {ev.marketType}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase flex items-center gap-1 border ${
+                                isCritical
+                                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                  : isWarning
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                  : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                              }`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  isCritical
+                                    ? 'bg-rose-400 animate-ping'
+                                    : isWarning
+                                    ? 'bg-amber-400'
+                                    : 'bg-cyan-400'
+                                }`}
+                              />
+                              {isCritical ? 'Критично' : isWarning ? 'Увага' : 'Інфо'}
+                            </span>
+                          </div>
+
+                          <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-slate-500" />
+                            <span title={new Date(ev.timestamp).toLocaleString()}>
+                              {formatTimeAgo(ev.timestamp)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Title and Description */}
+                        <div className="space-y-1">
+                          <div className="font-bold text-white text-xs leading-snug">
+                            {ev.title}
+                          </div>
+                          {ev.description && (
+                            <div className="text-[11px] text-slate-300 leading-relaxed font-mono">
+                              {ev.description}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Footer info & quick actions */}
+                        <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between gap-2 text-[11px] font-mono">
+                          <div className="flex items-center gap-2 text-slate-400">
+                            <span>Ціна:</span>
+                            <strong className="text-white">${formatPrice(ev.price)}</strong>
+                            {ev.details?.timeframe && (
+                              <span className="text-slate-500">• TF: {ev.details.timeframe}</span>
+                            )}
+                            {ev.details?.confluenceScore && (
+                              <span className="text-emerald-400 font-bold">
+                                • Conf: {ev.details.confluenceScore}/100
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            {matchedCoin && (
+                              <button
+                                onClick={() => handleOpenDetails(matchedCoin)}
+                                title="Відкрити стакан та аналітику монети"
+                                className="px-2 py-0.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-[10px] font-semibold border border-cyan-500/20 cursor-pointer flex items-center gap-1"
+                              >
+                                <Layers className="w-3 h-3" />
+                                <span>Стакан</span>
+                              </button>
+                            )}
+                            {onSelectCoinForChart && (
+                              <button
+                                onClick={() => onSelectCoinForChart(ev.symbol, ev.exchange, ev.marketType)}
+                                title="Відкрити графік"
+                                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold cursor-pointer flex items-center gap-1"
+                              >
+                                <BarChart3 className="w-3 h-3 text-cyan-400" />
+                                <span>Графік</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Show more button */}
+                {filteredEvents.length > eventsDisplayLimit && (
+                  <div className="text-center pt-2">
+                    <button
+                      onClick={() => setEventsDisplayLimit((prev) => prev + 12)}
+                      className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 cursor-pointer transition-colors"
+                    >
+                      Показати більше подій ({filteredEvents.length - eventsDisplayLimit} ще)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Filter and Search Controls */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-2xl border border-slate-800">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:w-64">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
-              placeholder="Пошук монети у списку стеження..."
+              placeholder="Пошук монети в нагляді..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
             />
           </div>
 
-          <div className="flex items-center p-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
-            <button
-              onClick={() => setExchangeFilter('all')}
-              className={`px-2.5 py-1 rounded font-semibold transition-colors cursor-pointer ${
-                exchangeFilter === 'all' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Всі
-            </button>
-            <button
-              onClick={() => setExchangeFilter('binance')}
-              className={`px-2.5 py-1 rounded font-semibold transition-colors cursor-pointer ${
-                exchangeFilter === 'binance' ? 'bg-amber-500/20 text-amber-300' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Binance
-            </button>
-            <button
-              onClick={() => setExchangeFilter('bybit')}
-              className={`px-2.5 py-1 rounded font-semibold transition-colors cursor-pointer ${
-                exchangeFilter === 'bybit' ? 'bg-orange-500/20 text-orange-300' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Bybit
-            </button>
-          </div>
+          <select
+            value={exchangeFilter}
+            onChange={(e) => setExchangeFilter(e.target.value as any)}
+            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+          >
+            <option value="all">Всі біржі</option>
+            <option value="binance">Binance</option>
+            <option value="bybit">Bybit</option>
+          </select>
         </div>
 
-        <div className="text-xs text-slate-400 font-mono">
-          Знайдено: <strong className="text-white">{filteredCoins.length}</strong> з {coins.length} монет
+        <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
+          <span>Стеження: <strong className="text-white">{activeCount}</strong> активних</span>
+          <span>•</span>
+          <span>Всього: <strong className="text-white">{coins.length}</strong></span>
         </div>
       </div>
 
-      {/* Surveillance Coins Cards Grid */}
+      {/* Monitored Coins Cards Grid (#91, #119) */}
       {filteredCoins.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-800 p-12 text-center space-y-4 bg-slate-900/30">
           <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mx-auto text-cyan-400">
@@ -510,36 +791,27 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
           <div className="space-y-1">
             <h3 className="text-base font-bold text-white">Список системного нагляду порожній</h3>
             <p className="text-xs text-slate-400 max-w-md mx-auto">
-              Оберіть монети зі сторінки Скрінер або додайте їх через меню вибору нижче. Сервер веде постійне 24/7 технічне спостереження за рівнями та структурою.
+              Оберіть монети нижче та натисніть «Стежити». Сервер веде безперервний 24/7 моніторинг ринку через WebSockets навіть при вимкненому комп'ютері.
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
-            {onNavigateToScreener && (
-              <button
-                onClick={onNavigateToScreener}
-                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-md shadow-cyan-950/40 cursor-pointer flex items-center gap-1.5"
-              >
-                <span>Відкрити Скрінер монет</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </button>
-            )}
             <button
               onClick={() => handleOpenAddModal('BTCUSDT')}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-md cursor-pointer"
             >
-              + Стежити за BTCUSDT
-            </button>
-            <button
-              onClick={() => handleOpenAddModal('ETHUSDT')}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
-            >
-              + Стежити за ETHUSDT
+              + Стежити за BTCUSDT (Binance Futures)
             </button>
             <button
               onClick={() => handleOpenAddModal('SOLUSDT')}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
             >
-              + Стежити за SOLUSDT
+              + Стежити за SOLUSDT (Bybit Linear)
+            </button>
+            <button
+              onClick={() => handleOpenAddModal('ETHUSDT')}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
+            >
+              + Стежити за ETHUSDT
             </button>
           </div>
         </div>
@@ -548,24 +820,18 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
           {filteredCoins.map((coin) => {
             const state = coin.state;
             const isChecking = Boolean(isCheckingMap[coin.id]);
-            const isBullish = state?.structureTrend === 'bullish';
-            const isBearish = state?.structureTrend === 'bearish';
-
-            const activeModes = Array.isArray(coin.config.triggerModes) && coin.config.triggerModes.length > 0
-              ? coin.config.triggerModes
-              : (coin.config.triggerMode ? [coin.config.triggerMode] : ['bar_close']);
 
             return (
               <div
                 key={coin.id}
                 className={`rounded-2xl border transition-all overflow-hidden flex flex-col ${
                   coin.isActive
-                    ? 'bg-slate-900/90 border-slate-800 hover:border-slate-700 shadow-lg'
+                    ? 'bg-slate-900/90 border-slate-800 hover:border-slate-700 shadow-xl'
                     : 'bg-slate-950/60 border-slate-800/60 opacity-70'
                 }`}
               >
-                {/* Card Top Header */}
-                <div className="p-4 border-b border-slate-800/80 bg-slate-950/50 flex items-center justify-between gap-3">
+                {/* Card Header */}
+                <div className="p-4 border-b border-slate-800/80 bg-slate-950/60 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500/20 to-indigo-500/20 border border-cyan-500/30 flex items-center justify-center font-black font-mono text-cyan-300 text-sm">
                       {coin.baseAsset.slice(0, 3)}
@@ -584,18 +850,14 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                         >
                           {coin.exchange} {coin.marketType}
                         </span>
-                        <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 font-mono">
-                          {coin.config.timeframe}
-                        </span>
                         {coin.isActive ? (
-                          <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5 font-mono shadow-xs">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-mono">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                            24/7 Нагляд активний
+                            24/7 LIVE
                           </span>
                         ) : (
-                          <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 font-mono">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                            Нагляд призупинено
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono">
+                            ПАУЗА
                           </span>
                         )}
                       </div>
@@ -612,253 +874,300 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                           {(state?.change24h || 0) >= 0 ? '+' : ''}
                           {state?.change24h || 0}%
                         </span>
+                        {state?.spreadPct !== undefined && (
+                          <span className="text-slate-500">
+                            (Спред: {state.spreadPct.toFixed(3)}%)
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Top Right Controls */}
+                  {/* Actions */}
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => handleCheckCoin(coin.id, coin.symbol)}
                       disabled={isChecking}
-                      title="Перевірити стан та оновити рівні з біржі"
-                      className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
+                      title="Оновити зараз"
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin text-cyan-400' : ''}`} />
                     </button>
                     <button
                       onClick={() => handleOpenEditModal(coin)}
-                      title="Налаштувати параметри спостереження"
-                      className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
+                      title="Налаштування монети"
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
                     >
                       <Settings2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => handleToggleActive(coin.id, coin.symbol, coin.isActive)}
-                      title={
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 border ${
                         coin.isActive
-                          ? 'Системний нагляд активний 24/7. Натисніть, щоб призупинити нагляд'
-                          : 'Нагляд призупинено. Натисніть, щоб включити 24/7 системний нагляд'
-                      }
-                      className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold shadow-sm ${
-                        coin.isActive
-                          ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
-                          : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                          ? 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
+                          : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
                       }`}
                     >
-                      {coin.isActive ? (
-                        <>
-                          <Pause className="w-3.5 h-3.5 fill-current" />
-                          <span>Призупинити нагляд</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Включити нагляд</span>
-                        </>
-                      )}
+                      {coin.isActive ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                      <span>{coin.isActive ? 'Пауза' : 'Стежити'}</span>
                     </button>
                     <button
                       onClick={() => removeCoinFromSurveillance(coin.id)}
-                      title="Видалити зі стеження"
-                      className="p-2 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                      title="Видалити"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
-                {/* Main Technical State Card Body */}
-                <div className="p-4 space-y-4 flex-1">
-                  {/* Scheme of 6 Alerts: Visual Range Level Indicator */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] font-mono">
-                      <div className="flex items-center gap-1 text-emerald-400 font-semibold">
-                        <Shield className="w-3.5 h-3.5" />
-                        <span>Підтримка 4H: ${formatPrice(state?.support4h)}</span>
+                {/* Card Content: Structure, Levels, Densities, Setups */}
+                <div className="p-4 space-y-3.5 flex-1 text-xs">
+                  {/* Active Setup Banner if any (#67, #76, #83) */}
+                  {state?.activeSetupType ? (
+                    <div className="p-3 rounded-xl bg-gradient-to-r from-emerald-950/40 via-cyan-950/30 to-slate-950 border border-emerald-500/40 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                          <span className="font-bold text-white uppercase tracking-wide">
+                            {state.activeSetupType} — {state.activeSetupStage}
+                          </span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono font-bold border border-emerald-500/40 text-[10px]">
+                          Конфлюенс: {state.activeSetupConfluence || 80}/100
+                        </span>
                       </div>
-                      <div className="text-slate-400">
-                        Позиція: <strong className="text-white font-bold">{state?.rangePositionPct ?? 50}%</strong>
-                      </div>
-                      <div className="flex items-center gap-1 text-rose-400 font-semibold">
-                        <Target className="w-3.5 h-3.5" />
-                        <span>Опір 4H: ${formatPrice(state?.resistance4h)}</span>
+                      <div className="text-[11px] text-slate-300 font-mono flex items-center justify-between">
+                        <span>Підтримка: ${formatPrice(state.support4h)}</span>
+                        <span>Опір: ${formatPrice(state.resistance4h)}</span>
                       </div>
                     </div>
+                  ) : null}
 
-                    {/* Progress Bar of Range */}
-                    <div className="relative h-2.5 rounded-full bg-slate-950 border border-slate-800 overflow-hidden">
+                  {/* S/R Range bar */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span className="text-emerald-400 font-semibold">
+                        Підтримка: ${formatPrice(state?.support4h)}
+                      </span>
+                      <span className="text-slate-400">
+                        {state?.rangePositionPct ?? 50}% в діапазоні
+                      </span>
+                      <span className="text-rose-400 font-semibold">
+                        Опір: ${formatPrice(state?.resistance4h)}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-950 border border-slate-800 overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-rose-500 transition-all duration-500"
-                        style={{ width: `${Math.max(3, Math.min(100, state?.rangePositionPct ?? 50))}%` }}
+                        className="h-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-rose-500 transition-all duration-300"
+                        style={{ width: `${Math.max(2, Math.min(100, state?.rangePositionPct ?? 50))}%` }}
                       />
                     </div>
                   </div>
 
-                  {/* 4 Multi-Timeframe Pillars: Structure -> Levels -> Momentum -> Risk */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                    {/* 1. Structure */}
-                    <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
-                      <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
+                  {/* 4 Pillars Grid: Density | Third Touch | Trade Flow | Open Interest */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
+                    {/* Order Book Density (#39, #45, #85) */}
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+                      <div className="text-[9px] text-slate-500 uppercase flex items-center gap-1">
+                        <Layers className="w-3 h-3 text-cyan-400" />
+                        <span>Плотності</span>
+                      </div>
+                      <div className="font-bold text-white truncate">
+                        {state?.topDensityUsd ? `${state.topDensitySide} ${formatNotionalUsd(state.topDensityUsd)}` : 'Пошук...'}
+                      </div>
+                      <div className="text-[10px] text-cyan-300 truncate">
+                        {state?.densitiesCount ? `${state.densitiesCount} значних щільностей` : 'Normal depth'}
+                      </div>
+                    </div>
+
+                    {/* Third Touch (#21, #22, #84) */}
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+                      <div className="text-[9px] text-slate-500 uppercase flex items-center gap-1">
+                        <Target className="w-3 h-3 text-amber-400" />
+                        <span>Третій дотик</span>
+                      </div>
+                      <div className={`font-bold truncate ${state?.thirdTouchState === 'ACTIVE' ? 'text-amber-400' : 'text-slate-200'}`}>
+                        {state?.thirdTouchState || 'Очікування'}
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate">
+                        {state?.thirdTouchDistancePct !== undefined ? `Дистанція: ${state.thirdTouchDistancePct}%` : 'Відсутній'}
+                      </div>
+                    </div>
+
+                    {/* Trade Flow (#50) */}
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+                      <div className="text-[9px] text-slate-500 uppercase flex items-center gap-1">
+                        <Zap className="w-3 h-3 text-emerald-400" />
+                        <span>Торговельний потік (1m)</span>
+                      </div>
+                      <div className="font-bold text-slate-200 truncate">
+                        {state?.tradeFlowImbalance ? `${state.tradeFlowImbalance}x Дисбаланс` : 'Баланс'}
+                      </div>
+                      <div className="text-[10px] text-emerald-400 truncate">
+                        Buy: {formatNotionalUsd(state?.tradeFlowBuyUsd)}
+                      </div>
+                    </div>
+
+                    {/* Open Interest (#53, #54, #86) */}
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+                      <div className="text-[9px] text-slate-500 uppercase flex items-center gap-1">
                         <Activity className="w-3 h-3 text-indigo-400" />
-                        <span>Структура</span>
+                        <span>Відкритий інтерес</span>
                       </div>
-                      <div className="font-bold text-white flex items-center gap-1">
-                        {isBullish ? (
-                          <span className="text-emerald-400 flex items-center gap-0.5">
-                            <TrendingUp className="w-3.5 h-3.5" />
-                            <span>BULLISH</span>
-                          </span>
-                        ) : isBearish ? (
-                          <span className="text-rose-400 flex items-center gap-0.5">
-                            <TrendingDown className="w-3.5 h-3.5" />
-                            <span>BEARISH</span>
-                          </span>
-                        ) : (
-                          <span className="text-amber-400">RANGING</span>
-                        )}
+                      <div className={`font-bold truncate ${state?.oiAnomaly ? 'text-rose-400 animate-pulse' : 'text-slate-200'}`}>
+                        {state?.oiRegime ? state.oiRegime.replace(/_/g, ' ') : 'Neutral'}
                       </div>
-                      <div className="text-[10px] text-slate-400 truncate">
-                        {state?.structureTrend || '4H Trend'}
+                      <div className="text-[10px] text-indigo-300 truncate">
+                        15m: {state?.oiChange15mPct !== undefined ? `${state.oiChange15mPct >= 0 ? '+' : ''}${state.oiChange15mPct}%` : '—'}
                       </div>
-                    </div>
-
-                    {/* 2. Senior Levels */}
-                    <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
-                      <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                        <Target className="w-3 h-3 text-cyan-400" />
-                        <span>Рівні 4H/1D</span>
-                      </div>
-                      <div className="font-mono font-bold text-white text-[11px] truncate">
-                        ${formatPrice(state?.resistance4h)}
-                      </div>
-                      <div className="text-[10px] text-slate-400 truncate">
-                        Supp: ${formatPrice(state?.support4h)}
-                      </div>
-                    </div>
-
-                    {/* 3. Momentum */}
-                    <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
-                      <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                        <Zap className="w-3 h-3 text-amber-400" />
-                        <span>Імпульс</span>
-                      </div>
-                      <div
-                        className={`font-mono font-bold text-[11px] ${
-                          (state?.momentumRecentPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                        }`}
-                      >
-                        {(state?.momentumRecentPct || 0) >= 0 ? '+' : ''}
-                        {state?.momentumRecentPct || 0}%
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        {coin.config.momentumBars}b ({coin.config.momentumTf})
-                      </div>
-                    </div>
-
-                    {/* 4. Fibonacci 0.618 */}
-                    <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
-                      <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                        <Layers className="w-3 h-3 text-violet-400" />
-                        <span>Fibo 0.618</span>
-                      </div>
-                      <div className="font-mono font-bold text-violet-300 text-[11px]">
-                        ${formatPrice(state?.fib618)}
-                      </div>
-                      <div className="text-[10px] text-slate-400">Golden Pocket</div>
                     </div>
                   </div>
 
-                  {/* Target and Invalidation Levels */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono">
-                    <div className="flex items-center gap-1.5 text-cyan-300">
-                      <Target className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Ціль (Next Zone Up):</span>
-                      <strong className="text-white">${formatPrice(state?.nextZoneUp)}</strong>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-rose-300">
-                      <Shield className="w-3.5 h-3.5 text-rose-400" />
-                      <span>Скасування (Next Zone Down):</span>
-                      <strong className="text-white">${formatPrice(state?.nextZoneDown)}</strong>
+                  {/* Multi-Timeframe Structure Badges (#11, #16) */}
+                  <div className="flex flex-wrap items-center justify-between pt-1 border-t border-slate-800/60 text-[10px] font-mono">
+                    <span className="text-slate-500">Структура ринку:</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-1.5 py-0.5 rounded font-bold ${state?.structureTrend === 'bullish' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : state?.structureTrend === 'bearish' ? 'bg-rose-950 text-rose-400 border border-rose-800' : 'bg-slate-800 text-slate-300'}`}>
+                        Тренд: {state?.structureTrend?.toUpperCase() || 'RANGE'}
+                      </span>
+                      {state?.formationName && (
+                        <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800 font-bold">
+                          {state.formationName} ({state.formationScore}/100)
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  {/* Recent Triggered Events / Live Stream */}
-                  {state?.recentEvents && state.recentEvents.length > 0 && (
-                    <div className="space-y-1.5 pt-1">
-                      <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <Bell className="w-3.5 h-3.5 text-amber-400" />
+                  {/* Latest Surveillance Event & History for this coin */}
+                  <div className="pt-2.5 border-t border-slate-800/60 space-y-2">
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span className="text-slate-400 flex items-center gap-1.5 font-bold">
+                        <Activity className="w-3.5 h-3.5 text-amber-400" />
                         <span>Останні події нагляду</span>
-                      </div>
-                      <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
-                        {state.recentEvents.slice(0, 3).map((ev) => (
+                      </span>
+                      {state?.recentEvents && state.recentEvents.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedCoinEventsMap((prev) => ({
+                              ...prev,
+                              [coin.id]: !prev[coin.id],
+                            }))
+                          }
+                          className="text-[10px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer font-semibold"
+                        >
+                          <span>{expandedCoinEventsMap[coin.id] ? 'Згорнути' : `Історія (${state.recentEvents.length})`}</span>
+                          {expandedCoinEventsMap[coin.id] ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-500">Поки без подій</span>
+                      )}
+                    </div>
+
+                    {/* Most recent event */}
+                    {state?.lastEvent || (state?.recentEvents && state.recentEvents[0]) ? (
+                      (() => {
+                        const ev = state.lastEvent || state.recentEvents![0];
+                        const isCritical = ev.severity === 'critical';
+                        const isWarning = ev.severity === 'warning';
+
+                        return (
                           <div
-                            key={ev.id}
-                            className="p-2 rounded-lg bg-slate-950/80 border border-slate-800 flex items-start justify-between gap-2 text-xs"
+                            className={`p-2.5 rounded-xl border text-[11px] font-mono transition-all ${
+                              isCritical
+                                ? 'bg-rose-950/30 text-rose-300 border-rose-500/35'
+                                : isWarning
+                                ? 'bg-amber-950/25 text-amber-300 border-amber-500/30'
+                                : 'bg-slate-950 text-slate-300 border-slate-800'
+                            }`}
                           >
-                            <div className="space-y-0.5">
-                              <div className="font-bold text-white text-[11px]">{ev.title}</div>
-                              <div className="text-[10px] text-slate-400">{ev.description}</div>
+                            <div className="flex items-center justify-between gap-1 pb-1 border-b border-white/5 text-[10px]">
+                              <span className="font-bold flex items-center gap-1.5 truncate">
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full ${
+                                    isCritical
+                                      ? 'bg-rose-400 animate-ping'
+                                      : isWarning
+                                      ? 'bg-amber-400'
+                                      : 'bg-cyan-400'
+                                  }`}
+                                />
+                                <span className="truncate">{ev.title}</span>
+                              </span>
+                              <span className="text-slate-400 whitespace-nowrap ml-1">
+                                {formatTimeAgo(ev.timestamp)}
+                              </span>
                             </div>
-                            <span className="text-[10px] font-mono text-slate-500 shrink-0">
-                              {new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {ev.description && (
+                              <p className="text-[10px] text-slate-400 pt-1 leading-snug line-clamp-2">
+                                {ev.description}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800/60 text-[10px] text-slate-500 font-mono text-center">
+                        24/7 Нагляд активний: очікування тесту рівнів, пробою або щільності
+                      </div>
+                    )}
+
+                    {/* Expanded list of coin's recent events */}
+                    {expandedCoinEventsMap[coin.id] && state?.recentEvents && state.recentEvents.length > 0 && (
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pt-1 font-mono text-[10px]">
+                        {state.recentEvents.slice(0, 6).map((e, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 rounded-lg bg-slate-950 border border-slate-800/80 flex items-center justify-between gap-2"
+                          >
+                            <div className="truncate flex-1">
+                              <span
+                                className={`font-semibold ${
+                                  e.severity === 'critical'
+                                    ? 'text-rose-400'
+                                    : e.severity === 'warning'
+                                    ? 'text-amber-400'
+                                    : 'text-slate-300'
+                                }`}
+                              >
+                                {e.title}
+                              </span>
+                            </div>
+                            <span className="text-slate-500 whitespace-nowrap text-[9px]">
+                              {formatTimeAgo(e.timestamp)}
                             </span>
                           </div>
                         ))}
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
-                {/* Card Footer Actions */}
-                <div className="p-3 border-t border-slate-800/80 bg-slate-950/80 flex items-center justify-between text-xs">
-                  {/* Multi-Trigger Mode Badges */}
-                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shrink-0" />
-                    <span className="text-slate-500">Режими:</span>
-                    {activeModes.map((m) => {
-                      const label =
-                        m === 'bar_close'
-                          ? '4H'
-                          : m === 'bar_close_1h'
-                          ? '1H'
-                          : m === 'bar_close_15m'
-                          ? '15m'
-                          : 'Realtime';
-                      return (
-                        <span
-                          key={m}
-                          className="px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold"
-                        >
-                          {label}
-                        </span>
-                      );
-                    })}
+                {/* Card Footer: Detail Modal Button + Chart Link */}
+                <div className="p-3 border-t border-slate-800/80 bg-slate-950/90 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500">
+                    <Clock className="w-3 h-3" />
+                    <span>Оновлено: {state?.lastCalculated ? new Date(state.lastCalculated).toLocaleTimeString() : 'тільки що'}</span>
                   </div>
 
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleOpenDetails(coin)}
+                      className="px-3 py-1 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 font-semibold border border-cyan-500/30 transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Layers className="w-3 h-3" />
+                      <span>Стакан & Бектест</span>
+                    </button>
                     {onSelectCoinForChart && (
                       <button
                         onClick={() => onSelectCoinForChart(coin.symbol, coin.exchange, coin.marketType)}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                        className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold transition-colors cursor-pointer flex items-center gap-1"
                       >
-                        <BarChart3 className="w-3 h-3" />
+                        <BarChart3 className="w-3 h-3 text-cyan-400" />
                         <span>Графік</span>
                       </button>
                     )}
-                    <a
-                      href={
-                        coin.exchange === 'binance'
-                          ? `https://www.binance.com/uk-UA/trade/${coin.baseAsset}_${coin.quoteAsset}`
-                          : `https://www.bybit.com/trade/usdt/${coin.symbol}`
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold transition-colors flex items-center gap-1 cursor-pointer"
-                    >
-                      <span>Біржа</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
                   </div>
                 </div>
               </div>
@@ -867,18 +1176,213 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
         </div>
       )}
 
-      {/* MODAL: Add New Coin to Surveillance */}
+      {/* MODAL: Granular Worker Details & Causal Replay / Backtest (#103 - #105) */}
+      {detailedCoin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in">
+          <div className="relative w-full max-w-4xl rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-bold">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-white font-mono flex items-center gap-2">
+                    <span>#{detailedCoin.symbol}</span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-amber-300 uppercase font-mono">
+                      {detailedCoin.exchange} {detailedCoin.marketType}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      24/7 LIVE STREAM
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Біржовий стакан, Торговельний потік, активні сетапи та каузальний бектест
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDetailedCoin(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-5 overflow-y-auto flex-1 font-mono text-xs">
+              {loadingWorkerData ? (
+                <div className="py-12 text-center text-slate-400 space-y-2">
+                  <RefreshCw className="w-8 h-8 animate-spin text-cyan-400 mx-auto" />
+                  <p>Отримання живого стану з воркера...</p>
+                </div>
+              ) : workerData ? (
+                <div className="space-y-5">
+                  {/* Live Order Book Ladder (Bids & Asks) */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs font-bold text-white">
+                      <span className="flex items-center gap-1.5">
+                        <Layers className="w-4 h-4 text-cyan-400" />
+                        <span>Біржовий стакан</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-normal">
+                        Спред: ${formatPrice(workerData.orderBookState?.spread)} ({workerData.orderBookState?.spreadPct}%)
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800">
+                      {/* Bids */}
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-emerald-400 font-bold uppercase pb-1 border-b border-slate-800 flex justify-between">
+                          <span>BID PRICE</span>
+                          <span>QTY (USD)</span>
+                        </div>
+                        {workerData.orderBookState?.bids?.slice(0, 7).map((b: any, idx: number) => (
+                          <div key={idx} className="flex justify-between text-[11px] py-0.5">
+                            <span className="text-emerald-400 font-bold">${formatPrice(b.price)}</span>
+                            <span className="text-slate-300">{formatNotionalUsd(b.notionalUsd)}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Asks */}
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-rose-400 font-bold uppercase pb-1 border-b border-slate-800 flex justify-between">
+                          <span>ASK PRICE</span>
+                          <span>QTY (USD)</span>
+                        </div>
+                        {workerData.orderBookState?.asks?.slice(0, 7).map((a: any, idx: number) => (
+                          <div key={idx} className="flex justify-between text-[11px] py-0.5">
+                            <span className="text-rose-400 font-bold">${formatPrice(a.price)}</span>
+                            <span className="text-slate-300">{formatNotionalUsd(a.notionalUsd)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Significant Densities Detected */}
+                  <div className="space-y-2">
+                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Target className="w-4 h-4 text-amber-400" />
+                      <span>Виявлені великі плотності</span>
+                    </div>
+
+                    {workerData.densities?.length === 0 ? (
+                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-500 text-center">
+                        Немає щільностей вище адаптивного порогу в поточному стакані
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {workerData.densities?.slice(0, 4).map((d: any) => (
+                          <div key={d.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`font-bold ${d.side === 'BID' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {d.side} ${formatPrice(d.price)}
+                                </span>
+                                <span className="text-[9px] px-1 rounded bg-slate-800 text-cyan-300">
+                                  {d.classification}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                Дистанція: {d.distancePct}% • Тривалість: {d.ageSeconds}с
+                              </div>
+                            </div>
+                            <div className="font-extrabold text-white text-xs">
+                              {formatNotionalUsd(d.notionalUsd)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Causal Backtest & Replay Runner (#103, #104, #105) */}
+                  <div className="p-4 rounded-xl bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border border-indigo-500/30 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-white text-xs flex items-center gap-1.5">
+                          <History className="w-4 h-4 text-indigo-400" />
+                          <span>Каузальний бектест сетапів (Replay Mode без заглядання вперед)</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          Перевірка якості: Повторне тестування рівня підтримки алгоритму на історичних свічках 15m
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => handleRunCausalBacktest(detailedCoin)}
+                        disabled={loadingBacktest}
+                        className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <PlayCircle className={`w-4 h-4 ${loadingBacktest ? 'animate-spin' : ''}`} />
+                        <span>{loadingBacktest ? 'Аналіз...' : 'Запустити бектест'}</span>
+                      </button>
+                    </div>
+
+                    {backtestResult && (
+                      <div className="pt-2 border-t border-slate-800 space-y-2">
+                        <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                          <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
+                            <span className="text-[10px] text-slate-500 block">Всього сетапів</span>
+                            <span className="font-bold text-white">{backtestResult.totalSetups}</span>
+                          </div>
+                          <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
+                            <span className="text-[10px] text-slate-500 block">Вінрейт</span>
+                            <span className="font-bold text-emerald-400">{backtestResult.winRate}%</span>
+                          </div>
+                          <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
+                            <span className="text-[10px] text-slate-500 block">Медіана MFE</span>
+                            <span className="font-bold text-cyan-300">+{backtestResult.medianMfePct}%</span>
+                          </div>
+                          <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
+                            <span className="text-[10px] text-slate-500 block">Медіана MAE</span>
+                            <span className="font-bold text-rose-400">-{backtestResult.medianMaePct}%</span>
+                          </div>
+                        </div>
+
+                        {/* Recent Backtest setups */}
+                        <div className="max-h-36 overflow-y-auto space-y-1">
+                          {backtestResult.results?.slice(-5).map((r: any, idx: number) => (
+                            <div key={idx} className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px]">
+                              <div>
+                                <span className={r.success ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                                  {r.success ? '✓ Успішний рух' : '✗ Просадка'}
+                                </span>
+                                <span className="text-slate-400 ml-2">Тригер: ${formatPrice(r.triggerPrice)}</span>
+                              </div>
+                              <div className="space-y-0.5 text-right">
+                                <span className="text-cyan-300">MFE: +{r.mfePct}%</span>
+                                <span className="text-slate-500 ml-2">1h: {r.future1hPct}%</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Add / Edit Coin Configuration Modal (#93 - #97) */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
           <div className="relative w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-            <div className="p-5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
+            <div className="p-4 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
-                  <Radar className="w-4 h-4" />
+                  <Sliders className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white">Додати монету на системний нагляд</h3>
-                  <p className="text-[11px] text-slate-400">Автоматичний розрахунок 4H/1D рівнів та сповіщення в Telegram</p>
+                  <h3 className="text-sm font-bold text-white">
+                    {editingCoin ? `Налаштування #${editingCoin.symbol}` : 'Додати монету на 24/7 системний нагляд'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">Параметри Стакана, важливих рівнів, щільностей та Сповіщень</p>
                 </div>
               </div>
               <button
@@ -889,126 +1393,54 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
               </button>
             </div>
 
-            <div className="p-5 space-y-4 overflow-y-auto flex-1">
-              {/* Screener Coins Direct Selection (No search input required) */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Виберіть монету зі сторінки Скрінер:</span>
-                  </label>
-                  {onNavigateToScreener && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsAddModalOpen(false);
-                        onNavigateToScreener();
-                      }}
-                      className="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1 underline cursor-pointer"
-                    >
-                      <span>Відкрити Скрінер →</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Coins Grid from Screener */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-52 overflow-y-auto p-1 rounded-xl bg-slate-950 border border-slate-800">
-                  {screenerCoinsList.map((c) => {
-                    const isSelected = selectedSymbolInput === c.symbol;
-                    return (
-                      <button
-                        key={`${c.exchange}-${c.symbol}-${c.marketType}`}
-                        type="button"
-                        onClick={() => {
-                          setSelectedSymbolInput(c.symbol);
-                          setSelectedExchange(c.exchange);
-                          setSelectedMarketType(c.marketType);
-                        }}
-                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                          isSelected
-                            ? 'bg-cyan-500/20 border-cyan-400 shadow-md shadow-cyan-950/40 ring-1 ring-cyan-400'
-                            : 'bg-slate-900/90 border-slate-800 hover:border-slate-700 hover:bg-slate-800/80 text-slate-300'
-                        }`}
+            <div className="p-5 space-y-4 overflow-y-auto flex-1 font-mono text-xs">
+              {!editingCoin && (
+                <>
+                  {/* Exchange and Market selectors */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-slate-400">Біржа</label>
+                      <select
+                        value={selectedExchange}
+                        onChange={(e) => setSelectedExchange(e.target.value as ExchangeId)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
                       >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="font-mono font-extrabold text-white text-xs">{c.symbol}</span>
-                          {isSelected ? (
-                            <span className="w-3.5 h-3.5 rounded-full bg-cyan-500 text-slate-950 flex items-center justify-center text-[10px] font-bold">
-                              ✓
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="flex items-center justify-between gap-1 mt-1 text-[10px] font-mono">
-                          <span className="text-slate-400">
-                            ${c.currentPrice >= 1 ? c.currentPrice.toLocaleString() : c.currentPrice}
-                          </span>
-                          <span className={c.priceChange24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                            {c.priceChange24h >= 0 ? '+' : ''}{c.priceChange24h.toFixed(1)}%
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 mt-1 text-[9px] text-slate-500 uppercase font-mono">
-                          <span>{c.exchange}</span>
-                          <span>•</span>
-                          <span>{c.marketType}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                        <option value="binance">Binance</option>
+                        <option value="bybit">Bybit</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-slate-400">Ринок</label>
+                      <select
+                        value={selectedMarketType}
+                        onChange={(e) => setSelectedMarketType(e.target.value as MarketType)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
+                      >
+                        <option value="futures">Futures / Linear</option>
+                        <option value="spot">Spot</option>
+                      </select>
+                    </div>
+                  </div>
 
-              {/* Selected Coin Details Banner */}
-              <div className="p-3 rounded-xl bg-cyan-950/30 border border-cyan-800/40 flex items-center justify-between">
-                <div>
-                  <div className="text-[10px] text-cyan-400 uppercase font-bold tracking-wider">Обрана монета</div>
-                  <div className="text-sm font-extrabold font-mono text-white mt-0.5">{selectedSymbolInput}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-amber-300 font-mono uppercase font-bold border border-slate-700">
-                    {selectedExchange}
-                  </span>
-                  <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono uppercase border border-slate-700">
-                    {selectedMarketType}
-                  </span>
-                </div>
-              </div>
+                  {/* Coin Input / Select */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-400">Символ (Тікер)</label>
+                    <input
+                      type="text"
+                      value={selectedSymbolInput}
+                      onChange={(e) => setSelectedSymbolInput(e.target.value.toUpperCase().trim())}
+                      placeholder="BTCUSDT, ETHUSDT, SOLUSDT..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white font-bold placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                </>
+              )}
 
-              {/* Exchange and Market Type Selectors */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[11px] text-slate-400">Біржа</label>
-                  <select
-                    value={selectedExchange}
-                    onChange={(e) => setSelectedExchange(e.target.value as ExchangeId)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="binance">Binance</option>
-                    <option value="bybit">Bybit</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] text-slate-400">Ринок</label>
-                  <select
-                    value={selectedMarketType}
-                    onChange={(e) => setSelectedMarketType(e.target.value as MarketType)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="futures">Ф'ючерси (Futures)</option>
-                    <option value="spot">Спот (Spot)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Trigger Confirmation Modes (Multi-select) */}
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Режими підтвердження пробою (можна кілька)</span>
-                  </label>
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono font-bold">
-                    МУЛЬТИ-ВИБІР ({formConfig.triggerModes?.length || 1})
-                  </span>
+              {/* Breakout Confirmation Modes (Multi-select) (#94) */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Режими підтвердження пробою</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {TRIGGER_MODE_OPTIONS.map((m) => {
@@ -1018,411 +1450,144 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                         key={m.id}
                         type="button"
                         onClick={() => toggleTriggerMode(m.id)}
-                        className={`p-2.5 rounded-xl text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
+                        className={`p-2 rounded-xl text-left transition-all border cursor-pointer flex items-center gap-2 ${
                           isSelected
-                            ? 'bg-cyan-500/20 border-cyan-400 text-white font-semibold shadow-sm shadow-cyan-950/30'
-                            : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                            ? 'bg-cyan-500/20 border-cyan-400 text-white font-semibold'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                         }`}
                       >
-                        <div>
-                          <div className="font-bold flex items-center gap-1.5">
-                            <span
-                              className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] border transition-colors ${
-                                isSelected
-                                  ? 'bg-cyan-500 border-cyan-400 text-slate-950 font-black'
-                                  : 'border-slate-700 bg-slate-950 text-transparent'
-                              }`}
-                            >
-                              ✓
-                            </span>
-                            <span>{m.label}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-1 pl-5.5">{m.desc}</div>
-                        </div>
+                        <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[9px] border ${isSelected ? 'bg-cyan-500 border-cyan-400 text-slate-950 font-bold' : 'border-slate-700 bg-slate-950'}`}>
+                          {isSelected ? '✓' : ''}
+                        </span>
+                        <span>{m.label}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Momentum Alert Settings */}
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Алерт різкого руху (Moving Up/Down %)</span>
-                  </label>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.momentumEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumEnabled: e.target.checked }))}
-                    className="w-4 h-4 rounded text-cyan-600 bg-slate-900 border-slate-700 cursor-pointer"
-                  />
+              {/* Density Engine Settings (#95) */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Виявлення великих плотностів</span>
                 </div>
 
-                {formConfig.momentumEnabled && (
-                  <div className="grid grid-cols-3 gap-2 text-xs pt-1">
-                    <div>
-                      <label className="text-[10px] text-slate-400">Поріг руху (%)</label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0.5"
-                        max="20"
-                        value={formConfig.momentumPct}
-                        onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumPct: Number(e.target.value) }))}
-                        className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white font-mono text-xs mt-1"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-400">Кількість свічок</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        value={formConfig.momentumBars}
-                        onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumBars: Number(e.target.value) }))}
-                        className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white font-mono text-xs mt-1"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-400">Таймфрейм</label>
-                      <select
-                        value={formConfig.momentumTf}
-                        onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumTf: e.target.value as any }))}
-                        className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white text-xs mt-1"
-                      >
-                        <option value="15m">15m</option>
-                        <option value="1h">1h</option>
-                        <option value="4h">4h</option>
-                      </select>
-                    </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['AUTO', 'MANUAL', 'HYBRID'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setFormConfig((prev) => ({ ...prev, densityMode: mode }))}
+                      className={`py-1.5 px-2 rounded-lg text-center font-bold transition-all border cursor-pointer ${
+                        formConfig.densityMode === mode
+                          ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+
+                {formConfig.densityMode !== 'AUTO' && (
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400">Ручний поріг плотності ($ USDT)</label>
+                    <input
+                      type="number"
+                      step="100000"
+                      min="50000"
+                      value={formConfig.manualDensityThresholdUsd}
+                      onChange={(e) => setFormConfig((prev) => ({ ...prev, manualDensityThresholdUsd: Number(e.target.value) }))}
+                      className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white font-mono text-xs"
+                    />
                   </div>
                 )}
               </div>
 
-              {/* Toggles for Indicators & Levels */}
-              <div className="space-y-2 text-xs">
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Старші рівні 4H/1D (Crossing Up / Down)</span>
+              {/* Setup Detection Toggles (#96, #97) */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Підтвердження</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <label className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-slate-900">
+                    <input
+                      type="checkbox"
+                      checked={formConfig.levelsEnabled}
+                      onChange={(e) => setFormConfig((p) => ({ ...p, levelsEnabled: e.target.checked }))}
+                      className="rounded text-cyan-500"
+                    />
+                    <span>Підтримка / Повторне тестування рівня опору</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-slate-900">
+                    <input
+                      type="checkbox"
+                      checked={formConfig.structureEnabled}
+                      onChange={(e) => setFormConfig((p) => ({ ...p, structureEnabled: e.target.checked }))}
+                      className="rounded text-cyan-500"
+                    />
+                    <span>Зміна структури (BOS / CHoCH)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-slate-900">
+                    <input
+                      type="checkbox"
+                      checked={formConfig.channelEnabled}
+                      onChange={(e) => setFormConfig((p) => ({ ...p, channelEnabled: e.target.checked }))}
+                      className="rounded text-cyan-500"
+                    />
+                    <span>Канал / Повторне тестування рівня пробою</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-slate-900">
+                    <input
+                      type="checkbox"
+                      checked={formConfig.thirdTouchAlerts}
+                      onChange={(e) => setFormConfig((p) => ({ ...p, thirdTouchAlerts: e.target.checked }))}
+                      className="rounded text-cyan-500"
+                    />
+                    <span>Третій дотик</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Telegram Notification Toggles */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Send className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Telegram Сповіщення</span>
+                  </div>
                   <input
                     type="checkbox"
-                    checked={formConfig.levelsEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, levelsEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
+                    checked={formConfig.telegramEnabled}
+                    onChange={(e) => setFormConfig((p) => ({ ...p, telegramEnabled: e.target.checked }))}
+                    className="w-4 h-4 rounded text-sky-500"
                   />
                 </div>
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Зміна структури ринку (BOS / CHoCH)</span>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.structureEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, structureEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
-                  />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Вихід із консолідаційного каналу (Channel Break)</span>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.channelEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, channelEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
-                  />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Зона Fibonacci 0.618 Golden Pocket</span>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.fibonacciEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, fibonacciEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
-                  />
+                <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
+                  <span>Cooldown: {formConfig.cooldownMinutes || 15} хв між алерти</span>
+                  <span>Confluence поріг: {formConfig.confluenceThreshold || 75}/100</span>
                 </div>
               </div>
             </div>
 
+            {/* Modal Actions */}
             <div className="p-4 border-t border-slate-800 bg-slate-950 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsAddModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 transition-colors"
               >
                 Скасувати
               </button>
               <button
                 type="button"
-                onClick={handleSaveAddCoin}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-cyan-950/40 cursor-pointer flex items-center gap-1.5"
+                onClick={handleSaveCoin}
+                className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg transition-all"
               >
-                <Radar className="w-4 h-4" />
-                <span>Запустити системний нагляд</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: Edit Surveillance Config for existing coin */}
-      {editingCoin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
-          <div className="relative w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-            <div className="p-5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Settings2 className="w-4 h-4 text-cyan-400" />
-                  <span>Налаштування нагляду: #{editingCoin.symbol}</span>
-                </h3>
-                <p className="text-[11px] text-slate-400">Зміна параметрів рівнів, імпульсу та підтвердження свічки</p>
-              </div>
-              <button onClick={() => setEditingCoin(null)} className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 overflow-y-auto flex-1">
-              {/* Surveillance Status Bar (Active / Paused toggle) */}
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
-                <div className="space-y-0.5">
-                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Radar className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Статус нагляду:</span>
-                    {editingCoin.isActive ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-mono">
-                        24/7 Активний
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono">
-                        Призупинено
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {editingCoin.isActive
-                      ? 'Сервер безперервно відстежує рівні та імпульс'
-                      : 'Нагляд тимчасово призупинено'}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const nextActive = !editingCoin.isActive;
-                    await toggleCoinActive(editingCoin.id);
-                    setEditingCoin({ ...editingCoin, isActive: nextActive });
-                    if (nextActive) {
-                      showToast(`24/7 системний нагляд за #${editingCoin.symbol} увімкнено!`, 'success');
-                    } else {
-                      showToast(`Нагляд за #${editingCoin.symbol} призупинено`, 'info');
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm ${
-                    editingCoin.isActive
-                      ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
-                      : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
-                  }`}
-                >
-                  {editingCoin.isActive ? (
-                    <>
-                      <Pause className="w-3.5 h-3.5 fill-current" />
-                      <span>Призупинити нагляд</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Включити нагляд</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* Trigger Confirmation Modes (Multi-select) */}
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Режими підтвердження пробою (можна кілька)</span>
-                  </label>
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono font-bold">
-                    МУЛЬТИ-ВИБІР ({formConfig.triggerModes?.length || 1})
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {TRIGGER_MODE_OPTIONS.map((m) => {
-                    const isSelected = formConfig.triggerModes?.includes(m.id);
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => toggleTriggerMode(m.id)}
-                        className={`p-2.5 rounded-xl text-left text-xs transition-all border cursor-pointer flex items-start justify-between gap-2 ${
-                          isSelected
-                            ? 'bg-cyan-500/20 border-cyan-400 text-white font-semibold shadow-sm shadow-cyan-950/30'
-                            : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-bold flex items-center gap-1.5">
-                            <span
-                              className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] border transition-colors ${
-                                isSelected
-                                  ? 'bg-cyan-500 border-cyan-400 text-slate-950 font-black'
-                                  : 'border-slate-700 bg-slate-950 text-transparent'
-                              }`}
-                            >
-                              ✓
-                            </span>
-                            <span>{m.label}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-1 pl-5.5">{m.desc}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Momentum Alert Settings */}
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Алерт різкого руху (Moving Up/Down %)</span>
-                  </label>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.momentumEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumEnabled: e.target.checked }))}
-                    className="w-4 h-4 rounded text-cyan-600 bg-slate-900 border-slate-700 cursor-pointer"
-                  />
-                </div>
-
-                {formConfig.momentumEnabled && (
-                  <div className="grid grid-cols-3 gap-2 text-xs pt-1">
-                    <div>
-                      <label className="text-[10px] text-slate-400">Поріг руху (%)</label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0.5"
-                        max="20"
-                        value={formConfig.momentumPct}
-                        onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumPct: Number(e.target.value) }))}
-                        className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white font-mono text-xs mt-1"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-400">Кількість свічок</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        value={formConfig.momentumBars}
-                        onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumBars: Number(e.target.value) }))}
-                        className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white font-mono text-xs mt-1"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-400">Таймфрейм</label>
-                      <select
-                        value={formConfig.momentumTf}
-                        onChange={(e) => setFormConfig((prev) => ({ ...prev, momentumTf: e.target.value as any }))}
-                        className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white text-xs mt-1"
-                      >
-                        <option value="15m">15m</option>
-                        <option value="1h">1h</option>
-                        <option value="4h">4h</option>
-                      </select>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Timeframe & Cooldown */}
-              <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="space-y-1">
-                  <label className="text-[11px] text-slate-400 font-medium">Базовий таймфрейм</label>
-                  <select
-                    value={formConfig.timeframe || '4h'}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, timeframe: e.target.value as Timeframe }))}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="15m">15m</option>
-                    <option value="1h">1h</option>
-                    <option value="4h">4h (Рекомендовано)</option>
-                    <option value="1d">1d</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] text-slate-400 font-medium">Кулдаун сповіщень (хв)</label>
-                  <select
-                    value={formConfig.cooldownMinutes ?? 15}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, cooldownMinutes: Number(e.target.value) }))}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value={5}>5 хв</option>
-                    <option value={10}>10 хв</option>
-                    <option value={15}>15 хв</option>
-                    <option value={30}>30 хв</option>
-                    <option value={60}>60 хв</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Toggles */}
-              <div className="space-y-2 text-xs">
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Старші рівні 4H/1D (Crossing Up / Down)</span>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.levelsEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, levelsEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
-                  />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Зміна структури ринку (BOS / CHoCH)</span>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.structureEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, structureEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
-                  />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Вихід із консолідаційного каналу (Channel Break)</span>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.channelEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, channelEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
-                  />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-slate-300 font-medium">Зона Fibonacci 0.618 Golden Pocket</span>
-                  <input
-                    type="checkbox"
-                    checked={formConfig.fibonacciEnabled}
-                    onChange={(e) => setFormConfig((prev) => ({ ...prev, fibonacciEnabled: e.target.checked }))}
-                    className="w-4 h-4 text-cyan-600 rounded cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-slate-800 bg-slate-950 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setEditingCoin(null)}
-                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white cursor-pointer"
-              >
-                Скасувати
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveEditConfig}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-cyan-950/40 cursor-pointer"
-              >
-                Зберегти параметри
+                {editingCoin ? 'Зберегти зміни' : 'Стежити 24/7'}
               </button>
             </div>
           </div>
