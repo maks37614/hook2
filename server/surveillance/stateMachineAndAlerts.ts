@@ -48,51 +48,32 @@ export class StateMachineAndAlerts {
     const sym = setup.symbol;
     const ex = setup.exchange.toUpperCase();
     const mkt = setup.marketType === 'futures' ? 'Linear / Futures' : 'Spot';
+    const isLong = setup.direction === 'LONG';
+    const sideLabel = isLong ? 'LONG' : 'SHORT';
+    const levelLabel = isLong ? 'Зона підтримки' : 'Зона опору';
+    const quality = setup.entryQuality;
 
-    return `🟢 <b>SUPPORT RETEST — ${setup.stage === 'CONFIRMED' ? 'CONFIRMED' : 'WATCH'}</b>
-
-<b>${sym}</b>
-${ex} ${mkt}
-
-<b>Ціна:</b> $${formatCryptoPrice(currentPrice)}
-<b>Підтримка:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}
-<b>Сила рівня:</b> ${setup.evidence.levelStrength}/100
-<b>Поточний стан:</b> ${setup.stage}
-
-━━━━━━━━━━━━
-
-<b>СТРУКТУРА</b>
-• <b>HTF:</b> ${setup.evidence.htfStructure}
-• <b>Статус:</b> ${setup.waitingFor}
-
-━━━━━━━━━━━━
-
-<b>СТАКАН ТА ЩІЛЬНОСТІ</b>
-• <b>Стакан:</b> ${setup.evidence.densityPresence}
-
-━━━━━━━━━━━━
-
-<b>OPEN INTEREST</b>
-• <b>Режим:</b> ${setup.evidence.oiContext}
-
-━━━━━━━━━━━━
-
-<b>КОНТЕКСТ РИНКУ</b>
-• <b>BTC Context:</b> ${setup.evidence.btcContext}
-• <b>Формація:</b> ${setup.evidence.formationScore > 0 ? `${setup.evidence.formationScore}/100` : 'Компресія'}
-
-━━━━━━━━━━━━
-
-<b>СЕТАП & КОНФЛЮЕНС</b>
-<b>Тип:</b> ПОВТОРНЕ ТЕСТУВАННЯ ПІДТРИМКИ
-<b>Підтвердження:</b>
-${setup.confirmations.map((c) => `• ✓ ${c}`).join('\n') || '• Очікування'}
-
-<b>Скасування (SL):</b> $${formatCryptoPrice(setup.invalidationPrice)}
-<b>Ціль (TP):</b> $${formatCryptoPrice(setup.targetPrice)}
-<b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>
-
-<b>СТАТУС:</b> <b>${setup.stage}</b>`;
+    return `${isLong ? '🟢' : '🔴'} <b>${sideLabel} ENTRY — CONFIRMED</b>\n\n` +
+      `<b>${sym}</b>\n${ex} ${mkt}\n\n` +
+      `<b>Поточна ціна:</b> $${formatCryptoPrice(currentPrice)}\n` +
+      `<b>${levelLabel}:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}\n` +
+      `<b>Рекомендований вхід:</b> $${formatCryptoPrice(quality?.preferredEntry || currentPrice)}\n` +
+      `<b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>\n` +
+      `<b>R:R:</b> ${quality?.riskReward?.toFixed(2) || '—'}\n\n` +
+      `━━━━━━━━━━━━\n\n` +
+      `<b>ПІДТВЕРДЖЕННЯ</b>\n` +
+      `${setup.confirmations.map(c => `• ✓ ${c}`).join('\n')}\n\n` +
+      `<b>СТРУКТУРА</b>\n` +
+      `• HTF: ${setup.evidence.htfStructure}\n` +
+      `• Рівень: ${setup.evidence.levelStrength}/100\n` +
+      `• RVOL: ${setup.evidence.volumeProfile}\n` +
+      `• Стакан: ${setup.evidence.densityPresence}\n` +
+      `• OI: ${setup.evidence.oiContext}\n` +
+      `• BTC: ${setup.evidence.btcContext}\n` +
+      `• Формація: ${setup.evidence.formationScore > 0 ? `${setup.evidence.formationScore}/100` : '—'}\n\n` +
+      `<b>SL:</b> $${formatCryptoPrice(setup.invalidationPrice)}\n` +
+      `<b>TP:</b> $${formatCryptoPrice(setup.targetPrice)}\n\n` +
+      `<b>СТАТУС:</b> <b>CONFIRMED — ${quality?.independentConfirmations || setup.confirmations.length} незалежних підтверджень</b>`;
   }
 
   // Telegram Third Touch message (#84)

@@ -9,12 +9,26 @@ export interface DensityConfig {
   minDistancePct: number;
 }
 
-export class OrderBookEngine {
-  private bids = new Map<number, number>(); // price -> qty
-  private asks = new Map<number, number>(); // price -> qty
+interface DensityStats {
+  firstSeenAt: number;
+  lastSeenAt: number;
+  samples: number;
+  presentSamples: number;
+  sizeSumUsd: number;
+  maxSizeUsd: number;
+  lastSizeUsd: number;
+  lastSizeChangeAt: number;
+  cancellations: number;
+  replenishments: number;
+  nearestApproachPct: number;
+}
 
-  private activeDensities = new Map<string, DensityItem>(); // id -> item
+export class OrderBookEngine {
+  private bids = new Map<number, number>();
+  private asks = new Map<number, number>();
+  private activeDensities = new Map<string, DensityItem>();
   private densityHistory: DensityItem[] = [];
+  private densityStats = new Map<string, DensityStats>();
 
   public bestBid = 0;
   public bestAsk = 0;
@@ -22,6 +36,8 @@ export class OrderBookEngine {
   public spreadPct = 0;
   public lastUpdateId = 0;
   public lastReceivedAt = 0;
+  public dataValid = false;
+  public sequenceGap = false;
   public status: OrderBookStatus = 'CONNECTING';
 
   constructor(
@@ -29,245 +45,160 @@ export class OrderBookEngine {
     public readonly exchange: ExchangeId,
     public readonly marketType: MarketType,
     private config: DensityConfig = {
-      mode: 'AUTO',
-      manualThresholdUsd: 1000000,
-      minPersistenceSeconds: 15,
-      minDistancePct: 0.1,
+      mode: 'AUTO', manualThresholdUsd: 1000000, minPersistenceSeconds: 15, minDistancePct: 0.1,
     }
   ) {}
 
-  public updateConfig(newConfig: Partial<DensityConfig>) {
-    this.config = { ...this.config, ...newConfig };
-  }
-
-  public setStatus(newStatus: OrderBookStatus) {
-    this.status = newStatus;
-  }
+  public updateConfig(newConfig: Partial<DensityConfig>) { this.config = { ...this.config, ...newConfig }; }
+  public setStatus(newStatus: OrderBookStatus) { this.status = newStatus; }
 
   public applyDepth(delta: RawDepthDelta) {
-    this.lastReceivedAt = Date.now();
-    this.lastUpdateId = delta.sequence || Date.now();
-
-    if (delta.isSnapshot) {
-      this.bids.clear();
-      this.asks.clear();
+    const now = Date.now();
+    this.lastReceivedAt = now;
+    const seq = delta.sequence || now;
+    if (!delta.isSnapshot && this.lastUpdateId > 0 && seq <= this.lastUpdateId) {
+      this.sequenceGap = true;
+      this.dataValid = false;
+      this.status = 'RESYNCING';
+      return;
     }
+    this.sequenceGap = false;
+    this.lastUpdateId = seq;
+    if (delta.isSnapshot) { this.bids.clear(); this.asks.clear(); this.activeDensities.clear(); this.densityStats.clear(); this.dataValid = true; this.status = 'SYNCING'; }
 
-    // Apply Bids
-    for (const [price, qty] of delta.bids) {
-      if (qty <= 0) {
-        this.bids.delete(price);
-      } else {
-        this.bids.set(price, qty);
-      }
-    }
+    for (const [price, qty] of delta.bids) qty <= 0 ? this.bids.delete(price) : this.bids.set(price, qty);
+    for (const [price, qty] of delta.asks) qty <= 0 ? this.asks.delete(price) : this.asks.set(price, qty);
 
-    // Apply Asks
-    for (const [price, qty] of delta.asks) {
-      if (qty <= 0) {
-        this.asks.delete(price);
-      } else {
-        this.asks.set(price, qty);
-      }
-    }
-
-    // Calculate Best Bid & Ask
-    let maxBid = 0;
-    for (const p of this.bids.keys()) {
-      if (p > maxBid) maxBid = p;
-    }
-
-    let minAsk = Infinity;
-    for (const p of this.asks.keys()) {
-      if (p < minAsk) minAsk = p;
-    }
-
-    this.bestBid = maxBid;
-    this.bestAsk = minAsk < Infinity ? minAsk : 0;
-
+    this.bestBid = Math.max(0, ...this.bids.keys());
+    this.bestAsk = this.asks.size ? Math.min(...this.asks.keys()) : 0;
     if (this.bestBid > 0 && this.bestAsk > 0 && this.bestAsk >= this.bestBid) {
       this.spread = this.bestAsk - this.bestBid;
       this.spreadPct = (this.spread / this.bestBid) * 100;
-      this.status = 'LIVE';
+      this.status = this.dataValid ? 'LIVE' : 'SYNCING';
+      this.dataValid = true;
     }
-
-    this.evaluateDensities();
+    if (this.dataValid) this.evaluateDensities();
   }
 
   public getSortedBids(limit = 30): OrderBookLevel[] {
-    const sortedPrices = Array.from(this.bids.keys()).sort((a, b) => b - a).slice(0, limit);
-    return sortedPrices.map((price) => {
-      const quantity = this.bids.get(price) || 0;
-      return {
-        price,
-        quantity,
-        notionalUsd: price * quantity,
-      };
-    });
+    return Array.from(this.bids.keys()).sort((a,b)=>b-a).slice(0,limit).map(price=>({price, quantity:this.bids.get(price)||0, notionalUsd:price*(this.bids.get(price)||0)}));
   }
-
   public getSortedAsks(limit = 30): OrderBookLevel[] {
-    const sortedPrices = Array.from(this.asks.keys()).sort((a, b) => a - b).slice(0, limit);
-    return sortedPrices.map((price) => {
-      const quantity = this.asks.get(price) || 0;
-      return {
-        price,
-        quantity,
-        notionalUsd: price * quantity,
-      };
-    });
+    return Array.from(this.asks.keys()).sort((a,b)=>a-b).slice(0,limit).map(price=>({price, quantity:this.asks.get(price)||0, notionalUsd:price*(this.asks.get(price)||0)}));
   }
 
   public getState(): OrderBookState {
-    const bids = this.getSortedBids(20);
-    const asks = this.getSortedAsks(20);
-
+    if (this.lastReceivedAt > 0 && Date.now() - this.lastReceivedAt > 5000) {
+      this.status = 'STALE';
+      this.dataValid = false;
+    }
     return {
-      symbol: this.symbol,
-      exchange: this.exchange,
-      marketType: this.marketType,
-      bids,
-      asks,
-      bestBid: this.bestBid,
-      bestAsk: this.bestAsk,
-      spread: this.spread,
-      spreadPct: Number(this.spreadPct.toFixed(4)),
-      lastUpdateId: this.lastUpdateId,
-      sequence: this.lastUpdateId,
-      timestamp: this.lastReceivedAt || Date.now(),
-      status: this.status,
-      lastReceivedAt: this.lastReceivedAt,
+      symbol:this.symbol, exchange:this.exchange, marketType:this.marketType,
+      bids:this.getSortedBids(20), asks:this.getSortedAsks(20), bestBid:this.bestBid, bestAsk:this.bestAsk,
+      spread:this.spread, spreadPct:Number(this.spreadPct.toFixed(4)), lastUpdateId:this.lastUpdateId,
+      sequence:this.lastUpdateId, timestamp:this.lastReceivedAt||Date.now(), status:this.status, lastReceivedAt:this.lastReceivedAt,
     };
   }
 
-  // Calculate adaptive density threshold based on visible depth notional percentiles
   public calculateAdaptiveThreshold(volume24hUsd = 0): number {
-    const allNotionals: number[] = [];
-    for (const [p, q] of this.bids.entries()) allNotionals.push(p * q);
-    for (const [p, q] of this.asks.entries()) allNotionals.push(p * q);
-
-    if (allNotionals.length === 0) {
-      return this.config.manualThresholdUsd || 1000000;
-    }
-
-    allNotionals.sort((a, b) => a - b);
-    const p90Index = Math.floor(allNotionals.length * 0.90);
-    const p90Value = allNotionals[p90Index] || 50000;
-
-    // Minimum baseline based on 24h turnover
+    const all = [...Array.from(this.bids, ([p,q])=>p*q), ...Array.from(this.asks, ([p,q])=>p*q)];
+    if (!all.length) return this.config.manualThresholdUsd || 1000000;
+    all.sort((a,b)=>a-b);
+    const p90 = all[Math.min(all.length-1, Math.floor(all.length*0.90))] || 50000;
     const turnoverBaseline = volume24hUsd > 0 ? Math.max(50000, volume24hUsd * 0.0003) : 100000;
-    const autoVal = Math.max(turnoverBaseline, p90Value * 2.0);
-
-    if (this.config.mode === 'MANUAL') {
-      return this.config.manualThresholdUsd;
-    }
-    if (this.config.mode === 'HYBRID') {
-      return Math.max(this.config.manualThresholdUsd * 0.6, autoVal);
-    }
+    const autoVal = Math.max(turnoverBaseline, p90 * 2);
+    if (this.config.mode === 'MANUAL') return this.config.manualThresholdUsd;
+    if (this.config.mode === 'HYBRID') return Math.max(this.config.manualThresholdUsd * 0.6, autoVal);
     return autoVal;
   }
 
   private evaluateDensities() {
     const now = Date.now();
-    const midPrice = (this.bestBid + this.bestAsk) / 2 || this.bestBid || 1;
-    const thresholdUsd = this.calculateAdaptiveThreshold();
+    const mid = (this.bestBid + this.bestAsk) / 2 || this.bestBid || this.bestAsk || 1;
+    const threshold = this.calculateAdaptiveThreshold();
+    const seen = new Set<string>();
 
-    const seenIds = new Set<string>();
-
-    // Check Bids
-    for (const [price, qty] of this.bids.entries()) {
-      const notionalUsd = price * qty;
-      if (notionalUsd >= thresholdUsd) {
-        const id = `bid_${price}`;
-        seenIds.add(id);
-        const distPct = Math.abs((midPrice - price) / midPrice) * 100;
-        this.updateOrAddDensity(id, 'BID', price, qty, notionalUsd, distPct, now);
+    const scan = (book: Map<number, number>, side: 'BID'|'ASK') => {
+      for (const [price, qty] of book.entries()) {
+        const notional = price * qty;
+        if (notional < threshold) continue;
+        const id = `${side.toLowerCase()}_${price}`;
+        seen.add(id);
+        const dist = Math.abs((price-mid)/mid)*100;
+        this.updateOrAddDensity(id, side, price, qty, notional, dist, now);
       }
-    }
+    };
+    scan(this.bids,'BID'); scan(this.asks,'ASK');
 
-    // Check Asks
-    for (const [price, qty] of this.asks.entries()) {
-      const notionalUsd = price * qty;
-      if (notionalUsd >= thresholdUsd) {
-        const id = `ask_${price}`;
-        seenIds.add(id);
-        const distPct = Math.abs((price - midPrice) / midPrice) * 100;
-        this.updateOrAddDensity(id, 'ASK', price, qty, notionalUsd, distPct, now);
-      }
-    }
-
-    // Process removed / disappeared densities
     for (const [id, item] of this.activeDensities.entries()) {
-      if (!seenIds.has(id)) {
-        // Density disappeared
-        const ageSec = Math.max(1, (now - item.firstSeenAt) / 1000);
-        // If it vanished right when price approached closely (< 0.25%) without execution, flag potential spoof
-        if (item.distancePct <= 0.25 && ageSec < 60) {
-          item.classification = 'POSSIBLE_SPOOF';
-        } else if (ageSec < 15) {
-          item.classification = 'TRANSIENT_LIQUIDITY';
-        }
-        this.densityHistory.unshift(item);
-        if (this.densityHistory.length > 50) this.densityHistory.pop();
-        this.activeDensities.delete(id);
-      }
+      if (seen.has(id)) continue;
+      const stats = this.densityStats.get(id);
+      if (stats) stats.cancellations += 1;
+      const age = Math.max(0.1, (now-item.firstSeenAt)/1000);
+      const disappearedNearPrice = item.distancePct <= 0.25;
+      const cancellationRate = stats ? stats.cancellations / Math.max(1, stats.samples) : 1;
+      item.cancellationRate = Number(cancellationRate.toFixed(3));
+      if (disappearedNearPrice && age < 60 && cancellationRate > 0.15) item.classification='POSSIBLE_SPOOF';
+      else if (age < this.config.minPersistenceSeconds) item.classification='TRANSIENT_LIQUIDITY';
+      item.qualityScore = this.calculateQuality(item, stats);
+      this.densityHistory.unshift(item);
+      if (this.densityHistory.length > 100) this.densityHistory.pop();
+      this.activeDensities.delete(id);
     }
   }
 
-  private updateOrAddDensity(
-    id: string,
-    side: 'BID' | 'ASK',
-    price: number,
-    qty: number,
-    notionalUsd: number,
-    distPct: number,
-    now: number
-  ) {
-    const existing = this.activeDensities.get(id);
-    if (existing) {
-      existing.quantity = qty;
-      existing.notionalUsd = notionalUsd;
-      existing.distancePct = Number(distPct.toFixed(2));
-      existing.lastSeenAt = now;
-      existing.ageSeconds = Math.floor((now - existing.firstSeenAt) / 1000);
-      existing.maxSizeUsd = Math.max(existing.maxSizeUsd, notionalUsd);
-      existing.averageSizeUsd = (existing.averageSizeUsd + notionalUsd) / 2;
+  private updateOrAddDensity(id:string, side:'BID'|'ASK', price:number, qty:number, notional:number, distPct:number, now:number) {
+    let stats = this.densityStats.get(id);
+    if (!stats) {
+      stats = { firstSeenAt:now,lastSeenAt:now,samples:0,presentSamples:0,sizeSumUsd:0,maxSizeUsd:notional,lastSizeUsd:notional,lastSizeChangeAt:now,cancellations:0,replenishments:0,nearestApproachPct:distPct };
+      this.densityStats.set(id,stats);
+    }
+    stats.samples += 1; stats.presentSamples += 1; stats.lastSeenAt=now; stats.sizeSumUsd += notional;
+    stats.maxSizeUsd=Math.max(stats.maxSizeUsd,notional); stats.nearestApproachPct=Math.min(stats.nearestApproachPct,distPct);
+    if (notional > stats.lastSizeUsd * 1.05 && stats.lastSizeUsd > 0) stats.replenishments += 1;
+    if (Math.abs(notional-stats.lastSizeUsd)/Math.max(stats.lastSizeUsd,1) > 0.1) stats.lastSizeChangeAt=now;
+    stats.lastSizeUsd=notional;
 
-      // Classify as persistent if maintained through approach and duration
-      if (existing.ageSeconds >= this.config.minPersistenceSeconds) {
-        existing.classification = 'PERSISTENT_LIQUIDITY';
-      }
+    const existing=this.activeDensities.get(id);
+    if(existing){
+      existing.quantity=qty; existing.notionalUsd=notional; existing.distancePct=Number(distPct.toFixed(3)); existing.lastSeenAt=now;
+      existing.ageSeconds=Math.floor((now-existing.firstSeenAt)/1000); existing.maxSizeUsd=Math.max(existing.maxSizeUsd,notional);
+      existing.averageSizeUsd=stats.sizeSumUsd/Math.max(1,stats.presentSamples); existing.persistenceRatio=stats.presentSamples/Math.max(1,stats.samples);
+      existing.persistenceSamples=stats.presentSamples; existing.cancellationRate=stats.cancellations/Math.max(1,stats.samples);
+      existing.replenishmentRate=stats.replenishments/Math.max(1,stats.samples); existing.lastSizeChangeAt=stats.lastSizeChangeAt;
+      if(existing.ageSeconds>=this.config.minPersistenceSeconds && existing.persistenceRatio>=0.65) existing.classification='PERSISTENT_LIQUIDITY';
+      existing.qualityScore=this.calculateQuality(existing,stats);
     } else {
-      const newItem: DensityItem = {
-        id,
-        price,
-        side,
-        quantity: qty,
-        notionalUsd,
-        distancePct: Number(distPct.toFixed(2)),
-        firstSeenAt: now,
-        lastSeenAt: now,
-        ageSeconds: 0,
-        maxSizeUsd: notionalUsd,
-        averageSizeUsd: notionalUsd,
-        persistenceRatio: 1.0,
-        classification: 'STANDARD',
-      };
-      this.activeDensities.set(id, newItem);
+      const item:DensityItem={id,price,side,quantity:qty,notionalUsd:notional,distancePct:Number(distPct.toFixed(3)),firstSeenAt:now,lastSeenAt:now,ageSeconds:0,maxSizeUsd:notional,averageSizeUsd:notional,persistenceRatio:1,classification:'STANDARD',persistenceSamples:1,cancellationRate:0,replenishmentRate:0,qualityScore:20,lastSizeChangeAt:now};
+      this.activeDensities.set(id,item);
     }
   }
 
-  public getDensities(): DensityItem[] {
-    return Array.from(this.activeDensities.values()).sort((a, b) => b.notionalUsd - a.notionalUsd);
+  private calculateQuality(item:DensityItem, stats?:DensityStats):number {
+    if (!stats) return item.qualityScore || 0;
+    const persistence = Math.min(25, (item.persistenceRatio || 0) * 25);
+    const duration = Math.min(20, (item.ageSeconds / Math.max(1,this.config.minPersistenceSeconds)) * 20);
+    const sizeStability = Math.min(15, item.averageSizeUsd > 0 ? Math.min(1.5,item.notionalUsd/item.averageSizeUsd) * 10 : 0);
+    const maxDistance = Math.max(this.config.minDistancePct, 0.6);
+    const proximity = item.distancePct <= this.config.minDistancePct ? 15 : Math.max(0, 15 * (1 - Math.min(1, item.distancePct / maxDistance)));
+    const replenishment = Math.min(15, (item.replenishmentRate || 0) * 60);
+    const spoofPenalty = item.classification === 'POSSIBLE_SPOOF' ? 40 : Math.min(20,(item.cancellationRate||0)*50);
+    return Math.max(0,Math.min(100,Math.round(persistence+duration+sizeStability+proximity+replenishment-spoofPenalty)));
   }
 
-  public getSignificantDensities(minNotional = 500000): DensityItem[] {
-    return this.getDensities().filter((d) => d.notionalUsd >= minNotional);
+  public getOrderBookImbalance(levels=20):number {
+    if (!this.dataValid || Date.now() - this.lastReceivedAt > 5000) return 0;
+    const bids=this.getSortedBids(levels).reduce((s,l)=>s+l.notionalUsd,0);
+    const asks=this.getSortedAsks(levels).reduce((s,l)=>s+l.notionalUsd,0);
+    if(bids+asks===0)return 0;
+    return (bids-asks)/(bids+asks);
   }
 
-  public clear() {
-    this.bids.clear();
-    this.asks.clear();
-    this.activeDensities.clear();
+  public getDensityQualityAtPrice(side:'BID'|'ASK', price:number, maxDistancePct=0.6):DensityItem|undefined {
+    return this.getDensities().filter(d=>d.side===side && d.classification!=='POSSIBLE_SPOOF' && Math.abs(d.price-price)/Math.max(price,1)*100<=maxDistancePct).sort((a,b)=>(b.qualityScore||0)-(a.qualityScore||0))[0];
   }
+
+  public getDensities(): DensityItem[] { return this.dataValid && Date.now() - this.lastReceivedAt <= 5000 ? Array.from(this.activeDensities.values()).sort((a,b)=>b.notionalUsd-a.notionalUsd) : []; }
+  public getSignificantDensities(minNotional=500000):DensityItem[]{return this.getDensities().filter(d=>d.notionalUsd>=minNotional);}
+  public clear(){this.bids.clear();this.asks.clear();this.activeDensities.clear();this.densityStats.clear();this.dataValid=false;this.sequenceGap=false;this.status='CONNECTING';}
 }

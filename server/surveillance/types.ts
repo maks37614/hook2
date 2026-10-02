@@ -23,6 +23,8 @@ export interface OrderBookState {
   timestamp: number;
   status: OrderBookStatus;
   lastReceivedAt: number;
+  dataValid?: boolean;
+  sequenceGap?: boolean;
 }
 
 export interface DensityItem {
@@ -39,6 +41,11 @@ export interface DensityItem {
   averageSizeUsd: number;
   persistenceRatio: number;
   classification: 'PERSISTENT_LIQUIDITY' | 'TRANSIENT_LIQUIDITY' | 'POSSIBLE_SPOOF' | 'STANDARD';
+  qualityScore?: number;
+  persistenceSamples?: number;
+  cancellationRate?: number;
+  replenishmentRate?: number;
+  lastSizeChangeAt?: number;
   historicalReaction?: {
     median5mPct: number;
     median15mPct: number;
@@ -156,6 +163,9 @@ export interface TradeFlowSnapshot {
   totalTradeCount: number;
   averageTradeSizeUsd: number;
   recentTradesWindowMs: number;
+  deltaUsd?: number;
+  deltaZScore?: number;
+  deltaAcceleration?: number;
 }
 
 export interface OISnapshot {
@@ -195,12 +205,46 @@ export type SetupType =
 export type SetupStage =
   | 'IDLE'
   | 'SUPPORT_APPROACH'
+  | 'APPROACHING'
   | 'IN_ZONE'
   | 'REACTION_WATCH'
+  | 'TRIGGERING'
   | 'CONFIRMING'
   | 'CONFIRMED'
+  | 'ENTRY_ACTIVE'
+  | 'TARGET_1'
+  | 'TARGET_2'
   | 'INVALIDATED'
+  | 'EXPIRED'
   | 'COMPLETED';
+
+
+export interface SetupConfluenceComponent {
+  score: number;
+  max: number;
+  status: 'STRONG' | 'GOOD' | 'WEAK' | 'MISSING' | 'CONFLICT';
+  evidence: string;
+}
+
+export interface SetupConfluenceBreakdown {
+  total: number;
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D';
+  components: {
+    formation: SetupConfluenceComponent;
+    htf: SetupConfluenceComponent;
+    location: SetupConfluenceComponent;
+    trigger: SetupConfluenceComponent;
+    volume: SetupConfluenceComponent;
+    orderFlow: SetupConfluenceComponent;
+    orderBook: SetupConfluenceComponent;
+    oi: SetupConfluenceComponent;
+    marketContext: SetupConfluenceComponent;
+  };
+  independentConfirmations: number;
+  conflicts: string[];
+  missing: string[];
+  notes: string[];
+}
 
 export interface SetupInstance {
   id: string;
@@ -212,8 +256,12 @@ export interface SetupInstance {
   stage: SetupStage;
   direction: 'LONG' | 'SHORT';
   entryZone: { low: number; high: number };
+  preferredEntry?: number;
+  confirmationEntry?: number;
+  aggressiveEntry?: number;
   invalidationPrice: number;
   targetPrice: number;
+  targets?: number[];
   confluenceScore: number; // 0–100
   confirmations: string[];
   waitingFor: string;
@@ -228,6 +276,28 @@ export interface SetupInstance {
   };
   createdAt: number;
   updatedAt: number;
+  confluenceBreakdown?: SetupConfluenceBreakdown;
+  entryQuality?: {
+    score: number;
+    formationScore?: number;
+    htfScore?: number;
+    levelScore?: number;
+    triggerScore?: number;
+    structureScore?: number;
+    volumeScore?: number;
+    flowScore?: number;
+    orderBookScore?: number;
+    oiScore?: number;
+    marketContextScore?: number;
+    riskReward: number;
+    hardGatesPassed: boolean;
+    independentConfirmations: number;
+    entryType: 'REVERSAL_RECLAIM' | 'BREAKOUT_RETEST' | 'BOS_RETEST' | 'LIQUIDITY_REACTION';
+    preferredEntry: number;
+    entryZone?: { low: number; high: number };
+    invalidation?: number;
+    targets?: number[];
+  };
 }
 
 export interface EngineAlertEvent {

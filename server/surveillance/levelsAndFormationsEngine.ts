@@ -1,4 +1,5 @@
-import { Kline, Timeframe } from '../../src/types';
+import { DetectedFormation, Kline, Timeframe } from '../../src/types';
+import { detectFormations as detectCanonicalFormations } from '../../src/utils/patternRecognition';
 import { calculateATR } from './multiTimeframeEngine';
 import { DetectedPattern, LevelZone, ThirdTouchTracker } from './types';
 
@@ -8,6 +9,15 @@ export class LevelsAndFormationsEngine {
 
   public findSupportResistanceZones(candles1d: Kline[], candles4h: Kline[], candles1h: Kline[]): LevelZone[] {
     const zones: LevelZone[] = [];
+    const closed = (candles: Kline[], tfMs: number) => {
+      if (candles.length <= 2) return candles;
+      const t = candles[candles.length - 1].time > 2_000_000_000_000 ? candles[candles.length - 1].time : candles[candles.length - 1].time * 1000;
+      const interval = candles.length > 2 ? Math.max(1000, ((candles[candles.length - 1].time > 2_000_000_000_000 ? candles[candles.length - 1].time : candles[candles.length - 1].time * 1000) - (candles[candles.length - 2].time > 2_000_000_000_000 ? candles[candles.length - 2].time : candles[candles.length - 2].time * 1000))) : tfMs;
+      return t + Math.min(tfMs, interval) > Date.now() ? candles.slice(0, -1) : candles;
+    };
+    candles1d = closed(candles1d, 24 * 60 * 60 * 1000);
+    candles4h = closed(candles4h, 4 * 60 * 60 * 1000);
+    candles1h = closed(candles1h, 60 * 60 * 1000);
 
     const analyzeCandlesForZones = (candles: Kline[], tf: Timeframe, weight: number) => {
       if (candles.length < 10) return;
@@ -23,10 +33,16 @@ export class LevelsAndFormationsEngine {
                       c.low <= candles[i + 1].low && c.low <= candles[i + 2].low;
 
         if (isHigh) {
-          this.clusterZone(zones, tf, 'RESISTANCE', c.high, zoneTolerance, c.time, weight);
+          const reactionHigh = Math.min(candles.length - 1, i + 6);
+          const minAfter = Math.min(...candles.slice(i + 1, reactionHigh + 1).map(x => x.low), c.high);
+          const reactionPct = Math.max(0, (c.high - minAfter) / c.high * 100);
+          this.clusterZone(zones, tf, 'RESISTANCE', c.high, zoneTolerance, c.time, weight, reactionPct, reactionPct >= 1.0);
         }
         if (isLow) {
-          this.clusterZone(zones, tf, 'SUPPORT', c.low, zoneTolerance, c.time, weight);
+          const reactionHigh = Math.min(candles.length - 1, i + 6);
+          const maxAfter = Math.max(...candles.slice(i + 1, reactionHigh + 1).map(x => x.high), c.low);
+          const reactionPct = Math.max(0, (maxAfter - c.low) / c.low * 100);
+          this.clusterZone(zones, tf, 'SUPPORT', c.low, zoneTolerance, c.time, weight, reactionPct, reactionPct >= 1.0);
         }
       }
     };
@@ -37,8 +53,9 @@ export class LevelsAndFormationsEngine {
 
     // Calculate level strength score (0-100) and reaction stats
     for (const z of zones) {
-      const touchScore = Math.min(40, z.touches * 10);
-      const reactionScore = Math.min(30, (z.strongReactions / Math.max(1, z.touches)) * 30);
+      const touchScore = Math.min(30, Math.max(0, z.touches - 1) * 10 + 5);
+      const reactionQuality = z.averageReactionPct / Math.max(1, z.touches);
+      const reactionScore = Math.min(35, (z.strongReactions / Math.max(1, z.touches)) * 20 + Math.min(15, reactionQuality * 3));
       const tfScore = z.timeframe === '1d' ? 30 : z.timeframe === '4h' ? 20 : 10;
       z.strengthScore = Math.min(100, Math.round(touchScore + reactionScore + tfScore));
       z.averageReactionPct = Number((z.averageReactionPct / Math.max(1, z.touches)).toFixed(2));
@@ -55,18 +72,24 @@ export class LevelsAndFormationsEngine {
     price: number,
     tolerance: number,
     time: number,
-    weight: number
+    weight: number,
+    reactionPct = 0,
+    strongReaction = false
   ) {
     const existing = zones.find((z) => z.type === type && Math.abs(z.zoneCenter - price) <= tolerance);
     if (existing) {
+      const tfMs = tf === '1d' ? 24 * 60 * 60 * 1000 : tf === '4h' ? 4 * 60 * 60 * 1000 : 60 * 60 * 1000;
+      const distinctTouch = Math.abs(time - existing.lastTouchTime) >= tfMs * 3;
+      if (!distinctTouch) return;
       existing.touches += 1;
       existing.zoneLow = Math.min(existing.zoneLow, price - tolerance * 0.5);
       existing.zoneHigh = Math.max(existing.zoneHigh, price + tolerance * 0.5);
       existing.zoneCenter = (existing.zoneLow + existing.zoneHigh) / 2;
       existing.lastTouchTime = Math.max(existing.lastTouchTime, time);
-      existing.strongReactions += 1;
-      existing.averageReactionPct += 1.5;
-      existing.maxReactionPct = Math.max(existing.maxReactionPct, 2.2);
+      if (strongReaction) existing.strongReactions += 1;
+      else existing.weakReactions += 1;
+      existing.averageReactionPct += reactionPct;
+      existing.maxReactionPct = Math.max(existing.maxReactionPct, reactionPct);
     } else {
       zones.push({
         id: `zone_${tf}_${type}_${Math.round(price)}`,
@@ -76,10 +99,10 @@ export class LevelsAndFormationsEngine {
         zoneHigh: price + tolerance * 0.5,
         zoneCenter: price,
         touches: 1,
-        strongReactions: 1,
-        weakReactions: 0,
-        averageReactionPct: 1.5,
-        maxReactionPct: 1.5,
+        strongReactions: strongReaction ? 1 : 0,
+        weakReactions: strongReaction ? 0 : 1,
+        averageReactionPct: reactionPct,
+        maxReactionPct: reactionPct,
         strengthScore: weight,
         firstSeen: time,
         lastTouchTime: time,
@@ -153,127 +176,60 @@ export class LevelsAndFormationsEngine {
   }
 
   public detectFormations(candles1h: Kline[], currentPrice: number): DetectedPattern[] {
-    const patterns: DetectedPattern[] = [];
-    if (candles1h.length < 25) return patterns;
+    const canonical = detectCanonicalFormations(candles1h, `${this.levelZones.length ? 'SURVEILLANCE' : 'SURVEILLANCE'}`);
+    const mapType = (f: DetectedFormation): DetectedPattern['type'] => {
+      const n = f.nameEn.toLowerCase();
+      if (n.includes('double bottom')) return 'Double Bottom';
+      if (n.includes('double top')) return 'Double Top';
+      if (n.includes('ascending triangle')) return 'Ascending Triangle';
+      if (n.includes('descending triangle')) return 'Descending Triangle';
+      if (n.includes('symmetrical triangle')) return 'Symmetrical Triangle';
+      if (n.includes('flag')) return 'Flag';
+      if (n.includes('pennant')) return 'Pennant';
+      if (n.includes('wedge')) return 'Wedge';
+      if (n.includes('channel')) return 'Channel';
+      if (n.includes('compression') || n.includes('squeeze')) return 'Compression';
+      return 'Range';
+    };
+    return canonical.map((f) => ({
+      name: f.name,
+      type: mapType(f),
+      bias: f.bias,
+      score: f.validation?.confluence?.total ?? f.confidence,
+      upperBoundary: f.levels.resistancePrice ?? f.levels.necklinePrice ?? f.levels.entryPrice,
+      lowerBoundary: f.levels.supportPrice ?? f.levels.necklinePrice ?? f.levels.entryPrice,
+      touchesUpper: f.extremeContext?.testsCount ?? 0,
+      touchesLower: f.extremeContext?.testsCount ?? 0,
+      compression: f.category === 'compression',
+      timeframe: '1h',
+      status: f.validation?.breakoutConfirmed ? 'BROKEN' : f.validation?.passed ? 'READY' : 'FORMING',
+    }));
+  }
 
-    const slice = candles1h.slice(-30);
-    const highs = slice.map((c) => c.high);
-    const lows = slice.map((c) => c.low);
-
-    const maxHigh = Math.max(...highs);
-    const minLow = Math.min(...lows);
-    const rangeSpan = maxHigh - minLow;
-    if (rangeSpan <= 0) return patterns;
-
-    // 1. Double Top
-    const swingHighs = slice.filter((c, i, arr) => i > 1 && i < arr.length - 2 && c.high >= arr[i - 1].high && c.high >= arr[i + 1].high);
-    if (swingHighs.length >= 2) {
-      const top1 = swingHighs[swingHighs.length - 2];
-      const top2 = swingHighs[swingHighs.length - 1];
-      const diffPct = Math.abs(top1.high - top2.high) / top1.high;
-      if (diffPct <= 0.008) {
-        patterns.push({
-          name: 'Double Top',
-          type: 'Double Top',
-          bias: 'bearish',
-          score: 82,
-          upperBoundary: Math.max(top1.high, top2.high),
-          lowerBoundary: minLow,
-          touchesUpper: 2,
-          touchesLower: 1,
-          compression: false,
-          timeframe: '1h',
-          status: 'READY',
-        });
-      }
+  private findSwings(candles: Kline[], window=2): Array<{index:number;price:number;type:'HIGH'|'LOW'}> {
+    const out:Array<{index:number;price:number;type:'HIGH'|'LOW'}>=[];
+    for(let i=window;i<candles.length-window;i++) {
+      let hi=true,lo=true;
+      for(let j=1;j<=window;j++) { if(candles[i-j].high>=candles[i].high||candles[i+j].high>=candles[i].high)hi=false; if(candles[i-j].low<=candles[i].low||candles[i+j].low<=candles[i].low)lo=false; }
+      if(hi)out.push({index:i,price:candles[i].high,type:'HIGH'});
+      if(lo)out.push({index:i,price:candles[i].low,type:'LOW'});
     }
+    return out.sort((a,b)=>a.index-b.index);
+  }
 
-    // 2. Double Bottom
-    const swingLows = slice.filter((c, i, arr) => i > 1 && i < arr.length - 2 && c.low <= arr[i - 1].low && c.low <= arr[i + 1].low);
-    if (swingLows.length >= 2) {
-      const bot1 = swingLows[swingLows.length - 2];
-      const bot2 = swingLows[swingLows.length - 1];
-      const diffPct = Math.abs(bot1.low - bot2.low) / bot1.low;
-      if (diffPct <= 0.008) {
-        patterns.push({
-          name: 'Double Bottom',
-          type: 'Double Bottom',
-          bias: 'bullish',
-          score: 84,
-          upperBoundary: maxHigh,
-          lowerBoundary: Math.min(bot1.low, bot2.low),
-          touchesUpper: 1,
-          touchesLower: 2,
-          compression: false,
-          timeframe: '1h',
-          status: 'READY',
-        });
-      }
-    }
+  private patternScore(args:{symmetry:number;depth:number;trigger:number;volume:number}):number {
+    return Math.round(Math.max(50,Math.min(95,55+args.symmetry*15+args.depth*12+args.trigger*8+args.volume*5)));
+  }
 
-    // 3. Ascending Triangle (Flat Resistance + Higher Lows)
-    let higherLowsInSlice = 0;
-    for (let i = 1; i < swingLows.length; i++) {
-      if (swingLows[i].low > swingLows[i - 1].low) higherLowsInSlice++;
-    }
-    const touchesHigh = highs.filter((h) => Math.abs(h - maxHigh) / maxHigh <= 0.006).length;
-    if (touchesHigh >= 3 && higherLowsInSlice >= 2) {
-      patterns.push({
-        name: 'Ascending Triangle',
-        type: 'Ascending Triangle',
-        bias: 'bullish',
-        score: 88,
-        upperBoundary: maxHigh,
-        lowerBoundary: minLow,
-        touchesUpper: touchesHigh,
-        touchesLower: higherLowsInSlice + 1,
-        compression: true,
-        timeframe: '1h',
-        status: 'READY',
-      });
-    }
-
-    // 4. Descending Triangle (Flat Support + Lower Highs)
-    let lowerHighsInSlice = 0;
-    for (let i = 1; i < swingHighs.length; i++) {
-      if (swingHighs[i].high < swingHighs[i - 1].high) lowerHighsInSlice++;
-    }
-    const touchesLow = lows.filter((l) => Math.abs(l - minLow) / minLow <= 0.006).length;
-    if (touchesLow >= 3 && lowerHighsInSlice >= 2) {
-      patterns.push({
-        name: 'Descending Triangle',
-        type: 'Descending Triangle',
-        bias: 'bearish',
-        score: 87,
-        upperBoundary: maxHigh,
-        lowerBoundary: minLow,
-        touchesUpper: lowerHighsInSlice + 1,
-        touchesLower: touchesLow,
-        compression: true,
-        timeframe: '1h',
-        status: 'READY',
-      });
-    }
-
-    // 5. Compression / Range Channel
-    const atrRecent = calculateATR(slice.slice(-10));
-    const atrPast = calculateATR(slice.slice(0, 15));
-    if (atrRecent < atrPast * 0.7) {
-      patterns.push({
-        name: 'Volatility Compression',
-        type: 'Compression',
-        bias: 'neutral',
-        score: 80,
-        upperBoundary: maxHigh,
-        lowerBoundary: minLow,
-        touchesUpper: touchesHigh,
-        touchesLower: touchesLow,
-        compression: true,
-        timeframe: '1h',
-        status: 'READY',
-      });
-    }
-
-    return patterns;
+  private breakoutVolumeScore(candles:Kline[], index:number, boundary:number, direction:'LONG'|'SHORT'):number {
+    const sample=candles.slice(Math.max(0,index-20),index);
+    if(!sample.length)return 0;
+    const avg=sample.reduce((s,c)=>s+c.volume,0)/sample.length;
+    const c=candles[Math.min(candles.length-1,index)];
+    const directional=direction==='LONG'?c.close>boundary:c.close<boundary;
+    return directional && c.volume>avg*1.2 ? Math.min(1,c.volume/Math.max(avg*2,0.00000001)) : 0;
   }
 }
+
+function lowPairs(xs:Array<{index:number;price:number;type:'HIGH'|'LOW'}>) { const out:Array<[typeof xs[number],typeof xs[number]]>=[]; for(let i=1;i<xs.length;i++)out.push([xs[i-1],xs[i]]); return out; }
+function highPairs(xs:Array<{index:number;price:number;type:'HIGH'|'LOW'}>) { const out:Array<[typeof xs[number],typeof xs[number]]>=[]; for(let i=1;i<xs.length;i++)out.push([xs[i-1],xs[i]]); return out; }

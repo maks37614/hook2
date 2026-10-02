@@ -65,6 +65,7 @@ export class CoinWorker {
   public change24h = 0;
   public volume24hUsd = 0;
   public lastAnalysisTimestamp = 0;
+  private analysisInFlight = false;
 
   private structures: Record<Timeframe, TimeframeStructure> = {} as any;
   private levelZones: LevelZone[] = [];
@@ -176,8 +177,10 @@ export class CoinWorker {
   }
 
   public async runDeepAnalysis() {
-    if (this.isDestroyed || this.currentPrice <= 0) return;
+    if (this.isDestroyed || this.currentPrice <= 0 || this.analysisInFlight) return;
+    this.analysisInFlight = true;
     this.lastAnalysisTimestamp = Date.now();
+    try {
 
     const price = this.currentPrice;
     const candles1d = this.mtfEngine.getCandles('1d');
@@ -297,12 +300,15 @@ export class CoinWorker {
       oiSnapshot,
       btcContext,
       thirdTouches: this.thirdTouches,
+      rvol,
+      orderBookImbalance: this.orderBookEngine.getOrderBookImbalance(20),
+      candles1h, candles15m, candles5m: this.mtfEngine.getCandles('5m'),
     });
 
     // Check Setups Telegram Alerts
     for (const setup of this.setups) {
-      if (setup.stage === 'CONFIRMED' || setup.stage === 'REACTION_WATCH') {
-        const alertType = setup.stage === 'CONFIRMED' ? 'SUPPORT_RETEST_CONFIRMED' : 'SUPPORT_RETEST_WATCH';
+      if (setup.stage === 'CONFIRMED') {
+        const alertType = 'SUPPORT_RETEST_CONFIRMED';
         const setupKey = `${setup.id}_${setup.stage}`;
         if (this.alertManager.canSendAlert(setupKey, alertType)) {
           const setupMsg = this.alertManager.formatSupportRetestMessage(setup, price);
@@ -317,13 +323,16 @@ export class CoinWorker {
             description: `Конфлюенс: ${setup.confluenceScore}/100. Зона: $${setup.entryZone.low} - $${setup.entryZone.high}`,
             price,
             timeframe: setup.timeframe,
-            severity: setup.stage === 'CONFIRMED' ? 'CRITICAL' : 'HIGH',
+            severity: 'CRITICAL',
             confluenceScore: setup.confluenceScore,
             evidence: setup.evidence,
             timestamp: Date.now(),
           });
         }
       }
+    }
+    } finally {
+      this.analysisInFlight = false;
     }
   }
 

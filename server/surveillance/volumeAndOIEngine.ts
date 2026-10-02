@@ -5,6 +5,7 @@ import { OISnapshot, TradeFlowSnapshot } from './types';
 export class VolumeAndOIEngine {
   private recentTrades: RawTradeEvent[] = [];
   private oiHistory: { time: number; valueUsd: number; amountCoins: number; price: number }[] = [];
+  private flowHistory: { time: number; deltaUsd: number }[] = [];
 
   public addTrade(trade: RawTradeEvent) {
     this.recentTrades.push(trade);
@@ -35,6 +36,17 @@ export class VolumeAndOIEngine {
     const totalVol = buyVolUsd + sellVolUsd;
     const avgTradeSize = totalTrades > 0 ? totalVol / totalTrades : 0;
     const imbalanceRatio = sellVolUsd > 0 ? buyVolUsd / sellVolUsd : buyVolUsd > 0 ? 99 : 1.0;
+    const deltaUsd = buyVolUsd - sellVolUsd;
+    const now = Date.now();
+    this.flowHistory.push({ time: now, deltaUsd });
+    while (this.flowHistory.length && this.flowHistory[0].time < now - 5 * 60 * 1000) this.flowHistory.shift();
+    const history = this.flowHistory.slice(0, -1).slice(-30).map(x => x.deltaUsd);
+    const mean = history.length ? history.reduce((a,b)=>a+b,0)/history.length : 0;
+    const variance = history.length ? history.reduce((a,b)=>a+(b-mean)*(b-mean),0)/history.length : 0;
+    const std = Math.sqrt(variance) || 1;
+    const deltaZScore = (deltaUsd - mean) / std;
+    const prevDelta = history.length ? history[history.length - 1] : deltaUsd;
+    const deltaAcceleration = deltaUsd - prevDelta;
 
     return {
       aggressiveBuyUsd: Math.round(buyVolUsd),
@@ -44,13 +56,22 @@ export class VolumeAndOIEngine {
       totalTradeCount: totalTrades,
       averageTradeSizeUsd: Math.round(avgTradeSize),
       recentTradesWindowMs: 60000,
+      deltaUsd: Math.round(deltaUsd),
+      deltaZScore: Number(deltaZScore.toFixed(2)),
+      deltaAcceleration: Math.round(deltaAcceleration),
     };
   }
 
   public calculateRVOL(candles: Kline[]): { rvol: number; zScore: number } {
     if (candles.length < 5) return { rvol: 1.0, zScore: 0 };
-    const latest = candles[candles.length - 1];
-    const prevSlice = candles.slice(-21, -1);
+    const last = candles[candles.length - 1];
+    const prev = candles.length > 2 ? candles[candles.length - 2] : undefined;
+    const normalize = (t: number) => t > 2_000_000_000_000 ? t : t * 1000;
+    const interval = prev ? Math.max(1000, normalize(last.time) - normalize(prev.time)) : 0;
+    const closed = interval > 0 && Date.now() < normalize(last.time) + interval ? candles.slice(0, -1) : candles;
+    if (closed.length < 5) return { rvol: 1.0, zScore: 0 };
+    const latest = closed[closed.length - 1];
+    const prevSlice = closed.slice(-21, -1);
     if (prevSlice.length === 0) return { rvol: 1.0, zScore: 0 };
 
     const volumes = prevSlice.map((c) => c.volume);
@@ -117,8 +138,14 @@ export class VolumeAndOIEngine {
     const change1hPct = Number(getChangeSince(60 * 60 * 1000).toFixed(2));
     const change4hPct = Number(getChangeSince(4 * 60 * 60 * 1000).toFixed(2));
 
-    // Determine OI + Price Regime over 15m window
-    const priceChange15m = latest.price > 0 ? ((currentPrice - latest.price) / latest.price) * 100 : 0;
+    // Determine OI + Price Regime over 15m window using the price snapshot
+    // from the same historical horizon (not the latest/current snapshot).
+    const priceReferenceTarget = now - 15 * 60 * 1000;
+    let priceReference = this.oiHistory[0];
+    for (const item of this.oiHistory) {
+      if (Math.abs(item.time - priceReferenceTarget) < Math.abs(priceReference.time - priceReferenceTarget)) priceReference = item;
+    }
+    const priceChange15m = priceReference?.price > 0 ? ((currentPrice - priceReference.price) / priceReference.price) * 100 : 0;
     let regime: 'PRICE_UP_OI_UP' | 'PRICE_UP_OI_DOWN' | 'PRICE_DOWN_OI_UP' | 'PRICE_DOWN_OI_DOWN' | 'NEUTRAL' = 'NEUTRAL';
 
     if (priceChange15m > 0.3 && change15mPct > 1.0) {

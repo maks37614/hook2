@@ -89,7 +89,9 @@ export class MultiTimeframeEngine {
   }
 
   public detectSwings(tf: Timeframe): SwingPoint[] {
-    const candles = this.candlesByTimeframe.get(tf) || [];
+    const raw = this.candlesByTimeframe.get(tf) || [];
+    const tfMs = getTimeframeMs(tf);
+    const candles = raw.length > 2 && raw[raw.length - 1].time >= Date.now() - tfMs ? raw.slice(0, -1) : raw;
     if (candles.length < 9) return [];
 
     const atr = calculateATR(candles);
@@ -154,7 +156,10 @@ export class MultiTimeframeEngine {
   }
 
   public analyzeStructure(tf: Timeframe, currentPrice: number): TimeframeStructure {
-    const candles = this.candlesByTimeframe.get(tf) || [];
+    const rawCandles = this.candlesByTimeframe.get(tf) || [];
+    const tfMs = getTimeframeMs(tf);
+    const liveCutoff = Date.now() - tfMs;
+    const candles = rawCandles.length > 2 && rawCandles[rawCandles.length - 1].time >= liveCutoff ? rawCandles.slice(0, -1) : rawCandles;
     const swings = this.detectSwings(tf);
 
     const highSwings = swings.filter((s) => s.type === 'HIGH');
@@ -202,9 +207,13 @@ export class MultiTimeframeEngine {
     // Detect BOS / CHoCH
     let lastBreak: StructureBreak | undefined;
     if (candles.length > 2 && recentHigh && recentLow) {
-      const lastClose = candles[candles.length - 1].close;
-      const lastVol = candles[candles.length - 1].volume;
-      const avgVol = candles.slice(-20).reduce((a, c) => a + c.volume, 0) / 20;
+      const closedCandles = candles.length > 2 ? candles.slice(0, -1) : candles;
+      if (closedCandles.length < 3) return { timeframe: tf, trend, score: Math.max(-100, Math.min(100, score)), recentSwings: swings.slice(-6), higherHighsCount: hh, lowerHighsCount: lh, higherLowsCount: hl, lowerLowsCount: ll };
+      const lastClosed = closedCandles[closedCandles.length - 1];
+      const lastClose = lastClosed.close;
+      const lastVol = lastClosed.volume;
+      const volSample = closedCandles.slice(-20);
+      const avgVol = volSample.reduce((a, c) => a + c.volume, 0) / volSample.length;
 
       // Bullish break of recent high
       if (lastClose > recentHigh.price) {
