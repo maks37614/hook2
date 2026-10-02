@@ -304,7 +304,7 @@ export const FormationCard: React.FC<FormationCardProps> = ({
               {/* Confidence meter */}
               <div className="space-y-0.5 mt-2">
                 <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium">
-                  <span>Конфлюенс:</span>
+                  <span>Потенціал:</span>
                   <span className="text-cyan-400 font-mono font-bold">{formation.confidence}%</span>
                 </div>
                 <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
@@ -366,7 +366,7 @@ export const FormationCard: React.FC<FormationCardProps> = ({
               <button
                 onClick={() => setIsChartExpanded(true)}
                 className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 text-xs font-semibold transition-colors shadow-sm cursor-pointer"
-                title="Відкрити графік шторку на цілий блок"
+                title="Відкрити графік на цілий блок"
               >
                 <BarChart2 className="w-3.5 h-3.5 text-cyan-400" />
                 <span></span>
