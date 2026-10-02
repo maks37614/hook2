@@ -238,6 +238,18 @@ export const FormationCard: React.FC<FormationCardProps> = ({
                 >
                   {isBullish ? 'LONG ▲' : isBearish ? 'SHORT ▼' : 'NEUTRAL'}
                 </span>
+                {formation.roundNumberContext?.detected && (
+                  <span
+                    className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider whitespace-nowrap border ${
+                      formation.roundNumberContext.densityConfirmed
+                        ? 'bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-400/50'
+                        : 'bg-amber-500/15 text-amber-200 border-amber-400/40'
+                    }`}
+                    title={formation.roundNumberContext.densityConfirmed ? 'Кругле число + підтверджена щільність стакана на цій ціні' : 'Формація біля круглого числа'}
+                  >
+                    {formation.roundNumberContext.densityConfirmed ? 'ROUND + DENSITY' : 'ROUND'}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5">
@@ -247,10 +259,34 @@ export const FormationCard: React.FC<FormationCardProps> = ({
                 </span>
               </div>
 
+              {/* Detailed confluence */}
+              {formation.validation?.confluence && (
+                <div className="mt-2 border-t border-slate-800/70 pt-2">
+                  <div className="flex items-center justify-between text-[10px] mb-1">
+                    <span className="text-slate-400">Детальний конфлюенс</span>
+                    <span className="font-mono font-bold text-cyan-300">{formation.validation.confluence.total}/100 · {formation.validation.confluence.grade}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 text-[8px]">
+                    {Object.entries(formation.validation.confluence.components).map(([key, item]) => (
+                      <div key={key} className="bg-slate-900/70 rounded px-1.5 py-1 border border-slate-800" title={item.evidence}>
+                        <div className="text-slate-500 truncate">{key}</div>
+                        <div className="font-mono text-slate-200">{item.score}/{item.max}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {(formation.validation.confluence.conflicts.length > 0 || formation.validation.confluence.missing.length > 0) && (
+                    <div className="mt-1 text-[8px] text-amber-300">
+                      {formation.validation.confluence.conflicts.slice(0, 2).join(' · ')}
+                      {formation.validation.confluence.missing.length > 0 && ` Очікується: ${formation.validation.confluence.missing.slice(0, 2).join(', ')}`}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Confidence meter */}
-              <div className="space-y-0.5">
+              <div className="space-y-0.5 mt-2">
                 <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium">
-                  <span>Імовірність:</span>
+                  <span>Конфлюенс:</span>
                   <span className="text-cyan-400 font-mono font-bold">{formation.confidence}%</span>
                 </div>
                 <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">

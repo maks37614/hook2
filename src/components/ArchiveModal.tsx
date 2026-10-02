@@ -423,7 +423,7 @@ export const ArchiveModal: React.FC<ArchiveModalProps> = ({
 
                       {item.confidence && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20 font-mono">
-                          {item.confidence}% вірогідність
+                          {item.confidence}% Confluence
                         </span>
                       )}
                     </div>

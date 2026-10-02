@@ -560,7 +560,7 @@ export const FullscreenChartModal: React.FC<FullscreenChartModalProps> = ({
               R:R <strong className="text-cyan-400 font-bold">1:{formation.riskRewardRatio}</strong>
             </span>
             <span>
-              Впевненість: <strong className="text-cyan-400">{formation.confidence}%</strong>
+              Confluence: <strong className="text-cyan-400">{formation.confidence}%</strong>
             </span>
           </div>
         </div>
