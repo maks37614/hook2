@@ -57,6 +57,90 @@ export interface PatternLevel {
   type: 'support' | 'resistance' | 'neckline' | 'target' | 'stop_loss' | 'trigger';
 }
 
+export type ExtremeRole = 'UPPER_EXTREME' | 'LOWER_EXTREME' | 'MID_RANGE';
+export type ExtremeApproach = 'APPROACHING' | 'TESTING' | 'REJECTING' | 'BREAKING' | 'MOVING_AWAY' | 'NEUTRAL';
+
+export interface ExtremeContext {
+  role: ExtremeRole;
+  referencePrice: number;
+  distancePct: number;
+  rangePositionPct: number;
+  approach: ExtremeApproach;
+  approachStrength: number; // 0-100
+  barsToExtreme: number;
+  velocityPct: number;
+  rejectionStrength: number; // 0-100
+  sweepDetected: boolean;
+  testsCount: number;
+  aligned: boolean;
+  reason: string;
+}
+
+export interface ConfluenceComponent {
+  score: number;
+  max: number;
+  status: 'CONFIRMED' | 'PARTIAL' | 'MISSING' | 'CONFLICT';
+  evidence: string;
+}
+
+export interface ConfluenceBreakdown {
+  total: number;
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D';
+  components: {
+    formation: ConfluenceComponent;
+    extremeLocation: ConfluenceComponent;
+    trigger: ConfluenceComponent;
+    retest: ConfluenceComponent;
+    volume: ConfluenceComponent;
+    volatility: ConfluenceComponent;
+    level: ConfluenceComponent;
+    riskReward: ConfluenceComponent;
+    dataQuality: ConfluenceComponent;
+  };
+  independentConfirmations: number;
+  conflicts: string[];
+  missing: string[];
+  notes: string[];
+}
+
+export interface FormationValidation {
+  passed: boolean;
+  confirmed: boolean;
+  closedCandleOnly: boolean;
+  lookAheadSafe: boolean;
+  enoughData: boolean;
+  finiteData: boolean;
+  swingQuality: number;
+  equalExtremaTolerancePct: number;
+  atrPct: number;
+  breakoutConfirmed: boolean;
+  breakoutPrice?: number;
+  breakoutIndex?: number;
+  entryMode: 'BREAKOUT' | 'RETEST' | 'WAIT_RETEST' | 'WAIT_BREAKOUT';
+  entryPrice: number;
+  stopPrice: number;
+  targetPrice: number;
+  riskReward: number;
+  minRiskReward: number;
+  volumeRatio: number;
+  volatilityPct: number;
+  nearbyLevelDistancePct: number;
+  filters: { volume: boolean; volatility: boolean; nearbyLevel: boolean; structure: boolean };
+  rejectionReasons: string[];
+  confluence?: ConfluenceBreakdown;
+}
+
+export interface RoundNumberContext {
+  detected: boolean;
+  level?: number;
+  distancePct: number;
+  step: number;
+  strength: number;
+  densityConfirmed: boolean;
+  densityUsd?: number;
+  side?: 'BID' | 'ASK';
+}
+
 export interface DetectedFormation {
   id: string;
   patternKey: string;
@@ -65,6 +149,9 @@ export interface DetectedFormation {
   category: PatternCategory;
   bias: PatternBias;
   confidence: number; // 0 - 100
+  extremeContext?: ExtremeContext;
+  validation?: FormationValidation;
+  roundNumberContext?: RoundNumberContext;
   status: PatternStatus;
   statusLabel: string;
   description: string;
@@ -84,6 +171,14 @@ export interface DetectedFormation {
   candleEndIndex?: number;
 }
 
+export interface RoundNumberDensity {
+  level: number;
+  side: 'BID' | 'ASK';
+  notionalUsd: number;
+  distancePct: number;
+  quality: number;
+}
+
 export interface ScannedCoin {
   symbol: string;
   baseAsset: string;
@@ -97,6 +192,7 @@ export interface ScannedCoin {
   volume24hUsd: number;
   volumeUsd?: number;
   formations: DetectedFormation[];
+  roundNumberDensity?: RoundNumberDensity;
   timeframe: Timeframe;
   lastUpdated: number;
   exchangeUrl: string;

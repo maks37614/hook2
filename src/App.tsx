@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { ScreenerFilters } from './components/ScreenerFilters';
 import { FormationCard } from './components/FormationCard';
@@ -65,6 +65,7 @@ export default function App() {
   const { preferences } = useAppPreferences();
   const { t } = useLanguage();
   const [coins, setCoins] = useState<ScannedCoin[]>(() => getFallbackScannedCoins());
+  const scanRequestRef = useRef(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<ScreenerFilterState>(() => {
@@ -515,6 +516,7 @@ export default function App() {
 
   // Fetch screener data from API
   const fetchScreenerData = useCallback(async (currentTf = filters.timeframe, currentExchange = filters.exchange, currentMarket = filters.marketType) => {
+    const requestId = ++scanRequestRef.current;
     setIsLoading(true);
     setError(null);
     try {
@@ -533,6 +535,7 @@ export default function App() {
           if (contentType && contentType.includes('application/json')) {
             const data = await res.json();
             if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+              if (requestId !== scanRequestRef.current) return;
               setCoins(data.data);
               setLastUpdated(Date.now());
               dataLoaded = true;
@@ -558,6 +561,7 @@ export default function App() {
           timeframe: currentTf,
         });
         if (directCoins.length > 0) {
+          if (requestId !== scanRequestRef.current) return;
           setCoins(directCoins);
           setLastUpdated(Date.now());
           dataLoaded = true;
@@ -566,7 +570,7 @@ export default function App() {
     } catch (err: any) {
       console.warn('Scan complete fallback error:', err);
     } finally {
-      setIsLoading(false);
+      if (requestId === scanRequestRef.current) setIsLoading(false);
     }
   }, [filters.timeframe, filters.exchange, filters.marketType, filters.minVolumeUsd, playAlertSound]);
 
@@ -976,7 +980,7 @@ export default function App() {
               <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 min-[2200px]:grid-cols-7 min-[2800px]:grid-cols-8 gap-3 sm:gap-4">
                 {flattenedItems.map(({ coin, formation }, idx) => (
                   <FormationCard
-                    key={`${coin.exchange}-${coin.symbol}-${coin.marketType}-${formation.id}-${idx}`}
+                    key={`${coin.exchange}-${coin.symbol}-${coin.marketType}-${formation.id}`}
                     coin={coin}
                     formation={formation}
                     isWatchlisted={watchlist.includes(coin.symbol)}
