@@ -534,9 +534,8 @@ export function formatSurveillanceTelegramMessage(
       ? `https://www.binance.com/uk-UA/trade/${coin.baseAsset}_${coin.quoteAsset}`
       : `https://www.bybit.com/trade/usdt/${coin.symbol}`;
 
-  return `🛰 <b>СИСТЕМНИЙ НАГЛЯД [SIGNALHOOK SURVEILLANCE]</b>
+  return `🛰 <b>#${symbol}</b> <code>$${priceStr}</code> <b>${exchangeUpper} ${marketUpper}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-💎 <b>#${symbol}</b> • <b>${exchangeUpper} ${marketUpper}</b>
 💰 <b>Ціна:</b> <code>$${priceStr}</code> (${changeStr})
 
 ${catIcon} <b>ТИП ПОДІЇ:</b> <b>${catName}</b>
