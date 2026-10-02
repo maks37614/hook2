@@ -321,6 +321,50 @@ function getExchangeUrl(exchange: ExchangeId, market: MarketType, symbol: string
 }
 
 // Main screener scan engine
+
+function roundStep(price: number): number {
+  if (!Number.isFinite(price) || price <= 0) return 0;
+  const base = 10 ** Math.floor(Math.log10(price));
+  return base >= 1000 ? base : base >= 100 ? base : base >= 10 ? base : base >= 1 ? base : base / 10;
+}
+
+async function findRoundNumberDensity(
+  exchange: ExchangeId,
+  marketType: MarketType,
+  symbol: string,
+  price: number
+): Promise<ScannedCoin['roundNumberDensity']> {
+  if (!Number.isFinite(price) || price <= 0) return undefined;
+  const step = roundStep(price);
+  if (!step) return undefined;
+  const level = Math.round(price / step) * step;
+  const distancePct = Math.abs(price - level) / price * 100;
+  const tolerancePct = Math.min(0.8, Math.max(0.12, step / price * 12));
+  if (distancePct > tolerancePct) return undefined;
+
+  const book = await fetchOrderBook(exchange, marketType, symbol, 50).catch(() => ({ bids: [], asks: [] } as any));
+  const levels: Array<{ price: number; quantity: number; side: 'BID' | 'ASK'; notional: number }> = [
+    ...(book.bids || []).map((x: [number, number]) => ({ price: x[0], quantity: x[1], side: 'BID' as const, notional: x[0] * x[1] })),
+    ...(book.asks || []).map((x: [number, number]) => ({ price: x[0], quantity: x[1], side: 'ASK' as const, notional: x[0] * x[1] })),
+  ].filter((x) => Number.isFinite(x.price) && Number.isFinite(x.notional) && x.notional > 0);
+  if (!levels.length) return undefined;
+  const near = levels.filter((x) => Math.abs(x.price - level) / Math.max(level, 1e-12) * 100 <= Math.max(tolerancePct, step / price * 3));
+  if (!near.length) return undefined;
+  const sorted = levels.map((x) => x.notional).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 1;
+  const best = near.sort((a, b) => b.notional - a.notional)[0];
+  const multiple = best.notional / Math.max(median, 1);
+  const quality = Math.round(Math.max(0, Math.min(100, 35 + Math.log10(Math.max(1, multiple)) * 45)));
+  if (multiple < 6 || quality < 70) return undefined;
+  return {
+    level: Number(level.toFixed(8)),
+    side: best.side,
+    notionalUsd: Number(best.notional.toFixed(2)),
+    distancePct: Number((Math.abs(best.price - level) / Math.max(level, 1e-12) * 100).toFixed(3)),
+    quality,
+  };
+}
+
 export async function runScreenerScan(params: {
   exchange: 'all' | ExchangeId;
   marketType: 'all' | MarketType;
@@ -388,7 +432,30 @@ export async function runScreenerScan(params: {
         const klines = await fetchKlines(ticker.exchange, ticker.marketType, ticker.symbol, params.timeframe, 70);
         if (!klines || klines.length < 25) return null;
 
-        const formations = detectFormations(klines, ticker.symbol);
+        const formations = detectFormations(klines, ticker.symbol).filter((f) => f.validation?.confirmed && f.validation?.passed);
+        const bestFormation = formations[0];
+        const roundNumberDensity = bestFormation
+          ? await findRoundNumberDensity(ticker.exchange, ticker.marketType, ticker.symbol, bestFormation.levels.necklinePrice ?? bestFormation.levels.entryPrice)
+          : undefined;
+        const enrichedFormations = roundNumberDensity
+          ? formations.map((f) => {
+              const ref = f.levels.necklinePrice ?? f.levels.entryPrice;
+              const same = Math.abs(ref - roundNumberDensity.level) / Math.max(roundNumberDensity.level, 1e-12) * 100 <= 0.8;
+              return same ? {
+                ...f,
+                roundNumberContext: {
+                  ...(f.roundNumberContext || { detected: true, distancePct: 0, step: 0, strength: 0 }),
+                  detected: true,
+                  level: roundNumberDensity.level,
+                  distancePct: roundNumberDensity.distancePct,
+                  densityConfirmed: true,
+                  densityUsd: roundNumberDensity.notionalUsd,
+                  side: roundNumberDensity.side,
+                  strength: Math.max(f.roundNumberContext?.strength || 0, roundNumberDensity.quality),
+                },
+              } : f;
+            })
+          : formations;
 
         const scanned: ScannedCoin = {
           symbol: ticker.symbol,
@@ -401,7 +468,8 @@ export async function runScreenerScan(params: {
           highPrice24h: ticker.high24h,
           lowPrice24h: ticker.low24h,
           volume24hUsd: ticker.volumeUsd,
-          formations,
+          formations: enrichedFormations,
+          roundNumberDensity,
           timeframe: params.timeframe,
           lastUpdated: Date.now(),
           exchangeUrl: getExchangeUrl(ticker.exchange, ticker.marketType, ticker.symbol),
