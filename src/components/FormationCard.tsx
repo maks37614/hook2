@@ -271,7 +271,7 @@ export const FormationCard: React.FC<FormationCardProps> = ({
                     aria-expanded={isConfluenceExpanded}
                     title={isConfluenceExpanded ? 'Сховати' : 'Показати'}
                   >
-                    <span className="text-slate-400">Потенціал:с</span>
+                    <span className="text-slate-400">Потенціал:</span>
                     <span className="flex items-center gap-1.5">
                       <span className="font-mono font-bold text-cyan-300">{formation.validation.confluence.total}/100 · {formation.validation.confluence.grade}</span>
                       <ChevronDown
