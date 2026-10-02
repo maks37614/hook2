@@ -12,6 +12,7 @@ import {
   BarChart2,
   X,
   RefreshCw,
+  ChevronDown,
 } from 'lucide-react';
 import { ScannedCoin, DetectedFormation, Kline, Timeframe } from '../types';
 import { formatCryptoPrice } from '../utils/formatters';
@@ -51,6 +52,7 @@ export const FormationCard: React.FC<FormationCardProps> = ({
   const [loadingKlines, setLoadingKlines] = useState<boolean>(false);
   const [cardTimeframe, setCardTimeframe] = useState<Timeframe>(coin.timeframe || '1h');
   const [livePrice, setLivePrice] = useState<number>(coin.currentPrice);
+  const [isConfluenceExpanded, setIsConfluenceExpanded] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isChartExpanded) return;
@@ -262,22 +264,38 @@ export const FormationCard: React.FC<FormationCardProps> = ({
               {/* Detailed confluence */}
               {formation.validation?.confluence && (
                 <div className="mt-2 border-t border-slate-800/70 pt-2">
-                  <div className="flex items-center justify-between text-[10px] mb-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsConfluenceExpanded((value) => !value)}
+                    className="w-full flex items-center justify-between text-[10px] hover:text-slate-200 transition-colors cursor-pointer"
+                    aria-expanded={isConfluenceExpanded}
+                    title={isConfluenceExpanded ? 'Сховати детальний конфлюенс' : 'Показати детальний конфлюенс'}
+                  >
                     <span className="text-slate-400">Детальний конфлюенс</span>
-                    <span className="font-mono font-bold text-cyan-300">{formation.validation.confluence.total}/100 · {formation.validation.confluence.grade}</span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 text-[8px]">
-                    {Object.entries(formation.validation.confluence.components).map(([key, item]) => (
-                      <div key={key} className="bg-slate-900/70 rounded px-1.5 py-1 border border-slate-800" title={item.evidence}>
-                        <div className="text-slate-500 truncate">{key}</div>
-                        <div className="font-mono text-slate-200">{item.score}/{item.max}</div>
+                    <span className="flex items-center gap-1.5">
+                      <span className="font-mono font-bold text-cyan-300">{formation.validation.confluence.total}/100 · {formation.validation.confluence.grade}</span>
+                      <ChevronDown
+                        className={`w-3 h-3 text-slate-500 transition-transform ${isConfluenceExpanded ? 'rotate-180' : ''}`}
+                      />
+                    </span>
+                  </button>
+
+                  {isConfluenceExpanded && (
+                    <div className="mt-1">
+                      <div className="grid grid-cols-3 gap-1 text-[8px]">
+                        {Object.entries(formation.validation.confluence.components).map(([key, item]) => (
+                          <div key={key} className="bg-slate-900/70 rounded px-1.5 py-1 border border-slate-800" title={item.evidence}>
+                            <div className="text-slate-500 truncate">{key}</div>
+                            <div className="font-mono text-slate-200">{item.score}/{item.max}</div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                  {(formation.validation.confluence.conflicts.length > 0 || formation.validation.confluence.missing.length > 0) && (
-                    <div className="mt-1 text-[8px] text-amber-300">
-                      {formation.validation.confluence.conflicts.slice(0, 2).join(' · ')}
-                      {formation.validation.confluence.missing.length > 0 && ` Очікується: ${formation.validation.confluence.missing.slice(0, 2).join(', ')}`}
+                      {(formation.validation.confluence.conflicts.length > 0 || formation.validation.confluence.missing.length > 0) && (
+                        <div className="mt-1 text-[8px] text-amber-300">
+                          {formation.validation.confluence.conflicts.slice(0, 2).join(' · ')}
+                          {formation.validation.confluence.missing.length > 0 && ` Очікується: ${formation.validation.confluence.missing.slice(0, 2).join(', ')}`}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
