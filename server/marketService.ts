@@ -432,7 +432,7 @@ export async function runScreenerScan(params: {
         const klines = await fetchKlines(ticker.exchange, ticker.marketType, ticker.symbol, params.timeframe, 70);
         if (!klines || klines.length < 25) return null;
 
-        const formations = detectFormations(klines, ticker.symbol).filter((f) => f.validation?.confirmed && f.validation?.passed);
+        const formations = detectFormations(klines, ticker.symbol).filter((f) => f.validation && f.validation.enoughData && f.validation.finiteData);
         const bestFormation = formations[0];
         const roundNumberDensity = bestFormation
           ? await findRoundNumberDensity(ticker.exchange, ticker.marketType, ticker.symbol, bestFormation.levels.necklinePrice ?? bestFormation.levels.entryPrice)
