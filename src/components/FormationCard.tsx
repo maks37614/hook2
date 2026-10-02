@@ -269,9 +269,9 @@ export const FormationCard: React.FC<FormationCardProps> = ({
                     onClick={() => setIsConfluenceExpanded((value) => !value)}
                     className="w-full flex items-center justify-between text-[10px] hover:text-slate-200 transition-colors cursor-pointer"
                     aria-expanded={isConfluenceExpanded}
-                    title={isConfluenceExpanded ? 'Сховати детальний конфлюенс' : 'Показати детальний конфлюенс'}
+                    title={isConfluenceExpanded ? 'Сховати' : 'Показати'}
                   >
-                    <span className="text-slate-400">Детальний конфлюенс</span>
+                    <span className="text-slate-400">Потенціал:с</span>
                     <span className="flex items-center gap-1.5">
                       <span className="font-mono font-bold text-cyan-300">{formation.validation.confluence.total}/100 · {formation.validation.confluence.grade}</span>
                       <ChevronDown
