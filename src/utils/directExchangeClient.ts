@@ -432,7 +432,7 @@ export async function runDirectClientScan(params: {
       topCandidates.map(async (coin) => {
         try {
           const klines = await fetchDirectKlines(coin.exchange, coin.marketType, coin.symbol, params.timeframe, 60);
-          const formations = klines.length >= 20 ? detectFormations(klines, coin.symbol).filter((f) => f.validation?.confirmed && f.validation?.passed) : [];
+          const formations = klines.length >= 20 ? detectFormations(klines, coin.symbol).filter((f) => f.validation && f.validation.enoughData && f.validation.finiteData) : [];
 
           scanned.push({
             symbol: coin.symbol,
