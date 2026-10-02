@@ -1,5 +1,8 @@
 import { Kline, DetectedFormation, PatternStatus } from '../types';
 import { formatCryptoPrice } from './formatters';
+import { applyExtremeContext } from './extremeAnalysis';
+import { validateFormationSet, swingTolerancePct, normalizeKlineTimeMs } from './formationValidation';
+import { analyzeRoundNumber } from './roundNumber';
 
 interface SwingPoint {
   index: number;
@@ -14,28 +17,26 @@ interface SwingPoint {
 export function findSwingPoints(klines: Kline[], window: number = 3): SwingPoint[] {
   const points: SwingPoint[] = [];
   if (klines.length < window * 2 + 1) return points;
+  const lastClosedIndex = klines.length - 1;
+  const tolerancePct = swingTolerancePct(klines, klines[lastClosedIndex].close);
+  const tolerance = tolerancePct / 100;
 
-  for (let i = window; i < klines.length - window; i++) {
+  // A swing is usable only after the right-side confirmation window has
+  // CLOSED. This prevents a backtest/live scan from treating a future candle
+  // as if it were already known at the swing timestamp.
+  for (let i = window; i <= lastClosedIndex - window; i++) {
     const currentHigh = klines[i].high;
     const currentLow = klines[i].low;
-
     let isHigh = true;
     let isLow = true;
-
     for (let j = i - window; j <= i + window; j++) {
       if (j === i) continue;
-      if (klines[j].high >= currentHigh) isHigh = false;
-      if (klines[j].low <= currentLow) isLow = false;
+      if (klines[j].high > currentHigh * (1 - tolerance)) isHigh = false;
+      if (klines[j].low < currentLow * (1 + tolerance)) isLow = false;
     }
-
-    if (isHigh) {
-      points.push({ index: i, time: klines[i].time, price: currentHigh, type: 'high' });
-    }
-    if (isLow) {
-      points.push({ index: i, time: klines[i].time, price: currentLow, type: 'low' });
-    }
+    if (isHigh) points.push({ index: i, time: klines[i].time, price: currentHigh, type: 'high' });
+    if (isLow) points.push({ index: i, time: klines[i].time, price: currentLow, type: 'low' });
   }
-
   return points.sort((a, b) => a.index - b.index);
 }
 
@@ -144,6 +145,19 @@ function finalizeFormationGeometry(
 export function detectFormations(klines: Kline[], symbol: string): DetectedFormation[] {
   if (!klines || klines.length < 30) return [];
 
+  // Closed-candle boundary. Exchange timestamps may be seconds or milliseconds.
+  // Never compare a seconds timestamp directly to Date.now().
+  const raw = [...klines]
+    .filter((k) => k && [k.time, k.open, k.high, k.low, k.close, k.volume].every(Number.isFinite))
+    .sort((a, b) => a.time - b.time);
+  if (raw.length < 30) return [];
+  const intervalMs = raw.length >= 3
+    ? Math.max(1000, normalizeKlineTimeMs(raw[raw.length - 1].time) - normalizeKlineTimeMs(raw[raw.length - 2].time))
+    : 0;
+  const lastLooksLive = intervalMs > 0 && Date.now() < normalizeKlineTimeMs(raw[raw.length - 1].time) + intervalMs;
+  klines = lastLooksLive ? raw.slice(0, -1) : raw;
+  if (klines.length < 30) return [];
+
   const formations: DetectedFormation[] = [];
   const currentCandle = klines[klines.length - 1];
   const currentPrice = currentCandle.close;
@@ -211,7 +225,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                   nameEn: 'Double Bottom',
                   category: 'reversal',
                   bias: 'bullish',
-                  confidence: Math.round(80 + (1 - priceDiffPct / 0.025) * 15),
+                  confidence: 50,
                   status,
                   statusLabel,
                   description: `Подвійний відскок від зони підтримки $${formatCryptoPrice(bottomPrice)}. Лінія шиї (ключовий опір) на рівні $${formatCryptoPrice(neckline)}. Проєкція цілі патерну: $${formatCryptoPrice(targetPrice)}.`,
@@ -294,7 +308,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                   nameEn: 'Double Top',
                   category: 'reversal',
                   bias: 'bearish',
-                  confidence: Math.round(78 + (1 - priceDiffPct / 0.025) * 17),
+                  confidence: 50,
                   status,
                   statusLabel,
                   description: `Подвійний відскок від рівня опору $${formatCryptoPrice(topPrice)}. Лінія шиї (підтримка) на рівні $${formatCryptoPrice(neckline)}. Пробій вниз відкриває ціль на рівні $${formatCryptoPrice(targetPrice)}.`,
@@ -375,7 +389,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
               nameEn: 'Ascending Triangle',
               category: 'breakout',
               bias: 'bullish',
-              confidence: 86,
+              confidence: 50,
               status,
               statusLabel,
               description: `Бичаче підтискання до горизонтального опору $${formatCryptoPrice(resistance)} із серією вищих мінімумів. Розрахункова ціль пробою: $${formatCryptoPrice(targetPrice)}.`,
@@ -451,7 +465,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
               nameEn: 'Descending Triangle',
               category: 'breakout',
               bias: 'bearish',
-              confidence: 84,
+              confidence: 50,
               status,
               statusLabel,
               description: `Ведмеже підтискання до горизонтальної підтримки $${formatCryptoPrice(support)} із послідовним зниженням максимумів. Ціль падіння: $${formatCryptoPrice(targetPrice)}.`,
@@ -523,7 +537,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                 nameEn: 'Bull Flag',
                 category: 'continuation',
                 bias: 'bullish',
-                confidence: 88,
+                confidence: 50,
                 status,
                 statusLabel,
                 description: `Імпульсне зростання (+${(impulseGrowth * 100).toFixed(1)}%) перейшло в консолідацію. Розрахункова ціль другого імпульсу: $${formatCryptoPrice(targetPrice)}.`,
@@ -596,7 +610,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                 nameEn: 'Bear Flag',
                 category: 'continuation',
                 bias: 'bearish',
-                confidence: 85,
+                confidence: 50,
                 status,
                 statusLabel,
                 description: `Імпульсне падіння (-${(impulseDrop * 100).toFixed(1)}%) з наступним відкатом. Очікуване продовження шорт-руху до цілі: $${formatCryptoPrice(targetPrice)}.`,
@@ -664,7 +678,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             nameEn: status === 'retest' ? 'Level Retest' : 'Resistance Breakout',
             category: 'breakout',
             bias: 'bullish',
-            confidence: 89,
+            confidence: 50,
             status,
             statusLabel,
             description: `Ключовий рівень $${formatCryptoPrice(maxHigh)} протестовано ${touches} рази. Розрахункова ціль імпульсу: $${formatCryptoPrice(targetPrice)}.`,
@@ -696,9 +710,13 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
     if (avgRecentRange <= avgPriorRange * 0.48 && avgRecentRange > 0) {
       const highest10 = Math.max(...recent10.map((c) => c.high));
       const lowest10 = Math.min(...recent10.map((c) => c.low));
-      const targetPrice = highest10 * 1.045;
-      const stopLossPrice = lowest10 * 0.985;
-      const entryPrice = currentPrice >= highest10 ? currentPrice : highest10;
+      const breakoutUp = currentPrice >= highest10;
+      const breakoutDown = currentPrice <= lowest10;
+      const bias = breakoutUp ? 'bullish' : breakoutDown ? 'bearish' : 'neutral';
+      const entryPrice = breakoutUp ? currentPrice : breakoutDown ? currentPrice : (highest10 + lowest10) / 2;
+      const riskBase = Math.max(highest10 - lowest10, currentPrice * 0.005);
+      const targetPrice = breakoutUp ? currentPrice + riskBase * 2.2 : breakoutDown ? currentPrice - riskBase * 2.2 : highest10;
+      const stopLossPrice = breakoutUp ? lowest10 : breakoutDown ? highest10 : lowest10;
 
       formations.push(
         finalizeFormationGeometry(
@@ -708,10 +726,10 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             name: 'Стиснення діапазону (Squeeze)',
             nameEn: 'Volatility Squeeze',
             category: 'compression',
-            bias: 'bullish',
-            confidence: 82,
-            status: currentPrice >= highest10 ? 'breakout' : 'ready_to_break',
-            statusLabel: currentPrice >= highest10 ? 'Вихід з накопичення' : 'Накопичення перед імпульсом',
+            bias,
+            confidence: breakoutUp || breakoutDown ? 60 : 0,
+            status: breakoutUp || breakoutDown ? 'breakout' : 'ready_to_break',
+            statusLabel: breakoutUp ? 'Підтверджений вихід вгору' : breakoutDown ? 'Підтверджений вихід вниз' : 'Очікування напрямку breakout',
             description: `Волатильність стиснулася більш ніж удвічі. Діапазон накопичення: [$${formatCryptoPrice(lowest10)} - $${formatCryptoPrice(highest10)}]. Ціль виходу вгору: $${formatCryptoPrice(targetPrice)}.`,
             levels: {
               entryPrice,
@@ -736,11 +754,15 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
     const c0Body = Math.abs(c0.close - c0.open);
     const c0Range = c0.high - c0.low;
     const c1Body = Math.abs(c1.close - c1.open);
+    const candleVolumeSample = klines.slice(-21, -1);
+    const candleAvgVolume = candleVolumeSample.length ? candleVolumeSample.reduce((sum, c) => sum + c.volume, 0) / candleVolumeSample.length : 0;
+    const candleRvol = candleAvgVolume > 0 ? c0.volume / candleAvgVolume : 0;
+    const candleVolumeConfirmed = candleRvol >= 1.0;
 
     // Pinbar / Hammer (Бичачий молот)
     const lowerWick = Math.min(c0.open, c0.close) - c0.low;
     const upperWick = c0.high - Math.max(c0.open, c0.close);
-    if (c0Range > 0 && lowerWick >= c0Range * 0.6 && upperWick <= c0Range * 0.15) {
+    if (candleVolumeConfirmed && c0Range > 0 && lowerWick >= c0Range * 0.6 && upperWick <= c0Range * 0.15) {
       const target = c0.close + Math.max(lowerWick * 1.5, c0.close * 0.025);
       const stopLoss = c0.low * 0.995;
 
@@ -753,7 +775,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             nameEn: 'Hammer / Bullish Pinbar',
             category: 'candlestick',
             bias: 'bullish',
-            confidence: 81,
+            confidence: 50,
             status: 'breakout',
             statusLabel: 'Сильний викуп проливу',
             description: `Довга нижня тінь (${((lowerWick / c0Range) * 100).toFixed(0)}% свічки) підтверджує активність лімітного покупця. Ціль відскоку: $${formatCryptoPrice(target)}.`,
@@ -771,7 +793,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
     }
 
     // Shooting Star (Падаюча зірка / Ведмежий пін-бар)
-    if (c0Range > 0 && upperWick >= c0Range * 0.6 && lowerWick <= c0Range * 0.15) {
+    if (candleVolumeConfirmed && c0Range > 0 && upperWick >= c0Range * 0.6 && lowerWick <= c0Range * 0.15) {
       const target = c0.close - Math.max(upperWick * 1.5, c0.close * 0.025);
       const stopLoss = c0.high * 1.005;
 
@@ -784,7 +806,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             nameEn: 'Shooting Star',
             category: 'candlestick',
             bias: 'bearish',
-            confidence: 80,
+            confidence: 50,
             status: 'breakout',
             statusLabel: 'Відмова на максимумах',
             description: `Довга верхня тінь (${((upperWick / c0Range) * 100).toFixed(0)}% свічки) свідчить про тиск продавців. Ціль корекції: $${formatCryptoPrice(target)}.`,
@@ -802,7 +824,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
     }
 
     // Bullish Engulfing (Бичаче поглинання)
-    if (c1.close < c1.open && c0.close > c0.open && c0.close > c1.open && c0.open < c1.close && c0Body > c1Body * 1.2) {
+    if (candleVolumeConfirmed && c1.close < c1.open && c0.close > c0.open && c0.close > c1.open && c0.open < c1.close && c0Body > c1Body * 1.2) {
       const target = c0.close + Math.max(c0Body * 1.8, c0.close * 0.025);
       const stopLoss = Math.min(c0.low, c1.low) * 0.995;
 
@@ -815,7 +837,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             nameEn: 'Bullish Engulfing',
             category: 'candlestick',
             bias: 'bullish',
-            confidence: 83,
+            confidence: 50,
             status: 'breakout',
             statusLabel: 'Імпульс покупців',
             description: `Зелена свічка повністю перекрила попередню свічку на зростаючому обсязі. Орієнтир для фіксації прибутку: $${formatCryptoPrice(target)}.`,
@@ -833,7 +855,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
     }
 
     // Bearish Engulfing (Ведмеже поглинання)
-    if (c1.close > c1.open && c0.close < c0.open && c0.close < c1.open && c0.open > c1.close && c0Body > c1Body * 1.2) {
+    if (candleVolumeConfirmed && c1.close > c1.open && c0.close < c0.open && c0.close < c1.open && c0.open > c1.close && c0Body > c1Body * 1.2) {
       const target = c0.close - Math.max(c0Body * 1.8, c0.close * 0.025);
       const stopLoss = Math.max(c0.high, c1.high) * 1.005;
 
@@ -846,7 +868,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             nameEn: 'Bearish Engulfing',
             category: 'candlestick',
             bias: 'bearish',
-            confidence: 82,
+            confidence: 50,
             status: 'breakout',
             statusLabel: 'Імпульс продавців',
             description: `Червона свічка повністю перекрила тіло попередньої свічки. Очікувана ціль падіння: $${formatCryptoPrice(target)}.`,
@@ -864,5 +886,31 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
     }
   }
 
-  return formations;
+  const volumeSample = klines.slice(-21, -1);
+  const avgVolume = volumeSample.length ? volumeSample.reduce((sum, c) => sum + c.volume, 0) / volumeSample.length : 0;
+  const lastClosed = klines[klines.length - 1];
+  const enriched = formations.map((formation) => {
+    return formation;
+  });
+
+  // Location matters: a formation is materially stronger when it develops at a
+  // meaningful rolling/swing extreme and price approaches that extreme in the
+  // direction implied by the setup. This is also used to suppress reversal
+  // candidates that form in the middle of a range.
+  const withExtreme = applyExtremeContext(klines, enriched);
+  const withValidation = validateFormationSet(klines, withExtreme, symbol);
+  return withValidation.map((formation) => {
+    const reference = formation.levels.necklinePrice ?? formation.levels.entryPrice;
+    const roundNumberContext = analyzeRoundNumber(klines, reference);
+    const roundBonus = roundNumberContext.detected ? 4 : 0;
+    return {
+      ...formation,
+      confidence: formation.validation?.confluence ? Math.round(formation.validation.confluence.total) : formation.confidence,
+      roundNumberContext,
+      statusLabel: roundNumberContext.detected
+        ? `${formation.statusLabel} · кругле число`
+        : formation.statusLabel,
+      description: `${formation.description}${roundNumberContext.detected ? ` Ключова кругла ціна: $${formatCryptoPrice(roundNumberContext.level || reference)}.` : ''}`
+    };
+  });
 }
