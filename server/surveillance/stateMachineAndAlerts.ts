@@ -68,7 +68,7 @@ ${ex} ${mkt}
 ━━━━━━━━━━━━
 
 <b>СТАКАН ТА ЩІЛЬНОСТІ</b>
-• <b>Order Book:</b> ${setup.evidence.densityPresence}
+• <b>Стакан:</b> ${setup.evidence.densityPresence}
 
 ━━━━━━━━━━━━
 
@@ -84,7 +84,7 @@ ${ex} ${mkt}
 ━━━━━━━━━━━━
 
 <b>СЕТАП & КОНФЛЮЕНС</b>
-<b>Тип:</b> SUPPORT RETEST
+<b>Тип:</b> ПОВТОРНЕ ТЕСТУВАННЯ ПІДТРИМКИ
 <b>Підтвердження:</b>
 ${setup.confirmations.map((c) => `• ✓ ${c}`).join('\n') || '• Очікування'}
 
@@ -110,12 +110,12 @@ ${exchange.toUpperCase()}
 <b>Підтверджених дотиків:</b> ${item.touchCount}
 <b>Компресія:</b> ${item.compression ? 'ТАК (Higher Lows / Lower Highs)' : 'Ні'}
 ${item.askDensityUsd ? `<b>Ask Density:</b> $${(item.askDensityUsd / 1000000).toFixed(2)}M\n` : ''}${item.bidDensityUsd ? `<b>Bid Density:</b> $${(item.bidDensityUsd / 1000000).toFixed(2)}M\n` : ''}
-<b>СТАТУС:</b> <b>WATCH THIRD TOUCH</b>`;
+<b>СТАТУС:</b> <b>Стежте за третім підходом</b>`;
   }
 
   // Telegram Density message (#85)
   public formatDensityMessage(density: DensityItem, symbol: string, exchange: string): string {
-    return `💧 <b>SIGNIFICANT DENSITY DETECTED</b>
+    return `💧 <b>Виявлено значну щільність</b>
 
 <b>${symbol}</b>
 ${exchange.toUpperCase()}
@@ -130,7 +130,7 @@ ${exchange.toUpperCase()}
 
   // Telegram OI message (#86)
   public formatOIMessage(oi: OISnapshot, symbol: string, currentPrice: number): string {
-    return `🚨 <b>OPEN INTEREST ANOMALY</b>
+    return `🚨 <b>OPEN INTEREST АНОМАЛЬНА АКТИВНІСТЬ</b>
 
 <b>${symbol}</b>
 
@@ -144,7 +144,7 @@ ${exchange.toUpperCase()}
 
   // Telegram Structure message (#88)
   public formatStructureMessage(symbol: string, tf: string, eventName: string, price: number): string {
-    return `📊 <b>STRUCTURE CHANGE (${eventName})</b>
+    return `📊 <b>Зміна структури (${eventName})</b>
 
 <b>${symbol}</b>
 <b>Timeframe:</b> ${tf.toUpperCase()}
