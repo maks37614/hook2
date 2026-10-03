@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { runScreenerScan, fetchKlines, fetchMarketCoins, fetchOrderBook, fetchRecentTrades, fetchDualExchangeOI } from './server/marketService';
+import { getMarketSourceStatuses } from './server/marketTickerFeed';
 import { analyzeFormationWithAI } from './server/geminiService';
 import { generateSmartAnalysis } from './server/smartAnalysisService';
 import { calculateMarketSentiment } from './server/sentimentService';
@@ -188,6 +189,13 @@ async function startServer() {
       const minVolumeUsd = req.query.minVolume !== undefined ? parseFloat(req.query.minVolume as string) : 50_000;
       const maxVolumeUsd = req.query.maxVolume !== undefined ? parseFloat(req.query.maxVolume as string) : 10_000_000_000;
 
+      if (!['all', 'binance', 'bybit'].includes(exchange) || !['all', 'spot', 'futures'].includes(marketType)
+        || !Number.isFinite(minVolumeUsd) || !Number.isFinite(maxVolumeUsd)
+        || minVolumeUsd < 0 || maxVolumeUsd < minVolumeUsd) {
+        res.status(400).json({ success: false, error: 'Некоректні параметри біржі, ринку або обсягу' });
+        return;
+      }
+
       const coins = await fetchMarketCoins({
         exchange,
         marketType,
@@ -195,11 +203,18 @@ async function startServer() {
         maxVolumeUsd,
       });
 
-      res.json({
-        success: true,
+      const sources = getMarketSourceStatuses({ exchange, marketType });
+      const available = sources.filter(source => source.status !== 'unavailable');
+      const success = available.length > 0;
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(success ? 200 : 503).json({
+        success,
         count: coins.length,
         data: coins,
-        timestamp: Date.now(),
+        timestamp: success ? Math.min(...available.map(source => source.updatedAt!)) : null,
+        sources,
+        partial: sources.some(source => source.status !== 'live'),
+        ...(!success ? { error: sources.map(source => `${source.exchange} ${source.marketType}: ${source.error || 'дані недоступні'}`).join('; ') } : {}),
       });
     } catch (err: any) {
       console.error('Error fetching screener coins:', err);

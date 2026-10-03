@@ -1,5 +1,6 @@
 import { ExchangeId, MarketType, Timeframe, Kline, ScannedCoin, MarketCoin } from '../src/types';
 import { detectFormations } from '../src/utils/patternRecognition';
+import { marketTickerFeed, type RawTicker } from './marketTickerFeed';
 
 // Cache structure
 interface CacheEntry {
@@ -35,127 +36,14 @@ function toBybitInterval(tf: Timeframe): string {
   }
 }
 
-interface RawTicker {
-  symbol: string;
-  baseAsset: string;
-  quoteAsset: string;
-  exchange: ExchangeId;
-  marketType: MarketType;
-  price: number;
-  change24h: number;
-  volumeUsd: number;
-  high24h: number;
-  low24h: number;
+const BROWSER_HEADERS = { 'User-Agent': 'SignalHook/1.0', Accept: 'application/json' };
+
+async function fetchBinanceTickers(market: MarketType, minVolume = 0, maxVolume = 10_000_000_000): Promise<RawTicker[]> {
+  return (await marketTickerFeed.get('binance', market)).filter(t => t.volumeUsd >= minVolume && t.volumeUsd <= maxVolume);
 }
 
-const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'application/json',
-};
-
-// Fetch tickers from Binance with multi-mirror resilience (handles geoblocking on cloud servers like Railway)
-async function fetchBinanceTickers(market: MarketType, minVolume: number = 0, maxVolume: number = 10_000_000_000): Promise<RawTicker[]> {
-  const mirrors = market === 'futures'
-    ? [
-        'https://fapi.binance.com/fapi/v1/ticker/24hr',
-        'https://fapi1.binance.com/fapi/v1/ticker/24hr',
-        'https://fapi2.binance.com/fapi/v1/ticker/24hr',
-      ]
-    : [
-        'https://data-api.binance.vision/api/v3/ticker/24hr',
-        'https://api.binance.com/api/v3/ticker/24hr',
-        'https://api1.binance.com/api/v3/ticker/24hr',
-        'https://api2.binance.com/api/v3/ticker/24hr',
-      ];
-
-  for (const url of mirrors) {
-    try {
-      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) continue;
-
-      const tickers = data
-        .filter((item: any) => item.symbol && item.symbol.endsWith('USDT'))
-        .map((item: any) => {
-          const symbol = item.symbol;
-          const base = symbol.replace('USDT', '');
-          return {
-            symbol,
-            baseAsset: base,
-            quoteAsset: 'USDT',
-            exchange: 'binance' as ExchangeId,
-            marketType: market,
-            price: parseFloat(item.lastPrice) || 0,
-            change24h: parseFloat(item.priceChangePercent) || 0,
-            volumeUsd: parseFloat(item.quoteVolume) || 0,
-            high24h: parseFloat(item.highPrice) || 0,
-            low24h: parseFloat(item.lowPrice) || 0,
-          };
-        })
-        .filter((t) => t.volumeUsd >= minVolume && t.volumeUsd <= maxVolume && t.price > 0)
-        .sort((a, b) => b.volumeUsd - a.volumeUsd);
-
-      if (tickers.length > 0) {
-        return tickers;
-      }
-    } catch {
-      // Try next mirror
-    }
-  }
-
-  return [];
-}
-
-// Fetch tickers from Bybit with backup domain support
-async function fetchBybitTickers(market: MarketType, minVolume: number = 0, maxVolume: number = 10_000_000_000): Promise<RawTicker[]> {
-  const category = market === 'futures' ? 'linear' : 'spot';
-  const mirrors = [
-    `https://api.bybit.com/v5/market/tickers?category=${category}`,
-    `https://api.bytick.com/v5/market/tickers?category=${category}`,
-  ];
-
-  for (const url of mirrors) {
-    try {
-      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const list = json?.result?.list;
-      if (!Array.isArray(list) || list.length === 0) continue;
-
-      const tickers = list
-        .filter((item: any) => item.symbol && item.symbol.endsWith('USDT'))
-        .map((item: any) => {
-          const symbol = item.symbol;
-          const base = symbol.replace('USDT', '');
-          const volumeUsd = parseFloat(item.turnover24h) || 0;
-          const changePcnt = (parseFloat(item.price24hPcnt) || 0) * 100;
-
-          return {
-            symbol,
-            baseAsset: base,
-            quoteAsset: 'USDT',
-            exchange: 'bybit' as ExchangeId,
-            marketType: market,
-            price: parseFloat(item.lastPrice) || 0,
-            change24h: changePcnt,
-            volumeUsd,
-            high24h: parseFloat(item.highPrice24h) || 0,
-            low24h: parseFloat(item.lowPrice24h) || 0,
-          };
-        })
-        .filter((t) => t.volumeUsd >= minVolume && t.volumeUsd <= maxVolume && t.price > 0)
-        .sort((a, b) => b.volumeUsd - a.volumeUsd);
-
-      if (tickers.length > 0) {
-        return tickers;
-      }
-    } catch {
-      // Try next mirror
-    }
-  }
-
-  return [];
+async function fetchBybitTickers(market: MarketType, minVolume = 0, maxVolume = 10_000_000_000): Promise<RawTicker[]> {
+  return (await marketTickerFeed.get('bybit', market)).filter(t => t.volumeUsd >= minVolume && t.volumeUsd <= maxVolume);
 }
 
 // In-memory cache for high-frequency kline requests to reduce latency to < 1ms
@@ -486,9 +374,8 @@ export async function runScreenerScan(params: {
   return scannedCoins;
 }
 
-// Fast coin list cache for the dedicated Screener page
-const coinListCache = new Map<string, { timestamp: number; data: MarketCoin[] }>();
-const COIN_LIST_CACHE_TTL = 15 * 1000; // 15 seconds
+// Optional volatility enrichment must never delay the current quote snapshot.
+let volatilityRefresh: Promise<unknown> | null = null;
 
 // Cache for 5m volatility per coin
 const volatility5mCache = new Map<string, { timestamp: number; volatility5mPct: number }>();
@@ -549,7 +436,7 @@ async function resolve5mVolatilityForCoins(
   const priorityCoins = toFetch.slice(0, 100);
   const remainingCoins = toFetch.slice(100);
 
-  // For remaining lower-volume coins, provide accurate 5m volatility scaled from intraday range
+  // Lower-volume coins keep an estimate until their 5m candles are requested.
   for (const c of remainingCoins) {
     const key = `${c.exchange}_${c.symbol}_${c.marketType}`;
     const est5m = Number(Math.max(0.05, c.volatility24hPct * 0.12).toFixed(2));
@@ -562,7 +449,7 @@ async function resolve5mVolatilityForCoins(
   const otherPairs: typeof coins = [];
 
   for (const c of priorityCoins) {
-    if (c.exchange === 'binance' && spotSymbols.has(c.symbol)) {
+    if (c.exchange === 'binance' && c.marketType === 'spot' && spotSymbols.has(c.symbol)) {
       binanceSpotPairs.push(c.symbol);
     } else {
       otherPairs.push(c);
@@ -588,9 +475,7 @@ async function resolve5mVolatilityForCoins(
               const low = parseFloat(item.lowPrice) || 0;
               if (low > 0 && high >= low) {
                 const vol5m = Number((((high - low) / low) * 100).toFixed(2));
-                result.set(`binance_${symbol}_futures`, vol5m);
                 result.set(`binance_${symbol}_spot`, vol5m);
-                volatility5mCache.set(`binance_${symbol}_futures`, { timestamp: now, volatility5mPct: vol5m });
                 volatility5mCache.set(`binance_${symbol}_spot`, { timestamp: now, volatility5mPct: vol5m });
               }
             }
@@ -659,13 +544,6 @@ export async function fetchMarketCoins(params: {
   const marketType = params.marketType || 'all';
   const minVol = params.minVolumeUsd !== undefined ? params.minVolumeUsd : 50_000;
   const maxVol = params.maxVolumeUsd !== undefined ? params.maxVolumeUsd : 10_000_000_000;
-  const cacheKey = `coins_${exchange}_${marketType}_${minVol}_${maxVol}`;
-
-  const cached = coinListCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < COIN_LIST_CACHE_TTL) {
-    return cached.data;
-  }
-
   const tickerPromises: Promise<RawTicker[]>[] = [];
 
   if (exchange === 'all' || exchange === 'binance') {
@@ -736,40 +614,18 @@ export async function fetchMarketCoins(params: {
   // Sort by volume descending by default
   coins.sort((a, b) => b.volumeUsd - a.volumeUsd);
 
-  // Calculate 5m timeframe volatility for coins
-  if (coins.length > 0) {
-    try {
-      const vol5mMap = await resolve5mVolatilityForCoins(
-        coins.map((c) => ({
-          exchange: c.exchange,
-          symbol: c.symbol,
-          marketType: c.marketType,
-          volatility24hPct: c.volatility24hPct,
-        }))
-      );
-
-      for (const coin of coins) {
-        const key = `${coin.exchange}_${coin.symbol}_${coin.marketType}`;
-        const vol5m = vol5mMap.get(key);
-        if (vol5m !== undefined) {
-          coin.volatility5mPct = vol5m;
-        }
-        // Active coin check taking 5m timeframe volatility into account
-        const effectiveVol = coin.volatility5mPct ?? (coin.volatility24hPct * 0.12);
-        coin.isActiveCoin =
-          (effectiveVol >= 0.8 && coin.volumeUsd >= 1_000_000) ||
-          coin.volatility24hPct >= 4 ||
-          Math.abs(coin.change24h) >= 5;
-      }
-    } catch (err) {
-      console.warn('Error resolving 5m volatility:', err);
-    }
+  for (const coin of coins) {
+    const cached = volatility5mCache.get(`${coin.exchange}_${coin.symbol}_${coin.marketType}`);
+    if (cached && Date.now() - cached.timestamp < VOL_5M_CACHE_TTL) coin.volatility5mPct = cached.volatility5mPct;
+    const effectiveVol = coin.volatility5mPct ?? coin.volatility24hPct * 0.12;
+    coin.isActiveCoin = (effectiveVol >= 0.8 && coin.volumeUsd >= 1_000_000)
+      || coin.volatility24hPct >= 4 || Math.abs(coin.change24h) >= 5;
   }
-
-  coinListCache.set(cacheKey, {
-    timestamp: Date.now(),
-    data: coins,
-  });
+  if (coins.length && !volatilityRefresh) {
+    volatilityRefresh = resolve5mVolatilityForCoins(coins)
+      .catch(err => console.warn('Error resolving 5m volatility:', err))
+      .finally(() => { volatilityRefresh = null; });
+  }
 
   return coins;
 }
@@ -1242,4 +1098,3 @@ export async function fetchDualExchangeOI(
   oiResultCache.set(cacheKey, { timestamp: Date.now(), data: result });
   return result;
 }
-
