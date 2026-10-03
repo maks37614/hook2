@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Search,
   SlidersHorizontal,
@@ -42,10 +42,9 @@ import { getStoredPreferences, useAppPreferences } from '../utils/userPreference
 import { MarketSentimentWidget } from './MarketSentimentWidget';
 import { useLanguage } from '../context/LanguageContext';
 import {
-  fetchDirectBinanceTickers,
-  fetchDirectBybitTickers,
   TOP_POPULAR_PAIRS,
 } from '../utils/directExchangeClient';
+import { loadMarketCoins } from '../utils/marketCoinLoader';
 
 interface CoinScreenerPageProps {
   onSelectCoin: (coin: ScannedCoin, formation?: DetectedFormation) => void;
@@ -159,69 +158,51 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   };
   const [displayLimit, setDisplayLimit] = useState<number>(50);
 
-  // Fetch coins from API with direct exchange fallback
+  const currentRequest = useRef<{ key: string; controller: AbortController } | null>(null);
+  const loadedSelection = useRef<string | null>(null);
+  const selectionKey = `${exchange}:${marketType}`;
+
   const fetchCoins = useCallback(async () => {
+    if (currentRequest.current?.key === selectionKey) return;
+    currentRequest.current?.controller.abort();
+    const request = { key: selectionKey, controller: new AbortController() };
+    currentRequest.current = request;
     setIsLoading(true);
     setError(null);
-    let dataLoaded = false;
-
-    try {
-      const params = new URLSearchParams({
-        exchange,
-        marketType,
-        minVolume: '0',
-      });
-      const res = await fetch(`/api/screener/coins?${params.toString()}`);
-      if (res.ok) {
-        const contentType = res.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          const data = await res.json();
-          if (data.success && Array.isArray(data.data) && data.data.length > 0) {
-            setCoins(data.data);
-            setLastUpdated(data.timestamp || Date.now());
-            dataLoaded = true;
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('Backend coins fetch failed, trying direct exchange access:', err);
-    }
-
-    if (!dataLoaded) {
-      try {
-        const [binanceCoins, bybitCoins] = await Promise.all([
-          exchange === 'all' || exchange === 'binance' ? fetchDirectBinanceTickers() : Promise.resolve([]),
-          exchange === 'all' || exchange === 'bybit' ? fetchDirectBybitTickers() : Promise.resolve([]),
-        ]);
-        const directCoins = [...binanceCoins, ...bybitCoins].filter(c => marketType === 'all' || c.marketType === marketType);
-        if (directCoins.length > 0) {
-          setCoins(directCoins);
-          setLastUpdated(Date.now());
-          dataLoaded = true;
-        }
-      } catch (directErr) {
-        console.warn('Direct exchange fetch failed:', directErr);
-      }
-    }
-
-    if (!dataLoaded) {
+    if (loadedSelection.current !== selectionKey) {
+      loadedSelection.current = null;
       setCoins([]);
-      setError('Не вдалося отримати актуальні дані біржі. Спробуйте оновити сторінку.');
+      setLastUpdated(null);
     }
-    setIsLoading(false);
-  }, [exchange, marketType, minVolumeUsd]);
+    try {
+      const snapshot = await loadMarketCoins({ exchange, marketType }, request.controller.signal);
+      if (currentRequest.current !== request || request.controller.signal.aborted) return;
+      setCoins(snapshot.coins);
+      setLastUpdated(snapshot.timestamp);
+      setError(snapshot.warning);
+      loadedSelection.current = selectionKey;
+    } catch (err) {
+      if (currentRequest.current !== request || request.controller.signal.aborted) return;
+      const message = err instanceof Error ? err.message : 'Не вдалося оновити дані бірж.';
+      setError(loadedSelection.current === selectionKey
+        ? `${message} Показано останні отримані дані; час їх отримання вказано над списком.`
+        : message);
+    } finally {
+      if (currentRequest.current === request) {
+        currentRequest.current = null;
+        setIsLoading(false);
+      }
+    }
+  }, [exchange, marketType, selectionKey]);
 
-  // Initial load and re-fetch when exchange/market/minVolume changes
   useEffect(() => {
-    fetchCoins();
-  }, [fetchCoins]);
-
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchCoins();
-    }, 30000);
-    return () => clearInterval(interval);
+    void fetchCoins();
+    const interval = setInterval(() => { void fetchCoins(); }, 30_000);
+    return () => {
+      clearInterval(interval);
+      currentRequest.current?.controller.abort();
+      currentRequest.current = null;
+    };
   }, [fetchCoins]);
 
   // Handle Preset Click

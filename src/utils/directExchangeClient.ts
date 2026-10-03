@@ -91,7 +91,18 @@ function getExchangeUrl(exchange: ExchangeId, market: MarketType, symbol: string
 /**
  * Direct client-side fetch from Binance (Futures + Spot multi-mirror)
  */
-export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
+export interface DirectTickerOptions {
+  marketType?: 'all' | MarketType;
+  minVolumeUsd?: number;
+  signal?: AbortSignal;
+}
+
+function tickerSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(4000);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+export async function fetchDirectBinanceTickers(options: DirectTickerOptions = {}): Promise<MarketCoin[]> {
   const futuresMirrors = [
     'https://fapi.binance.com/fapi/v1/ticker/24hr',
     'https://fapi1.binance.com/fapi/v1/ticker/24hr',
@@ -106,9 +117,11 @@ export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
   const seen = new Set<string>();
 
   // 1. Fetch Binance Futures
-  for (const url of futuresMirrors) {
+  for (const url of options.marketType === 'spot' ? [] : futuresMirrors) {
+    if (options.signal?.aborted) return coins;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(url, { signal: tickerSignal(options.signal) });
+      if ([403, 451, 429].includes(res.status)) break;
       if (!res.ok) continue;
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) continue;
@@ -126,7 +139,7 @@ export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
         const high = parseFloat(item.highPrice) || price;
         const low = parseFloat(item.lowPrice) || price;
 
-        if (price <= 0 || volumeUsd < 50_000 || volumeUsd > 10_000_000_000) continue;
+        if (price <= 0 || volumeUsd < (options.minVolumeUsd ?? 50_000) || volumeUsd > 10_000_000_000) continue;
         seen.add(key);
 
         const distanceToHighPct = high > 0 ? Math.max(0, ((high - price) / high) * 100) : 0;
@@ -159,9 +172,11 @@ export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
   }
 
   // 2. Fetch Binance Spot
-  for (const url of spotMirrors) {
+  for (const url of options.marketType === 'futures' ? [] : spotMirrors) {
+    if (options.signal?.aborted) return coins;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(url, { signal: tickerSignal(options.signal) });
+      if ([403, 451, 429].includes(res.status)) break;
       if (!res.ok) continue;
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) continue;
@@ -179,7 +194,7 @@ export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
         const high = parseFloat(item.highPrice) || price;
         const low = parseFloat(item.lowPrice) || price;
 
-        if (price <= 0 || volumeUsd < 50_000 || volumeUsd > 10_000_000_000) continue;
+        if (price <= 0 || volumeUsd < (options.minVolumeUsd ?? 50_000) || volumeUsd > 10_000_000_000) continue;
         seen.add(key);
 
         const distanceToHighPct = high > 0 ? Math.max(0, ((high - price) / high) * 100) : 0;
@@ -218,7 +233,7 @@ export async function fetchDirectBinanceTickers(): Promise<MarketCoin[]> {
 /**
  * Direct client-side fetch from Bybit (Linear Futures + Spot)
  */
-export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
+export async function fetchDirectBybitTickers(options: DirectTickerOptions = {}): Promise<MarketCoin[]> {
   const categories = [
     { cat: 'linear', market: 'futures' as MarketType },
     { cat: 'spot', market: 'spot' as MarketType },
@@ -232,12 +247,16 @@ export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
   const seen = new Set<string>();
 
   for (const { cat, market } of categories) {
+    if (options.marketType && options.marketType !== 'all' && options.marketType !== market) continue;
     for (const host of mirrors) {
+      if (options.signal?.aborted) return coins;
       try {
         const url = `${host}/v5/market/tickers?category=${cat}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        const res = await fetch(url, { signal: tickerSignal(options.signal) });
+        if ([403, 451, 429].includes(res.status)) break;
         if (!res.ok) continue;
         const json = await res.json();
+        if (json?.retCode !== 0) continue;
         const list = json?.result?.list;
         if (!Array.isArray(list) || list.length === 0) continue;
 
@@ -254,7 +273,7 @@ export async function fetchDirectBybitTickers(): Promise<MarketCoin[]> {
           const high = parseFloat(item.highPrice24h) || price;
           const low = parseFloat(item.lowPrice24h) || price;
 
-          if (price <= 0 || volumeUsd < 50_000 || volumeUsd > 10_000_000_000) continue;
+          if (price <= 0 || volumeUsd < (options.minVolumeUsd ?? 50_000) || volumeUsd > 10_000_000_000) continue;
           seen.add(key);
 
           const distanceToHighPct = high > 0 ? Math.max(0, ((high - price) / high) * 100) : 0;

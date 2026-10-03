@@ -54,6 +54,16 @@ test('HTTP tracking is explicit; deleting the last coin stays empty after refres
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   try {
     await start();
+    const marketResponse = await fetch(`${base}/api/screener/coins?minVolume=0`);
+    assert.equal(marketResponse.status, 503);
+    const market = await marketResponse.json();
+    assert.equal(market.success, false);
+    assert.equal(market.timestamp, null);
+    assert.equal(market.sources.length, 4);
+    assert.ok(market.sources.every((source: any) => source.status === 'unavailable' && source.httpStatus === 503));
+    for (const query of ['exchange=invalid', 'marketType=invalid', 'minVolume=NaN', 'minVolume=-1', 'minVolume=20&maxVolume=10']) {
+      assert.equal((await fetch(`${base}/api/screener/coins?${query}`)).status, 400);
+    }
     assert.deepEqual(await list('new-user'), []);
     const deleted = await fetch(`${base}/api/surveillance/owner-btc?userId=owner`, { method: 'DELETE' });
     assert.equal(deleted.status, 200);
