@@ -1,6 +1,7 @@
 import { EngineAlertEvent, SetupInstance, ThirdTouchTracker, DensityItem, OISnapshot, NewsItem } from './types';
 import { sendTelegramMessage } from '../telegramService';
 import { getUserTelegram } from '../alertService';
+import { notificationRouter, NotificationSource } from '../notificationRouter';
 
 function formatCryptoPrice(val: number): string {
   if (!val && val !== 0) return '0.00';
@@ -10,45 +11,98 @@ function formatCryptoPrice(val: number): string {
   return val.toFixed(8);
 }
 
+export interface AlertScope {
+  userId: string;
+  coinId?: string;
+  symbol: string;
+  exchange: string;
+  marketType: string;
+  source?: NotificationSource;
+}
+
 export class StateMachineAndAlerts {
-  private lastAlertTimestamps = new Map<string, number>();
+  public canSendAlert(
+    key: string,
+    eventType: string,
+    customCooldownMs?: number,
+    scope?: AlertScope
+  ): boolean {
+    if (scope) {
+      const scopedKey = notificationRouter.buildScopedKey({
+        source: scope.source || 'SURVEILLANCE',
+        userId: scope.userId,
+        coinId: scope.coinId,
+        symbol: scope.symbol,
+        exchange: scope.exchange,
+        marketType: scope.marketType,
+        eventType,
+        eventIdentity: key,
+      });
 
-  // Cooldown durations per alert type in ms
-  private readonly cooldowns: Record<string, number> = {
-    THIRD_TOUCH_APPROACHING: 15 * 60 * 1000,
-    THIRD_TOUCH_ACTIVE: 10 * 60 * 1000,
-    DENSITY_APPEARED: 15 * 60 * 1000,
-    DENSITY_PERSISTENT: 20 * 60 * 1000,
-    OI_ANOMALY: 12 * 60 * 1000,
-    FORMATION_DETECTED: 30 * 60 * 1000,
-    BREAKOUT_REALTIME: 10 * 60 * 1000,
-    BREAKOUT_CONFIRMED: 20 * 60 * 1000,
-    SUPPORT_RETEST_WATCH: 15 * 60 * 1000,
-    SUPPORT_RETEST_CONFIRMED: 20 * 60 * 1000,
-    IMPULSE: 10 * 60 * 1000,
-    SESSION_CHANGED: 60 * 60 * 1000,
-    NEWS: 30 * 60 * 1000,
-    STRUCTURE_SHIFT: 20 * 60 * 1000,
-  };
+      const res = notificationRouter.shouldNotify({
+        source: scope.source || 'SURVEILLANCE',
+        userId: scope.userId,
+        coinId: scope.coinId,
+        symbol: scope.symbol,
+        exchange: scope.exchange,
+        marketType: scope.marketType,
+        eventType,
+        eventIdentity: key,
+        customCooldownMs,
+      });
 
-  public canSendAlert(key: string, eventType: string, customCooldownMs?: number): boolean {
+      if (res.allowed) {
+        notificationRouter.recordAlertSent(scopedKey, Date.now());
+        return true;
+      }
+      return false;
+    }
+
+    // Fallback un-scoped check via notificationRouter
+    const scopedKey = `GLOBAL:${key}`;
     const now = Date.now();
-    const lastTime = this.lastAlertTimestamps.get(key) || 0;
-    const cooldown = customCooldownMs !== undefined ? customCooldownMs : (this.cooldowns[eventType] || 15 * 60 * 1000);
-
-    if (now - lastTime >= cooldown) {
-      this.lastAlertTimestamps.set(key, now);
+    const last = notificationRouter.getLastAlertTime(scopedKey);
+    const cooldown = customCooldownMs !== undefined ? customCooldownMs : 15 * 60 * 1000;
+    if (now - last >= cooldown) {
+      notificationRouter.recordAlertSent(scopedKey, now);
       return true;
     }
     return false;
   }
 
-  public recordAlertSent(key: string, timestamp = Date.now()) {
-    this.lastAlertTimestamps.set(key, timestamp);
+  public recordAlertSent(key: string, timestamp = Date.now(), scope?: AlertScope) {
+    if (scope) {
+      const scopedKey = notificationRouter.buildScopedKey({
+        source: scope.source || 'SURVEILLANCE',
+        userId: scope.userId,
+        coinId: scope.coinId,
+        symbol: scope.symbol,
+        exchange: scope.exchange,
+        marketType: scope.marketType,
+        eventType: 'GENERAL',
+        eventIdentity: key,
+      });
+      notificationRouter.recordAlertSent(scopedKey, timestamp);
+    } else {
+      notificationRouter.recordAlertSent(`GLOBAL:${key}`, timestamp);
+    }
   }
 
-  public getLastAlertTime(key: string): number {
-    return this.lastAlertTimestamps.get(key) || 0;
+  public getLastAlertTime(key: string, scope?: AlertScope): number {
+    if (scope) {
+      const scopedKey = notificationRouter.buildScopedKey({
+        source: scope.source || 'SURVEILLANCE',
+        userId: scope.userId,
+        coinId: scope.coinId,
+        symbol: scope.symbol,
+        exchange: scope.exchange,
+        marketType: scope.marketType,
+        eventType: 'GENERAL',
+        eventIdentity: key,
+      });
+      return notificationRouter.getLastAlertTime(scopedKey);
+    }
+    return notificationRouter.getLastAlertTime(`GLOBAL:${key}`);
   }
 
   // Telegram Support Retest formatted message (#83)
@@ -121,9 +175,24 @@ ${item.askDensityUsd ? `<b>Ask Density:</b> $${(item.askDensityUsd / 1000000).to
 <b>СТАТУС:</b> <b>Стежте за третім підходом</b>`;
   }
 
-  // Telegram Density message (#85)
+  // Telegram Density appeared message (#14)
+  public formatDensityAppearedMessage(density: DensityItem, symbol: string, exchange: string): string {
+    return `⚡ <b>НОВА ВЕЛИКА ЩІЛЬНІСТЬ У СТАКАНІ</b>
+
+<b>${symbol}</b>
+${exchange.toUpperCase()}
+
+<b>Сторона:</b> <b>${density.side}</b>
+<b>Ціна:</b> $${formatCryptoPrice(density.price)}
+<b>Обсяг:</b> <b>$${(density.notionalUsd / 1000000).toFixed(2)}M</b>
+<b>Дистанція до спреду:</b> ${density.distancePct}%
+<b>Якість ліквідності:</b> ${density.qualityScore}/100
+<b>Статус:</b> НОВОЯВЛЕНА ЗАЯВКА`;
+  }
+
+  // Telegram Density persistent message (#85)
   public formatDensityMessage(density: DensityItem, symbol: string, exchange: string): string {
-    return `💧 <b>Виявлено значну щільність</b>
+    return `💧 <b>ПІДТВЕРДЖЕНА СТІЙКА ЩІЛЬНІСТЬ</b>
 
 <b>${symbol}</b>
 ${exchange.toUpperCase()}
@@ -133,7 +202,8 @@ ${exchange.toUpperCase()}
 <b>Обсяг:</b> <b>$${(density.notionalUsd / 1000000).toFixed(2)}M</b>
 <b>Дистанція:</b> ${density.distancePct}%
 <b>Тривалість:</b> ${Math.floor(density.ageSeconds / 60)}хв ${density.ageSeconds % 60}с
-<b>Класифікація:</b> <b>${density.classification}</b>`;
+<b>Класифікація:</b> <b>${density.classification}</b>
+<b>Якість:</b> <b>${density.qualityScore}/100</b>`;
   }
 
   // Telegram OI message (#86)

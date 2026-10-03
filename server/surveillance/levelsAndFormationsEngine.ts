@@ -33,14 +33,16 @@ export class LevelsAndFormationsEngine {
                       c.low <= candles[i + 1].low && c.low <= candles[i + 2].low;
 
         if (isHigh) {
-          const reactionHigh = Math.min(candles.length - 1, i + 6);
-          const minAfter = Math.min(...candles.slice(i + 1, reactionHigh + 1).map(x => x.low), c.high);
+          const reactionEnd = Math.min(candles.length - 1, i + 6);
+          const reactionSlice = reactionEnd > i ? candles.slice(i + 1, reactionEnd + 1) : [];
+          const minAfter = reactionSlice.length > 0 ? Math.min(...reactionSlice.map(x => x.low)) : c.high;
           const reactionPct = Math.max(0, (c.high - minAfter) / c.high * 100);
           this.clusterZone(zones, tf, 'RESISTANCE', c.high, zoneTolerance, c.time, weight, reactionPct, reactionPct >= 1.0);
         }
         if (isLow) {
-          const reactionHigh = Math.min(candles.length - 1, i + 6);
-          const maxAfter = Math.max(...candles.slice(i + 1, reactionHigh + 1).map(x => x.high), c.low);
+          const reactionEnd = Math.min(candles.length - 1, i + 6);
+          const reactionSlice = reactionEnd > i ? candles.slice(i + 1, reactionEnd + 1) : [];
+          const maxAfter = reactionSlice.length > 0 ? Math.max(...reactionSlice.map(x => x.high)) : c.low;
           const reactionPct = Math.max(0, (maxAfter - c.low) / c.low * 100);
           this.clusterZone(zones, tf, 'SUPPORT', c.low, zoneTolerance, c.time, weight, reactionPct, reactionPct >= 1.0);
         }

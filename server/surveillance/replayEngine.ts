@@ -15,6 +15,12 @@ export interface BacktestSetupResult {
   success: boolean;
 }
 
+function getHorizonIndex(tf: Timeframe, targetDurationMs: number): number {
+  const tfMs = tf === '1d' ? 86400000 : tf === '4h' ? 14400000 : tf === '1h' ? 3600000 : tf === '15m' ? 900000 : 300000;
+  const bars = Math.round(targetDurationMs / tfMs);
+  return Math.max(0, bars - 1);
+}
+
 export class SurveillanceReplayEngine {
   public runCausalBacktest(
     symbol: string,
@@ -32,6 +38,10 @@ export class SurveillanceReplayEngine {
       return { totalSetups: 0, winRate: 0, medianMfePct: 0, medianMaePct: 0, results: [] };
     }
 
+    const idx15m = getHorizonIndex(timeframe, 15 * 60 * 1000);
+    const idx1h = getHorizonIndex(timeframe, 60 * 60 * 1000);
+    const idx4h = getHorizonIndex(timeframe, 4 * 60 * 60 * 1000);
+
     // Step through historical candles causal window (no look-ahead)
     for (let i = 40; i < candles.length - 16; i++) {
       const windowCandles = candles.slice(0, i + 1); // Strictly past and present
@@ -46,7 +56,7 @@ export class SurveillanceReplayEngine {
       // If price retests the previous swing low within tolerance
       if (Math.abs(curPrice - minPastLow) <= atr * 0.4 && currentCandle.close > currentCandle.open) {
         // Measure strictly FUTURE candles without using them during detection
-        const futureSlice = candles.slice(i + 1, i + 17); // next 16 candles (~4 hours on 15m)
+        const futureSlice = candles.slice(i + 1, i + 17); // next 16 candles
         if (futureSlice.length > 0) {
           const futureHighs = futureSlice.map((c) => c.high);
           const futureLows = futureSlice.map((c) => c.low);
@@ -56,9 +66,13 @@ export class SurveillanceReplayEngine {
           const mfePct = Number((((maxFuture - curPrice) / curPrice) * 100).toFixed(2));
           const maePct = Number((((curPrice - minFuture) / curPrice) * 100).toFixed(2));
 
-          const future15mPct = Number((((futureSlice[0]?.close - curPrice) / curPrice) * 100).toFixed(2));
-          const future1hPct = Number((((futureSlice[3]?.close || futureSlice[futureSlice.length - 1].close - curPrice) / curPrice) * 100).toFixed(2));
-          const future4hPct = Number((((futureSlice[futureSlice.length - 1]?.close - curPrice) / curPrice) * 100).toFixed(2));
+          const candle15m = futureSlice[Math.min(futureSlice.length - 1, idx15m)];
+          const candle1h = futureSlice[Math.min(futureSlice.length - 1, idx1h)];
+          const candle4h = futureSlice[Math.min(futureSlice.length - 1, idx4h)];
+
+          const future15mPct = candle15m ? Number((((candle15m.close - curPrice) / curPrice) * 100).toFixed(2)) : 0;
+          const future1hPct = candle1h ? Number((((candle1h.close - curPrice) / curPrice) * 100).toFixed(2)) : 0;
+          const future4hPct = candle4h ? Number((((candle4h.close - curPrice) / curPrice) * 100).toFixed(2)) : 0;
 
           results.push({
             symbol,

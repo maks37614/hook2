@@ -717,13 +717,24 @@ export class SetupEngine {
 
   private chooseLongEntry(price: number, zone: LevelZone, breakInfo?: TimeframeStructure['lastBreak'], density?: DensityItem): number {
     if (breakInfo && breakInfo.price > zone.zoneCenter) return (breakInfo.price + zone.zoneCenter) / 2;
-    if (density && density.price >= zone.zoneLow && density.price <= zone.zoneHigh) return density.price;
+    // #19: Only verified, persistent, high-quality liquidity walls should act as entry price anchor
+    const isVerifiedDensity =
+      density &&
+      density.classification === 'PERSISTENT_LIQUIDITY' &&
+      (density.qualityScore || 0) >= 55 &&
+      (density.ageSeconds || 0) >= 45;
+    if (isVerifiedDensity && density.price >= zone.zoneLow && density.price <= zone.zoneHigh) return density.price;
     return Math.min(Math.max(price, zone.zoneLow), zone.zoneHigh);
   }
 
   private chooseShortEntry(price: number, zone: LevelZone, breakInfo?: TimeframeStructure['lastBreak'], density?: DensityItem): number {
     if (breakInfo && breakInfo.price < zone.zoneCenter) return (breakInfo.price + zone.zoneCenter) / 2;
-    if (density && density.price >= zone.zoneLow && density.price <= zone.zoneHigh) return density.price;
+    const isVerifiedDensity =
+      density &&
+      density.classification === 'PERSISTENT_LIQUIDITY' &&
+      (density.qualityScore || 0) >= 55 &&
+      (density.ageSeconds || 0) >= 45;
+    if (isVerifiedDensity && density.price >= zone.zoneLow && density.price <= zone.zoneHigh) return density.price;
     return Math.min(Math.max(price, zone.zoneLow), zone.zoneHigh);
   }
 

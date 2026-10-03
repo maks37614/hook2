@@ -1,5 +1,6 @@
 import { ExchangeId, MarketType, SurveillanceCoin, Timeframe } from '../../src/types';
 import { fetchDualExchangeOI, fetchKlines } from '../marketService';
+import { notificationRouter } from '../notificationRouter';
 import { ExchangeStreamClient, RawDepthDelta, RawTradeEvent } from './exchangeStream';
 import { LevelsAndFormationsEngine } from './levelsAndFormationsEngine';
 import { MacroAndNewsEngine } from './macroAndNewsEngine';
@@ -221,34 +222,43 @@ export class CoinWorker {
     // Check BOS / CHoCH structure change alerts
     for (const [tf, struct] of Object.entries(this.structures)) {
       if (struct.lastBreak && struct.lastBreak.confirmed) {
-        const alertKey = `${this.coin.symbol}_${tf}_${struct.lastBreak.type}_${struct.lastBreak.time}`;
-        if (this.alertManager.canSendAlert(alertKey, 'STRUCTURE_SHIFT')) {
-          const alertHtml = this.alertManager.formatStructureMessage(
-            this.coin.symbol,
-            tf,
-            `${struct.lastBreak.type} ${struct.lastBreak.direction}`,
-            price
-          );
-          if (this.canDispatchTelegramAlert('STRUCTURE')) {
-            this.alertManager.dispatchAlert(this.coin.userId, alertHtml);
-            this.coin.lastNotifiedAt = new Date().toISOString();
-          }
-          this.addEvent({
-            eventId: alertKey,
-            symbol: this.coin.symbol,
-            exchange: this.coin.exchange,
-            marketType: this.coin.marketType,
-            type: struct.lastBreak.type,
-            title: `${struct.lastBreak.type} на ${tf.toUpperCase()}`,
-            description: `Пробій структури ${struct.lastBreak.direction} на рівні $${struct.lastBreak.price}`,
-            price,
-            timeframe: tf as Timeframe,
-            severity: 'IMPORTANT',
-            confluenceScore: 75,
-            evidence: struct,
-            timestamp: Date.now(),
-          });
-        }
+        const breakIdentity = `${tf}_${struct.lastBreak.type}_${struct.lastBreak.direction}_${struct.lastBreak.time}`;
+        const alertHtml = this.alertManager.formatStructureMessage(
+          this.coin.symbol,
+          tf,
+          `${struct.lastBreak.type} ${struct.lastBreak.direction}`,
+          price
+        );
+
+        notificationRouter.dispatch({
+          source: 'SURVEILLANCE',
+          userId: this.coin.userId,
+          coinId: this.coin.id,
+          symbol: this.coin.symbol,
+          exchange: this.coin.exchange,
+          marketType: this.coin.marketType,
+          eventType: struct.lastBreak.type,
+          eventIdentity: breakIdentity,
+          triggerMode: 'realtime',
+          htmlMessage: alertHtml,
+          coin: this.coin,
+        });
+
+        this.addEvent({
+          eventId: `${this.coin.symbol}_${breakIdentity}`,
+          symbol: this.coin.symbol,
+          exchange: this.coin.exchange,
+          marketType: this.coin.marketType,
+          type: struct.lastBreak.type,
+          title: `${struct.lastBreak.type} на ${tf.toUpperCase()}`,
+          description: `Пробій структури ${struct.lastBreak.direction} на рівні $${struct.lastBreak.price}`,
+          price,
+          timeframe: tf as Timeframe,
+          severity: 'IMPORTANT',
+          confluenceScore: 75,
+          evidence: struct,
+          timestamp: Date.now(),
+        });
       }
     }
 
@@ -259,29 +269,38 @@ export class CoinWorker {
     this.thirdTouches = this.levelsEngine.trackThirdTouch(price, candles1h);
     for (const tt of this.thirdTouches) {
       if (tt.state === 'APPROACHING' || tt.state === 'ACTIVE') {
-        const ttKey = `${this.coin.symbol}_THIRD_TOUCH_${tt.levelId}`;
-        if (this.alertManager.canSendAlert(ttKey, 'THIRD_TOUCH_APPROACHING')) {
-          const msg = this.alertManager.formatThirdTouchMessage(tt, this.coin.symbol, this.coin.exchange, price);
-          if (this.canDispatchTelegramAlert('THIRD_TOUCH')) {
-            this.alertManager.dispatchAlert(this.coin.userId, msg);
-            this.coin.lastNotifiedAt = new Date().toISOString();
-          }
-          this.addEvent({
-            eventId: ttKey,
-            symbol: this.coin.symbol,
-            exchange: this.coin.exchange,
-            marketType: this.coin.marketType,
-            type: 'THIRD_TOUCH_APPROACHING',
-            title: `Третій тест рівня $${tt.price}`,
-            description: `Наближення до рівня ${tt.levelType}. Дистанція: ${tt.distancePct}%. Компресія: ${tt.compression ? 'ТАК' : 'НІ'}`,
-            price,
-            timeframe: '1h',
-            severity: 'IMPORTANT',
-            confluenceScore: 80,
-            evidence: tt,
-            timestamp: Date.now(),
-          });
-        }
+        const ttIdentity = `${tt.levelId}_${tt.touchCount}`;
+        const msg = this.alertManager.formatThirdTouchMessage(tt, this.coin.symbol, this.coin.exchange, price);
+
+        notificationRouter.dispatch({
+          source: 'SURVEILLANCE',
+          userId: this.coin.userId,
+          coinId: this.coin.id,
+          symbol: this.coin.symbol,
+          exchange: this.coin.exchange,
+          marketType: this.coin.marketType,
+          eventType: 'THIRD_TOUCH_APPROACHING',
+          eventIdentity: ttIdentity,
+          triggerMode: 'realtime',
+          htmlMessage: msg,
+          coin: this.coin,
+        });
+
+        this.addEvent({
+          eventId: `${this.coin.symbol}_TT_${ttIdentity}`,
+          symbol: this.coin.symbol,
+          exchange: this.coin.exchange,
+          marketType: this.coin.marketType,
+          type: 'THIRD_TOUCH_APPROACHING',
+          title: `Третій тест рівня $${tt.price}`,
+          description: `Наближення до рівня ${tt.levelType}. Дистанція: ${tt.distancePct}%. Компресія: ${tt.compression ? 'ТАК' : 'НІ'}`,
+          price,
+          timeframe: '1h',
+          severity: 'IMPORTANT',
+          confluenceScore: 80,
+          evidence: tt,
+          timestamp: Date.now(),
+        });
       }
     }
 
@@ -295,30 +314,84 @@ export class CoinWorker {
 
     // Check OI Anomaly alert
     if (oiSnapshot.isAnomaly) {
-      const oiKey = `${this.coin.symbol}_OI_ANOMALY_${Math.floor(Date.now() / 600000)}`;
-      if (this.alertManager.canSendAlert(oiKey, 'OI_ANOMALY')) {
-        const oiMsg = this.alertManager.formatOIMessage(oiSnapshot, this.coin.symbol, price);
-        if (this.canDispatchTelegramAlert('OI_ANOMALY')) {
-          this.alertManager.dispatchAlert(this.coin.userId, oiMsg);
-          this.coin.lastNotifiedAt = new Date().toISOString();
-        }
-      }
+      const oiIdentity = `${Math.floor(Date.now() / 600000)}`;
+      const oiMsg = this.alertManager.formatOIMessage(oiSnapshot, this.coin.symbol, price);
+
+      notificationRouter.dispatch({
+        source: 'SURVEILLANCE',
+        userId: this.coin.userId,
+        coinId: this.coin.id,
+        symbol: this.coin.symbol,
+        exchange: this.coin.exchange,
+        marketType: this.coin.marketType,
+        eventType: 'OI_ANOMALY',
+        eventIdentity: oiIdentity,
+        triggerMode: 'realtime',
+        htmlMessage: oiMsg,
+        coin: this.coin,
+      });
     }
 
-    // 6. Significant Densities
+    // 6. Significant Densities (#14: DENSITY_APPEARED and DENSITY_PERSISTENT)
+    // 6a. Newly appeared massive liquidity
+    const newlyAppeared = this.orderBookEngine.pollNewlyAppearedDensities();
+    for (const d of newlyAppeared) {
+      const dKey = `${d.side}_${d.price}`;
+      const msg = this.alertManager.formatDensityAppearedMessage(d, this.coin.symbol, this.coin.exchange);
+
+      notificationRouter.dispatch({
+        source: 'ORDERBOOK',
+        userId: this.coin.userId,
+        coinId: this.coin.id,
+        symbol: this.coin.symbol,
+        exchange: this.coin.exchange,
+        marketType: this.coin.marketType,
+        eventType: 'DENSITY_APPEARED',
+        eventIdentity: dKey,
+        triggerMode: 'realtime',
+        htmlMessage: msg,
+        coin: this.coin,
+      });
+
+      this.addEvent({
+        eventId: `${this.coin.symbol}_DENSITY_APP_${dKey}`,
+        symbol: this.coin.symbol,
+        exchange: this.coin.exchange,
+        marketType: this.coin.marketType,
+        type: 'DENSITY_APPEARED',
+        title: `⚡ Нова щільність ${d.side} $${(d.notionalUsd / 1e6).toFixed(2)}M`,
+        description: `Велика заявка $${(d.notionalUsd / 1e6).toFixed(2)}M за ціною $${d.price}. Дистанція: ${d.distancePct}%.`,
+        price: d.price,
+        timeframe: '5m',
+        severity: 'IMPORTANT',
+        confluenceScore: d.qualityScore || 65,
+        evidence: d,
+        timestamp: Date.now(),
+      });
+    }
+
+    // 6b. Confirmed persistent liquidity (>= 60s without spoofing)
     const significantDensities = this.orderBookEngine.getSignificantDensities(
       this.orderBookEngine.calculateAdaptiveThreshold(this.volume24hUsd)
     );
     for (const d of significantDensities) {
       if (d.classification === 'PERSISTENT_LIQUIDITY' && d.ageSeconds >= 60) {
-        const dKey = `${this.coin.symbol}_DENSITY_${d.side}_${d.price}`;
-        if (this.alertManager.canSendAlert(dKey, 'DENSITY_PERSISTENT')) {
-          const dMsg = this.alertManager.formatDensityMessage(d, this.coin.symbol, this.coin.exchange);
-          if (this.canDispatchTelegramAlert('DENSITY')) {
-            this.alertManager.dispatchAlert(this.coin.userId, dMsg);
-            this.coin.lastNotifiedAt = new Date().toISOString();
-          }
-        }
+        const dKey = `${d.side}_${d.price}`;
+        const dMsg = this.alertManager.formatDensityMessage(d, this.coin.symbol, this.coin.exchange);
+
+        notificationRouter.dispatch({
+          source: 'ORDERBOOK',
+          userId: this.coin.userId,
+          coinId: this.coin.id,
+          symbol: this.coin.symbol,
+          exchange: this.coin.exchange,
+          marketType: this.coin.marketType,
+          eventType: 'DENSITY_PERSISTENT',
+          eventIdentity: dKey,
+          triggerMode: 'realtime',
+          htmlMessage: dMsg,
+          coin: this.coin,
+        });
       }
     }
 
@@ -348,29 +421,38 @@ export class CoinWorker {
     for (const setup of this.setups) {
       if (setup.stage === 'CONFIRMED') {
         const alertType = 'SUPPORT_RETEST_CONFIRMED';
-        const setupKey = `${setup.id}_${setup.stage}`;
-        if (this.alertManager.canSendAlert(setupKey, alertType)) {
-          const setupMsg = this.alertManager.formatSupportRetestMessage(setup, price);
-          if (this.canDispatchTelegramAlert('SETUP')) {
-            this.alertManager.dispatchAlert(this.coin.userId, setupMsg);
-            this.coin.lastNotifiedAt = new Date().toISOString();
-          }
-          this.addEvent({
-            eventId: setupKey,
-            symbol: this.coin.symbol,
-            exchange: this.coin.exchange,
-            marketType: this.coin.marketType,
-            type: alertType,
-            title: `Сетап ${setup.type}: ${setup.stage}`,
-            description: `Конфлюенс: ${setup.confluenceScore}/100. Зона: $${setup.entryZone.low} - $${setup.entryZone.high}`,
-            price,
-            timeframe: setup.timeframe,
-            severity: 'CRITICAL',
-            confluenceScore: setup.confluenceScore,
-            evidence: setup.evidence,
-            timestamp: Date.now(),
-          });
-        }
+        const setupIdentity = `${setup.id}_${setup.stage}`;
+        const setupMsg = this.alertManager.formatSupportRetestMessage(setup, price);
+
+        notificationRouter.dispatch({
+          source: 'SURVEILLANCE',
+          userId: this.coin.userId,
+          coinId: this.coin.id,
+          symbol: this.coin.symbol,
+          exchange: this.coin.exchange,
+          marketType: this.coin.marketType,
+          eventType: alertType,
+          eventIdentity: setupIdentity,
+          triggerMode: 'realtime',
+          htmlMessage: setupMsg,
+          coin: this.coin,
+        });
+
+        this.addEvent({
+          eventId: setupIdentity,
+          symbol: this.coin.symbol,
+          exchange: this.coin.exchange,
+          marketType: this.coin.marketType,
+          type: alertType,
+          title: `Сетап ${setup.type}: ${setup.stage}`,
+          description: `Конфлюенс: ${setup.confluenceScore}/100. Зона: $${setup.entryZone.low} - $${setup.entryZone.high}`,
+          price,
+          timeframe: setup.timeframe,
+          severity: 'CRITICAL',
+          confluenceScore: setup.confluenceScore,
+          evidence: setup.evidence,
+          timestamp: Date.now(),
+        });
       }
     }
     } finally {

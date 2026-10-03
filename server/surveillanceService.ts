@@ -14,6 +14,7 @@ import { fetchKlines } from './marketService';
 import { sendTelegramMessage } from './telegramService';
 import { getUserTelegram } from './alertService';
 import { surveillanceManager } from './surveillance/surveillanceManager';
+import { notificationRouter } from './notificationRouter';
 
 const DATA_DIR = path.join(process.cwd(), 'server', 'data');
 const SURVEILLANCE_FILE = path.join(DATA_DIR, 'surveillance.json');
@@ -391,10 +392,29 @@ export async function calculateSurveillanceState(
     const maxRecent4h = Math.max(...recent4hSlice.map((k) => k.high));
     const minRecent4h = Math.min(...recent4hSlice.map((k) => k.low));
 
-    const resistance4h =
-      swingHighs.filter((h) => h >= currentPrice).sort((a, b) => a - b)[0] || maxRecent4h;
-    const support4h =
-      swingLows.filter((l) => l <= currentPrice).sort((a, b) => b - a)[0] || minRecent4h;
+    // Prefer closest structural swing high >= currentPrice. If none, check 1d high or highest swing high before falling back to window max
+    let resistance4h = swingHighs.filter((h) => h >= currentPrice).sort((a, b) => a - b)[0];
+    if (!resistance4h) {
+      if (high1d > currentPrice) {
+        resistance4h = high1d;
+      } else if (swingHighs.length > 0) {
+        resistance4h = Math.max(...swingHighs);
+      } else {
+        resistance4h = maxRecent4h;
+      }
+    }
+
+    // Prefer closest structural swing low <= currentPrice. If none, check 1d low or lowest swing low before falling back to window min
+    let support4h = swingLows.filter((l) => l <= currentPrice).sort((a, b) => b - a)[0];
+    if (!support4h) {
+      if (low1d < currentPrice) {
+        support4h = low1d;
+      } else if (swingLows.length > 0) {
+        support4h = Math.min(...swingLows);
+      } else {
+        support4h = minRecent4h;
+      }
+    }
 
     const swingHigh4h = swingHighs.length > 0 ? swingHighs[swingHighs.length - 1] : maxRecent4h;
     const swingLow4h = swingLows.length > 0 ? swingLows[swingLows.length - 1] : minRecent4h;
@@ -614,28 +634,36 @@ export async function checkCoinSurveillance(
   // Polling checkCoinSurveillance handles discrete candle close events (15m, 1h, 4h).
   let isTriggerAllowed = forceCheck;
 
-  // 1. 15m Candle Close Check (#3: bind to specific newly closed candle timestamp)
-  if (isBarClose15 && klines15m.length >= 2) {
+  // 1. 15m Candle Close Check (#3 & #4: bind to specific newly closed candle timestamp with causal levels <= N-1)
+  if (isBarClose15 && klines15m.length >= 3) {
     const completedCandle15 = klines15m[klines15m.length - 2];
     const candleTime15 = completedCandle15.time > 1e11 ? completedCandle15.time : completedCandle15.time * 1000;
     if (candleTime15 > processedCandles['15m']) {
       newProcessedCandles['15m'] = candleTime15;
-      const crossedUp15 = completedCandle15.close > newState.resistance4h || completedCandle15.close > newState.localHigh15m;
-      const crossedDown15 = completedCandle15.close < newState.support4h || completedCandle15.close < newState.localLow15m;
+      const prior15m = klines15m.slice(0, klines15m.length - 2);
+      const priorHigh15m = prior15m.length > 0 ? Math.max(...prior15m.slice(-15).map((k) => k.high)) : newState.localHigh15m;
+      const priorLow15m = prior15m.length > 0 ? Math.min(...prior15m.slice(-15).map((k) => k.low)) : newState.localLow15m;
+
+      const crossedUp15 = completedCandle15.close > newState.resistance4h || completedCandle15.close > priorHigh15m;
+      const crossedDown15 = completedCandle15.close < newState.support4h || completedCandle15.close < priorLow15m;
       if (crossedUp15 || crossedDown15) {
         isTriggerAllowed = true;
       }
     }
   }
 
-  // 2. 1H Candle Close Check (#3: bind to specific newly closed candle timestamp)
-  if (isBarClose1h && klines1h.length >= 2) {
+  // 2. 1H Candle Close Check (#3 & #4: bind to specific newly closed candle timestamp with causal levels <= N-1)
+  if (isBarClose1h && klines1h.length >= 3) {
     const completedCandle1h = klines1h[klines1h.length - 2];
     const candleTime1h = completedCandle1h.time > 1e11 ? completedCandle1h.time : completedCandle1h.time * 1000;
     if (candleTime1h > processedCandles['1h']) {
       newProcessedCandles['1h'] = candleTime1h;
-      const crossedUp1h = completedCandle1h.close > newState.resistance4h || completedCandle1h.close > newState.localHigh1h;
-      const crossedDown1h = completedCandle1h.close < newState.support4h || completedCandle1h.close < newState.localLow1h;
+      const prior1h = klines1h.slice(0, klines1h.length - 2);
+      const priorHigh1h = prior1h.length > 0 ? Math.max(...prior1h.slice(-15).map((k) => k.high)) : newState.localHigh1h;
+      const priorLow1h = prior1h.length > 0 ? Math.min(...prior1h.slice(-15).map((k) => k.low)) : newState.localLow1h;
+
+      const crossedUp1h = completedCandle1h.close > newState.resistance4h || completedCandle1h.close > priorHigh1h;
+      const crossedDown1h = completedCandle1h.close < newState.support4h || completedCandle1h.close < priorLow1h;
       if (crossedUp1h || crossedDown1h) {
         isTriggerAllowed = true;
       }
@@ -843,38 +871,38 @@ export async function checkCoinSurveillance(
     },
   };
 
-  // #4 & #5: Ensure telegramEnabled is respected and use shared deduplication with CoinWorker
-  const tgEnabled = config.telegramEnabled !== false;
-
-  if (newEvents.length > 0 && tgEnabled && canNotify) {
+  // #2, #3, #4, #5: Route notifications through central notificationRouter
+  // Fully scoped per user/coin/symbol/exchange/marketType/eventType/eventIdentity
+  if (newEvents.length > 0 && isTriggerAllowed) {
     const highestSeverityEvent =
       newEvents.find((e) => e.severity === 'critical') ||
       newEvents.find((e) => e.severity === 'warning') ||
       newEvents[0];
 
-    // Shared deduplication key across both CoinWorker and Cron candle-close checks
-    const dedupeKey = `${coin.symbol}_${highestSeverityEvent.type}_${highestSeverityEvent.title.replace(/\s+/g, '_')}`;
-    const canSendDedupe = forceNotify || surveillanceManager.alertManager.canSendAlert(
-      dedupeKey,
-      highestSeverityEvent.type.toUpperCase(),
-      cooldownMs
-    );
+    const messageHtml = formatSurveillanceTelegramMessage(updatedCoin, newState, highestSeverityEvent);
+    const triggerMode = modes.includes('bar_close')
+      ? 'bar_close'
+      : modes.includes('bar_close_1h')
+      ? 'bar_close_1h'
+      : 'bar_close_15m';
 
-    if (canSendDedupe) {
-      const messageHtml = formatSurveillanceTelegramMessage(updatedCoin, newState, highestSeverityEvent);
-      const userCreds = getUserTelegram(coin.userId);
+    const sent = await notificationRouter.dispatch({
+      source: 'SURVEILLANCE',
+      userId: coin.userId,
+      coinId: coin.id,
+      symbol: coin.symbol,
+      exchange: coin.exchange,
+      marketType: coin.marketType,
+      eventType: highestSeverityEvent.type.toUpperCase(),
+      eventIdentity: highestSeverityEvent.title,
+      triggerMode,
+      htmlMessage: messageHtml,
+      customCooldownMs: cooldownMs,
+      forceNotify,
+      coin: updatedCoin,
+    });
 
-      sendTelegramMessage(messageHtml, {
-        botToken: userCreds?.botToken,
-        chatId: userCreds?.chatId,
-      }).then((res) => {
-        if (res.success) {
-          console.log(`[Surveillance] Notification sent to Telegram for ${coin.symbol}: ${highestSeverityEvent.title}`);
-        }
-      });
-
-      // Record alert timestamp into shared StateMachineAndAlerts
-      surveillanceManager.alertManager.recordAlertSent(dedupeKey, now);
+    if (sent) {
       updatedCoin.lastNotifiedAt = new Date().toISOString();
     }
   }

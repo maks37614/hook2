@@ -64,7 +64,12 @@ export class OrderBookEngine {
     }
     this.sequenceGap = false;
     this.lastUpdateId = seq;
-    if (delta.isSnapshot) { this.bids.clear(); this.asks.clear(); this.activeDensities.clear(); this.densityStats.clear(); this.dataValid = true; this.status = 'SYNCING'; }
+    if (delta.isSnapshot) {
+      this.bids.clear();
+      this.asks.clear();
+      this.dataValid = true;
+      this.status = 'SYNCING';
+    }
 
     for (const [price, qty] of delta.bids) qty <= 0 ? this.bids.delete(price) : this.bids.set(price, qty);
     for (const [price, qty] of delta.asks) qty <= 0 ? this.asks.delete(price) : this.asks.set(price, qty);
@@ -108,8 +113,17 @@ export class OrderBookEngine {
     const turnoverBaseline = volume24hUsd > 0 ? Math.max(50000, volume24hUsd * 0.0003) : 100000;
     const autoVal = Math.max(turnoverBaseline, p90 * 2);
     if (this.config.mode === 'MANUAL') return this.config.manualThresholdUsd;
-    if (this.config.mode === 'HYBRID') return Math.max(this.config.manualThresholdUsd * 0.6, autoVal);
+    // #13: HYBRID takes the maximum so manual threshold is strictly respected and never diluted
+    if (this.config.mode === 'HYBRID') return Math.max(this.config.manualThresholdUsd, autoVal);
     return autoVal;
+  }
+
+  private newlyAppearedDensities: DensityItem[] = [];
+
+  public pollNewlyAppearedDensities(): DensityItem[] {
+    const items = [...this.newlyAppearedDensities];
+    this.newlyAppearedDensities = [];
+    return items;
   }
 
   private evaluateDensities() {
@@ -117,6 +131,9 @@ export class OrderBookEngine {
     const mid = (this.bestBid + this.bestAsk) / 2 || this.bestBid || this.bestAsk || 1;
     const threshold = this.calculateAdaptiveThreshold();
     const seen = new Set<string>();
+
+    const minBidInBook = this.bids.size > 0 ? Math.min(...this.bids.keys()) : 0;
+    const maxAskInBook = this.asks.size > 0 ? Math.max(...this.asks.keys()) : Infinity;
 
     const scan = (book: Map<number, number>, side: 'BID'|'ASK') => {
       for (const [price, qty] of book.entries()) {
@@ -132,6 +149,19 @@ export class OrderBookEngine {
 
     for (const [id, item] of this.activeDensities.entries()) {
       if (seen.has(id)) continue;
+
+      // #10 & #12: Check if order simply stepped out of visible top-20 window
+      const isOutsideVisibleWindow = (item.side === 'BID' && item.price < minBidInBook) ||
+                                     (item.side === 'ASK' && item.price > maxAskInBook);
+
+      if (isOutsideVisibleWindow) {
+        // Keep order alive in persistence memory without falsely increasing cancellation rate
+        if (now - item.lastSeenAt > 600000) { // Clean up after 10 mins outside window
+          this.activeDensities.delete(id);
+        }
+        continue;
+      }
+
       const stats = this.densityStats.get(id);
       if (stats) stats.cancellations += 1;
       const age = Math.max(0.1, (now-item.firstSeenAt)/1000);
@@ -149,6 +179,7 @@ export class OrderBookEngine {
 
   private updateOrAddDensity(id:string, side:'BID'|'ASK', price:number, qty:number, notional:number, distPct:number, now:number) {
     let stats = this.densityStats.get(id);
+    const isBrandNew = !stats;
     if (!stats) {
       stats = { firstSeenAt:now,lastSeenAt:now,samples:0,presentSamples:0,sizeSumUsd:0,maxSizeUsd:notional,lastSizeUsd:notional,lastSizeChangeAt:now,cancellations:0,replenishments:0,nearestApproachPct:distPct };
       this.densityStats.set(id,stats);
@@ -171,6 +202,9 @@ export class OrderBookEngine {
     } else {
       const item:DensityItem={id,price,side,quantity:qty,notionalUsd:notional,distancePct:Number(distPct.toFixed(3)),firstSeenAt:now,lastSeenAt:now,ageSeconds:0,maxSizeUsd:notional,averageSizeUsd:notional,persistenceRatio:1,classification:'STANDARD',persistenceSamples:1,cancellationRate:0,replenishmentRate:0,qualityScore:20,lastSizeChangeAt:now};
       this.activeDensities.set(id,item);
+      if (isBrandNew && notional >= 300000) {
+        this.newlyAppearedDensities.push(item);
+      }
     }
   }
 
