@@ -91,7 +91,7 @@ test('direct fallback requests only the selected exchange and market with zero v
   const coin = { symbol: 'BTCUSDT', exchange: 'binance', marketType: 'spot', volumeUsd: 1000 } as MarketCoin;
   const snapshot = await loadMarketCoins({ exchange: 'binance', marketType: 'spot' }, new AbortController().signal, {
     request: async () => { throw new Error('network'); },
-    binance: async options => {
+    binance: async (options = {}) => {
       calls++;
       assert.equal(options.marketType, 'spot');
       assert.equal(options.minVolumeUsd, 0);
