@@ -89,11 +89,16 @@ export class CoinWorker {
     this.volumeOIEngine = new VolumeAndOIEngine();
     this.setupEngine = new SetupEngine();
 
-    this.init();
+    this.updateCoin(coin);
+    this.init().catch((err) => console.error(`[CoinWorker ${coin.symbol}] Initialization failed:`, err));
   }
 
   public updateCoin(coin: SurveillanceCoin) {
     this.coin = coin;
+    this.orderBookEngine.updateConfig({
+      mode: coin.config.densityMode ?? 'AUTO',
+      manualThresholdUsd: coin.config.manualDensityThresholdUsd ?? 1000000,
+    });
   }
 
   public canDispatchTelegramAlert(alertCategory?: string): boolean {
@@ -122,21 +127,23 @@ export class CoinWorker {
   private async init() {
     this.setupStreamListeners();
     await this.loadInitialHistory();
+    if (this.isDestroyed) return;
     this.startPeriodicTasks();
-    this.runDeepAnalysis();
+    void this.runDeepAnalysis().catch((err) => console.error(`[CoinWorker ${this.coin.symbol}] Analysis failed:`, err));
   }
 
   private setupStreamListeners() {
+    this.streamClient.on('error', (err) => {
+      console.warn(`[CoinWorker ${this.coin.symbol}] Stream error:`, err.message);
+    });
+
     // 1. Live Ticker / Price Tick
-    this.streamClient.on('price', (data: { price: number; high24h: number; low24h: number; volume24hUsd: number; time: number }) => {
+    this.streamClient.on('price', (data: { price: number; high24h: number; low24h: number; volume24hUsd: number; time: number; change24h?: number }) => {
       this.currentPrice = data.price;
       this.high24h = data.high24h;
       this.low24h = data.low24h;
       this.volume24hUsd = data.volume24hUsd;
-      if (data.low24h > 0 && data.high24h > 0) {
-        // approximate change
-        this.change24h = Number((((data.price - data.low24h) / data.low24h) * 100).toFixed(2));
-      }
+      if (Number.isFinite(data.change24h)) this.change24h = data.change24h!;
     });
 
     // 2. Real-time Trade Flow
@@ -185,7 +192,7 @@ export class CoinWorker {
     // 1. Slow Path Deep Analysis every 6 seconds
     this.slowAnalysisInterval = setInterval(() => {
       if (this.isDestroyed) return;
-      this.runDeepAnalysis();
+      void this.runDeepAnalysis().catch((err) => console.error(`[CoinWorker ${this.coin.symbol}] Analysis failed:`, err));
     }, 6000);
 
     // 2. Fetch Open Interest every 15 seconds
@@ -307,7 +314,8 @@ export class CoinWorker {
     }
 
     // 4. Formations
-    this.patterns = this.levelsEngine.detectFormations(candles1h, price);
+    this.patterns = this.levelsEngine.detectFormations(candles1h, price)
+      .filter(p => p.score >= (this.coin.config.formationThreshold ?? 0));
 
     // 5. Volume, RVOL, Trade Flow, OI
     const { rvol } = this.volumeOIEngine.calculateRVOL(candles15m);
@@ -399,6 +407,7 @@ export class CoinWorker {
 
     // 7. Macro & BTC Context
     const btcContext = await this.macroEngine.updateBTCContext();
+    if (this.isDestroyed || !this.coin.isActive) return;
 
     // 8. Setup Detection & Confluence Engine
     this.setups = this.setupEngine.evaluateSetups({
@@ -421,7 +430,8 @@ export class CoinWorker {
 
     // Check Setups Telegram Alerts (#83, #87)
     for (const setup of this.setups) {
-      if (setup.stage === 'CONFIRMED') {
+      if (setup.stage === 'CONFIRMED' && this.coin.config.setupsEnabled !== false &&
+        setup.confluenceScore >= (this.coin.config.confluenceThreshold ?? 0)) {
         // 1. Separate setup alert types strictly according to direction and setup structure
         let alertType: 'SUPPORT_RETEST_CONFIRMED' | 'RESISTANCE_RETEST_CONFIRMED' | 'BREAKOUT_CONFIRMED' | 'FORMATION_SETUP_CONFIRMED';
 
@@ -493,6 +503,7 @@ export class CoinWorker {
   }
 
   private addEvent(event: EngineAlertEvent) {
+    if (this.recentEvents.some((existing) => existing.eventId === event.eventId)) return;
     this.recentEvents.unshift(event);
     if (this.recentEvents.length > 25) {
       this.recentEvents.pop();

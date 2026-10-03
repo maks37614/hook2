@@ -314,18 +314,32 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     }
   };
 
-  const handleOpenDetails = async (coin: SurveillanceCoin) => {
+  const handleOpenDetails = (coin: SurveillanceCoin) => {
     setDetailedCoin(coin);
     setWorkerData(null);
     setBacktestResult(null);
-    setLoadingWorkerData(true);
-    try {
-      const snapshot = await getWorkerSnapshot(coin.id);
-      setWorkerData(snapshot);
-    } finally {
-      setLoadingWorkerData(false);
-    }
   };
+
+  useEffect(() => {
+    if (!detailedCoin) return;
+    let cancelled = false;
+    let inFlight = false;
+    setLoadingWorkerData(true);
+    const refreshWorker = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const snapshot = await getWorkerSnapshot(detailedCoin.id);
+        if (!cancelled) setWorkerData(snapshot);
+      } finally {
+        inFlight = false;
+        if (!cancelled) setLoadingWorkerData(false);
+      }
+    };
+    void refreshWorker();
+    const timer = setInterval(refreshWorker, 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [detailedCoin?.id, getWorkerSnapshot]);
 
   const handleRunCausalBacktest = async (coin: SurveillanceCoin) => {
     setLoadingBacktest(true);

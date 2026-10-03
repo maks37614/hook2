@@ -521,7 +521,7 @@ export class SetupEngine {
 
   private detectLiquiditySweep(candles: Kline[], zone: LevelZone, direction: 'LONG' | 'SHORT'): { sweepPrice: number; reclaimPrice: number } | undefined {
     if (!candles || candles.length < 4) return undefined;
-    const normalize = (t: number) => t > 2_000_000_000_000 ? t : t * 1000;
+    const normalize = (t: number) => t >= 100_000_000_000 ? t : t * 1000;
     const lastCandle = candles[candles.length - 1];
     const prev = candles[candles.length - 2];
     const interval = lastCandle && prev ? Math.max(1000, normalize(lastCandle.time) - normalize(prev.time)) : 0;

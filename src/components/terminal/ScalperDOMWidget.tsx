@@ -427,6 +427,9 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         if (!res.ok) return;
         const data = await res.json();
         if (isMounted && data.success && Array.isArray(data.bids) && Array.isArray(data.asks)) {
+          // REST returns a complete window; absent prices are no longer visible.
+          bidsBookRef.current.clear();
+          asksBookRef.current.clear();
           data.bids.forEach(([p, q]: [number, number]) => {
             if (q > 0) bidsBookRef.current.set(p, q);
             else bidsBookRef.current.delete(p);
@@ -600,7 +603,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             const data = json.data;
 
             if (topic.startsWith('orderbook') && data) {
-              if (json.type === 'snapshot') {
+              if (json.type === 'snapshot' || data.u === 1) {
                 bidsBookRef.current.clear();
                 asksBookRef.current.clear();
                 (data.b || []).forEach(([pStr, qStr]: [string, string]) => {

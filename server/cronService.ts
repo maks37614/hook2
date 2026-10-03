@@ -151,7 +151,8 @@ class CronManager {
                 // Only user manual action (pause button / delete) can alter isActive.
                 freshUserCoins[idx] = {
                   ...updated,
-                  isActive: freshUserCoins[idx].isActive, // Guarantee preserving user's current pause/active state
+                  isActive: freshUserCoins[idx].isActive,
+                  config: freshUserCoins[idx].config, // Guarantee preserving user's current pause/active state
                 };
                 freshStore[userId] = freshUserCoins;
                 saveSurveillanceStore(freshStore);
@@ -254,7 +255,7 @@ class CronManager {
 
   // --- System Diagnostic Status ---
   public getStatus(): CronSystemStatus {
-    const allAlerts = getAllAlerts();
+    const allAlerts = loadAlerts();
     const activeAlerts = allAlerts.filter((a) => a.isActive && !a.triggered);
     const surveillanceCoins = getAllActiveSurveillanceCoins();
     const tgConfig = getEffectiveTelegramConfig();

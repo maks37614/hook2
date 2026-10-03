@@ -1,5 +1,6 @@
 import { DetectedFormation, Kline, Timeframe } from '../../src/types';
 import { detectFormations as detectCanonicalFormations } from '../../src/utils/patternRecognition';
+import { normalizeKlineTimeMs } from '../../src/utils/formationValidation';
 import { calculateATR } from './multiTimeframeEngine';
 import { DetectedPattern, LevelZone, ThirdTouchTracker } from './types';
 
@@ -29,18 +30,18 @@ export class LevelsAndFormationsEngine {
     const zones: LevelZone[] = [];
 
     const filterCandles = (candles: Kline[], tfMs: number) => {
-      let filtered = candles;
+      let filtered = candles.map(k => ({ ...k, time: normalizeKlineTimeMs(k.time) }));
       if (asOfTime) {
         filtered = filtered.filter((k) => {
-          const t = k.time > 2_000_000_000_000 ? k.time : k.time * 1000;
+          const t = k.time >= 100_000_000_000 ? k.time : k.time * 1000;
           return t <= asOfTime;
         });
       }
       if (currentMode === 'LIVE') {
         const closed = (c: Kline[]) => {
           if (c.length <= 2) return c;
-          const t = c[c.length - 1].time > 2_000_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000;
-          const interval = c.length > 2 ? Math.max(1000, ((c[c.length - 1].time > 2_000_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000) - (c[c.length - 2].time > 2_000_000_000_000 ? c[c.length - 2].time : c[c.length - 2].time * 1000))) : tfMs;
+          const t = c[c.length - 1].time >= 100_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000;
+          const interval = c.length > 2 ? Math.max(1000, ((c[c.length - 1].time >= 100_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000) - (c[c.length - 2].time >= 100_000_000_000 ? c[c.length - 2].time : c[c.length - 2].time * 1000))) : tfMs;
           return t + Math.min(tfMs, interval) > Date.now() ? c.slice(0, -1) : c;
         };
         return closed(filtered);

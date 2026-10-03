@@ -52,6 +52,7 @@ export class NotificationRouter {
   private static instance: NotificationRouter | null = null;
 
   // Scoped timestamps: `${source}:${userId}:${coinId}:${exchange}:${marketType}:${eventType}:${eventIdentity}` -> timestamp
+  private inFlight = new Set<string>();
   private scopedAlertTimestamps = new Map<string, number>();
 
   // Default cooldowns per eventType in ms
@@ -157,7 +158,7 @@ export class NotificationRouter {
       if (evUpper.startsWith('THIRD_TOUCH') && coin.config?.thirdTouchAlerts === false) {
         return { allowed: false, reason: 'third_touch_alerts_disabled', scopedKey };
       }
-      if ((evUpper.startsWith('SETUP') || evUpper.includes('RETEST')) && coin.config?.setupsEnabled === false) {
+      if ((evUpper.startsWith('SETUP') || evUpper.includes('RETEST') || evUpper === 'FORMATION_SETUP_CONFIRMED' || evUpper === 'BREAKOUT_CONFIRMED') && coin.config?.setupsEnabled === false) {
         return { allowed: false, reason: 'setups_disabled', scopedKey };
       }
       if ((evUpper.startsWith('STRUCT') || evUpper === 'BOS' || evUpper === 'CHOCH') && coin.config?.structureEnabled === false) {
@@ -216,7 +217,7 @@ export class NotificationRouter {
       forceNotify: payload.forceNotify,
     });
 
-    if (!gateResult.allowed) {
+    if (!gateResult.allowed || this.inFlight.has(gateResult.scopedKey)) {
       return false;
     }
 
@@ -225,6 +226,7 @@ export class NotificationRouter {
       return false;
     }
 
+    this.inFlight.add(gateResult.scopedKey);
     try {
       const res = await sendTelegramMessage(payload.htmlMessage, {
         botToken: userTg.botToken,
@@ -232,7 +234,7 @@ export class NotificationRouter {
       });
 
       if (res.success) {
-        const now = payload.timestamp || Date.now();
+        const now = Date.now();
         this.scopedAlertTimestamps.set(gateResult.scopedKey, now);
 
         if (payload.coin) {
@@ -244,6 +246,8 @@ export class NotificationRouter {
       }
     } catch (err) {
       console.error(`[NotificationRouter] ❌ Error sending Telegram for ${payload.symbol}:`, err);
+    } finally {
+      this.inFlight.delete(gateResult.scopedKey);
     }
 
     return false;

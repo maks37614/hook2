@@ -27,7 +27,8 @@ export function validateSetupAlertsMath(setup: {
   const target = setup.targetPrice;
   const stop = setup.invalidationPrice;
 
-  if (!entry || !target || !stop || !Number.isFinite(entry) || !Number.isFinite(target) || !Number.isFinite(stop)) {
+  if (!entry || !target || !stop || !Number.isFinite(entry) || !Number.isFinite(target) || !Number.isFinite(stop) || entry <= 0 || target <= 0 || stop <= 0 ||
+      !['LONG', 'SHORT'].includes(setup.direction)) {
     return {
       valid: false,
       reason: `Некоректні або відсутні рівні цін: ENTRY=${entry}, TARGET=${target}, STOP=${stop}`,

@@ -7,7 +7,7 @@ interface ExtremePoint {
 }
 
 const clamp = (v: number, min = 0, max = 100) => Math.max(min, Math.min(max, v));
-const pct = (a: number, b: number) => Math.abs(a - b) / Math.max(Math.abs(b), 1) * 100;
+const pct = (a: number, b: number) => Math.abs(a - b) / Math.max(Math.abs(b), 1e-12) * 100;
 
 /**
  * Finds statistically relevant price extremes and evaluates how price is
@@ -76,13 +76,13 @@ export function analyzeExtremes(
   // toward the relevant extreme.
   const recent = klines.slice(Math.max(0, n - 10), n);
   const old = klines[Math.max(0, n - 10)];
-  const netMovePct = old ? ((current - old.close) / Math.max(old.close, 1)) * 100 : 0;
+  const netMovePct = old ? ((current - old.close) / Math.max(old.close, 1e-12)) * 100 : 0;
   const toward = wantsUpper ? netMovePct > 0 : netMovePct < 0;
   const velocityPct = Math.abs(netMovePct);
 
   const last3 = klines.slice(Math.max(0, n - 3), n);
   const last3Move = last3.length > 1
-    ? ((last3[last3.length - 1].close - last3[0].open) / Math.max(last3[0].open, 1)) * 100
+    ? ((last3[last3.length - 1].close - last3[0].open) / Math.max(last3[0].open, 1e-12)) * 100
     : 0;
   const fastToward = wantsUpper ? last3Move > 0 : last3Move < 0;
 
@@ -153,7 +153,7 @@ export function analyzeExtremes(
 
   return {
     role,
-    referencePrice: Number(reference.price.toFixed(8)),
+    referencePrice: reference.price,
     distancePct: Number(distancePct.toFixed(3)),
     rangePositionPct: Number(rangePositionPct.toFixed(2)),
     approach,

@@ -23,9 +23,9 @@ export function analyzeRoundNumber(klines: Kline[], price: number): RoundNumberC
   const strength = detected ? Math.round(Math.max(0, 100 - (distancePct / tolerancePct) * 55)) : 0;
   return {
     detected,
-    level: Number(best.level.toFixed(8)),
+    level: best.level,
     distancePct: Number(distancePct.toFixed(3)),
-    step: Number(best.step.toFixed(8)),
+    step: best.step,
     strength,
     densityConfirmed: false,
   };

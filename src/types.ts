@@ -169,6 +169,7 @@ export interface DetectedFormation {
   detectedAt: number;
   candleStartIndex?: number;
   candleEndIndex?: number;
+  structureEndIndex?: number;
 }
 
 export interface RoundNumberDensity {

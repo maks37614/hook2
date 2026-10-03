@@ -126,12 +126,12 @@ function finalizeFormationGeometry(
     status,
     statusLabel,
     levels: {
-      entryPrice: Number(entryPrice.toFixed(6)),
-      targetPrice: Number(targetPrice.toFixed(6)),
-      stopLossPrice: Number(stopLossPrice.toFixed(6)),
-      supportPrice: supportPrice ? Number(supportPrice.toFixed(6)) : undefined,
-      resistancePrice: resistancePrice ? Number(resistancePrice.toFixed(6)) : undefined,
-      necklinePrice: necklinePrice ? Number(necklinePrice.toFixed(6)) : undefined,
+      entryPrice: entryPrice,
+      targetPrice: targetPrice,
+      stopLossPrice: stopLossPrice,
+      supportPrice: supportPrice ? supportPrice : undefined,
+      resistancePrice: resistancePrice ? resistancePrice : undefined,
+      necklinePrice: necklinePrice ? necklinePrice : undefined,
     },
     potentialProfitPct: profitPct,
     potentialRiskPct: riskPct,
@@ -185,21 +185,24 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
   const getStableFormationMeta = (
     patternKey: string,
     startIndex: number,
-    endIndex: number
+    endIndex: number,
+    structureEndIndex = endIndex
   ) => {
     const cleanSym = symbol.replace(/[\/\s:]+/g, '').toUpperCase();
     const startIdx = Math.max(0, Math.min(startIndex, klines.length - 1));
     const endIdx = Math.max(startIdx, Math.min(endIndex, klines.length - 1));
     const startCandle = klines[startIdx];
     const endCandle = klines[endIdx];
+    const structureCandle = klines[Math.max(startIdx, Math.min(structureEndIndex, endIdx))];
     const startTime = startCandle ? normalizeKlineTimeMs(startCandle.time) : 0;
     const endTime = endCandle ? normalizeKlineTimeMs(endCandle.time) : 0;
 
     return {
-      id: `${cleanSym}-${patternKey}-${tf}-${startTime}-${endTime}`,
+      id: `${cleanSym}-${patternKey}-${tf}-${startTime}-${normalizeKlineTimeMs(structureCandle.time)}`,
       detectedAt: endTime || (endCandle ? normalizeKlineTimeMs(endCandle.time) : Date.now()),
       candleStartIndex: startIdx,
       candleEndIndex: endIdx,
+      structureEndIndex,
     };
   };
 
@@ -252,7 +255,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
               stopLossPrice = initialStopLoss;
             }
 
-            const meta = getStableFormationMeta('double-bottom', low1.index, klines.length - 1);
+            const meta = getStableFormationMeta('double-bottom', low1.index, klines.length - 1, low2.index);
 
             formations.push(
               finalizeFormationGeometry(
@@ -278,6 +281,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                   detectedAt: meta.detectedAt,
                   candleStartIndex: meta.candleStartIndex,
                   candleEndIndex: meta.candleEndIndex,
+                  structureEndIndex: meta.structureEndIndex,
                 },
                 currentPrice
               )
@@ -337,7 +341,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
               stopLossPrice = initialStopLoss;
             }
 
-            const meta = getStableFormationMeta('double-top', high1.index, klines.length - 1);
+            const meta = getStableFormationMeta('double-top', high1.index, klines.length - 1, high2.index);
 
             formations.push(
               finalizeFormationGeometry(
@@ -363,6 +367,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                   detectedAt: meta.detectedAt,
                   candleStartIndex: meta.candleStartIndex,
                   candleEndIndex: meta.candleEndIndex,
+                  structureEndIndex: meta.structureEndIndex,
                 },
                 currentPrice
               )
@@ -420,7 +425,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
           stopLossPrice = initialStopLoss;
         }
 
-        const meta = getStableFormationMeta('asc-triangle', l1.index, klines.length - 1);
+        const meta = getStableFormationMeta('asc-triangle', l1.index, klines.length - 1, Math.max(l2.index, h2.index));
 
         formations.push(
           finalizeFormationGeometry(
@@ -445,6 +450,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
               detectedAt: meta.detectedAt,
               candleStartIndex: meta.candleStartIndex,
               candleEndIndex: meta.candleEndIndex,
+              structureEndIndex: meta.structureEndIndex,
             },
             currentPrice
           )
@@ -500,7 +506,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
           stopLossPrice = initialStopLoss;
         }
 
-        const meta = getStableFormationMeta('desc-triangle', h1.index, klines.length - 1);
+        const meta = getStableFormationMeta('desc-triangle', h1.index, klines.length - 1, Math.max(h2.index, l2.index));
 
         formations.push(
           finalizeFormationGeometry(
@@ -525,6 +531,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
               detectedAt: meta.detectedAt,
               candleStartIndex: meta.candleStartIndex,
               candleEndIndex: meta.candleEndIndex,
+              structureEndIndex: meta.structureEndIndex,
             },
             currentPrice
           )
@@ -562,7 +569,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             entryPrice = impulsePeak;
             targetPrice = initialTarget;
             stopLossPrice = initialStopLoss;
-          } else if (currentPrice >= impulsePeak * 0.99) {
+          } else if (currentPrice > impulsePeak) {
             status = 'breakout';
             statusLabel = 'Вихід із прапора вгору';
             entryPrice = currentPrice;
@@ -576,7 +583,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             stopLossPrice = initialStopLoss;
           }
 
-          const meta = getStableFormationMeta('bull-flag', Math.max(0, klines.length - 20), klines.length - 1);
+          const meta = getStableFormationMeta('bull-flag', Math.max(0, klines.length - 20), klines.length - 1, klines.length - 20 + impulsePeakIndex);
 
           formations.push(
             finalizeFormationGeometry(
@@ -601,6 +608,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                 detectedAt: meta.detectedAt,
                 candleStartIndex: meta.candleStartIndex,
                 candleEndIndex: meta.candleEndIndex,
+                structureEndIndex: meta.structureEndIndex,
               },
               currentPrice
             )
@@ -639,7 +647,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             entryPrice = impulseBottom;
             targetPrice = initialTarget;
             stopLossPrice = initialStopLoss;
-          } else if (currentPrice <= impulseBottom * 1.01) {
+          } else if (currentPrice < impulseBottom) {
             status = 'breakout';
             statusLabel = 'Пробій полотна вниз';
             entryPrice = currentPrice;
@@ -653,7 +661,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             stopLossPrice = initialStopLoss;
           }
 
-          const meta = getStableFormationMeta('bear-flag', Math.max(0, klines.length - 20), klines.length - 1);
+          const meta = getStableFormationMeta('bear-flag', Math.max(0, klines.length - 20), klines.length - 1, klines.length - 20 + impulseBottomIndex);
 
           formations.push(
             finalizeFormationGeometry(
@@ -678,6 +686,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
                 detectedAt: meta.detectedAt,
                 candleStartIndex: meta.candleStartIndex,
                 candleEndIndex: meta.candleEndIndex,
+                structureEndIndex: meta.structureEndIndex,
               },
               currentPrice
             )
@@ -688,8 +697,8 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
   }
 
   // 7. KEY HORIZONTAL LEVEL BREAKOUT / RETEST (Пробій або ретест ключового рівня)
-  if (klines.length >= 40) {
-    const recent40 = klines.slice(-40);
+  if (klines.length >= 41) {
+    const recent40 = klines.slice(-41, -1);
     const highsList = recent40.map((c) => c.high);
     const maxHigh = Math.max(...highsList);
     const touches = highsList.filter((h) => (maxHigh - h) / maxHigh <= 0.012).length;
@@ -710,7 +719,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
         entryPrice = maxHigh;
         targetPrice = initialTarget;
         stopLossPrice = initialStopLoss;
-      } else if (currentPrice >= maxHigh * 0.998) {
+      } else if (currentPrice > maxHigh) {
         const isRetest = currentPrice <= maxHigh * 1.015 && currentCandle.low <= maxHigh;
         status = isRetest ? 'retest' : 'breakout';
         statusLabel = isRetest ? 'Ретест рівня зверху' : 'Імпульсний пробій опору';
@@ -725,7 +734,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
         stopLossPrice = initialStopLoss;
       }
 
-      const meta = getStableFormationMeta('level-breakout', Math.max(0, klines.length - 40), klines.length - 1);
+      const meta = getStableFormationMeta('level-breakout', Math.max(0, klines.length - 40), klines.length - 1, klines.length - 2);
 
       formations.push(
         finalizeFormationGeometry(
@@ -750,6 +759,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             detectedAt: meta.detectedAt,
             candleStartIndex: meta.candleStartIndex,
             candleEndIndex: meta.candleEndIndex,
+            structureEndIndex: meta.structureEndIndex,
           },
           currentPrice
         )
@@ -758,12 +768,12 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
   }
 
   // 8. VOLATILITY SQUEEZE (Стиснення діапазону)
-  if (klines.length >= 30) {
-    const recent10 = klines.slice(-10);
+  if (klines.length >= 31) {
+    const recent10 = klines.slice(-11, -1);
     const ranges10 = recent10.map((c) => (c.high - c.low) / c.close);
     const avgRecentRange = ranges10.reduce((s, r) => s + r, 0) / 10;
 
-    const prior20 = klines.slice(-30, -10);
+    const prior20 = klines.slice(-31, -11);
     const priorRanges = prior20.map((c) => (c.high - c.low) / c.close);
     const avgPriorRange = priorRanges.reduce((s, r) => s + r, 0) / 20;
 
@@ -778,7 +788,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
       const targetPrice = breakoutUp ? currentPrice + riskBase * 2.2 : breakoutDown ? currentPrice - riskBase * 2.2 : highest10;
       const stopLossPrice = breakoutUp ? lowest10 : breakoutDown ? highest10 : lowest10;
 
-      const meta = getStableFormationMeta('squeeze', Math.max(0, klines.length - 30), klines.length - 1);
+      const meta = getStableFormationMeta('squeeze', Math.max(0, klines.length - 30), klines.length - 1, klines.length - 2);
 
       formations.push(
         finalizeFormationGeometry(
@@ -803,6 +813,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             detectedAt: meta.detectedAt,
             candleStartIndex: meta.candleStartIndex,
             candleEndIndex: meta.candleEndIndex,
+            structureEndIndex: meta.structureEndIndex,
           },
           currentPrice
         )
@@ -853,6 +864,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             detectedAt: meta.detectedAt,
             candleStartIndex: meta.candleStartIndex,
             candleEndIndex: meta.candleEndIndex,
+            structureEndIndex: meta.structureEndIndex,
           },
           currentPrice
         )
@@ -887,6 +899,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             detectedAt: meta.detectedAt,
             candleStartIndex: meta.candleStartIndex,
             candleEndIndex: meta.candleEndIndex,
+            structureEndIndex: meta.structureEndIndex,
           },
           currentPrice
         )
@@ -921,6 +934,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             detectedAt: meta.detectedAt,
             candleStartIndex: meta.candleStartIndex,
             candleEndIndex: meta.candleEndIndex,
+            structureEndIndex: meta.structureEndIndex,
           },
           currentPrice
         )
@@ -955,6 +969,7 @@ export function detectFormations(klines: Kline[], symbol: string): DetectedForma
             detectedAt: meta.detectedAt,
             candleStartIndex: meta.candleStartIndex,
             candleEndIndex: meta.candleEndIndex,
+            structureEndIndex: meta.structureEndIndex,
           },
           currentPrice
         )

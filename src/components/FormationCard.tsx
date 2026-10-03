@@ -261,6 +261,15 @@ export const FormationCard: React.FC<FormationCardProps> = ({
                 </span>
               </div>
 
+              {formation.validation && (
+                <div className={`text-[10px] mb-2 ${formation.validation.passed ? 'text-emerald-300' : 'text-amber-300'}`}>
+                  {formation.validation.passed ? 'Вхід підтверджено' : 'Вхід ще не підтверджено'}
+                  {!formation.validation.passed && (
+                    <p className="text-slate-400 mt-1">{formation.validation.rejectionReasons.slice(0, 2).join(' · ')}</p>
+                  )}
+                </div>
+              )}
+
               {/* Detailed confluence */}
               {formation.validation?.confluence && (
                 <div className="mt-2 border-t border-slate-800/70 pt-2">
