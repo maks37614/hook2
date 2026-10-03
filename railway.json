@@ -5,6 +5,7 @@
     "buildCommand": "npm run build"
   },
   "deploy": {
+    "region": "europe-west4-drams3a",
     "multiRegionConfig": {
       "europe-west4-drams3a": { "numReplicas": 1 }
     },
