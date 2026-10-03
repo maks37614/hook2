@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { getAlertMirrorWrites, getAlertMirrorDeletes } from '../src/utils/alertSync';
 
 // Isolate persistence and credentials from real application data.
 const originalCwd = process.cwd();
@@ -24,6 +26,64 @@ test('stale client sync cannot delete server-created alerts', () => {
   service.deleteAlert('new-on-server', 'test-user');
   assert.equal(service.getAllAlerts('test-user').length, 0);
   assert.equal(service.syncUserAlerts('test-user', merged).length, 0);
+});
+
+test('stale sync cannot undo a manual server pause', () => {
+  const created = { ...service.createAlert(alert('paused-before-sync', 'paused-user')) };
+  service.toggleAlert(created.id, 'paused-user', false);
+  const merged = service.syncUserAlerts('paused-user', [created]);
+  assert.equal(merged[0].isActive, false);
+});
+
+test('price alert mutations require the owner and never affect another user', () => {
+  const created = service.createAlert(alert('owner-only', 'owner'));
+  assert.equal(service.toggleAlert(created.id), null);
+  assert.equal(service.deleteAlert(created.id), false);
+  assert.equal(service.toggleAlert(created.id, 'another-user'), null);
+  assert.equal(service.deleteAlert(created.id, 'another-user'), false);
+  assert.equal(service.getAllAlerts('owner')[0].isActive, true);
+});
+
+test('Firestore mirrors receive automatic server alerts and paused/reactivated state without write loops', () => {
+  const auto = service.createAlert(alert('server-auto', 'mirror-user'));
+  assert.deepEqual(getAlertMirrorWrites([auto], []), [auto]);
+  assert.deepEqual(getAlertMirrorWrites([auto], [{ ...auto }]), []);
+  assert.equal(getAlertMirrorWrites([{ ...auto, isActive: false }], [auto]).length, 1);
+  const triggered = { ...auto, triggered: true, triggeredAt: 123, triggeredPrice: 111, isActive: false };
+  assert.deepEqual(getAlertMirrorWrites([auto], [triggered]), [auto]);
+  assert.deepEqual(getAlertMirrorDeletes([], [auto]), [auto.id]);
+  assert.deepEqual(getAlertMirrorDeletes([auto], [auto]), []);
+});
+
+test('duplicate create requests preserve a paused or triggered alert', () => {
+  const created = service.createAlert(alert('create-retry', 'retry-user'));
+  service.toggleAlert(created.id, 'retry-user', false);
+  assert.equal(service.createAlert(alert(created.id, 'retry-user')).isActive, false);
+  assert.equal(service.createAlertsBatch('retry-user', [alert(created.id, 'retry-user')])[0].isActive, false);
+  created.triggered = true;
+  created.triggeredAt = 123;
+  service.saveAlerts(service.loadAlerts());
+  assert.equal(service.createAlert(alert(created.id, 'retry-user')).triggered, true);
+});
+
+test('deletion before delayed creation prevents POST and batch resurrection', () => {
+  service.deleteAlert('deleted-before-create', 'delayed-user');
+  assert.throws(() => service.createAlert(alert('deleted-before-create', 'delayed-user')), /видалено/);
+  assert.deepEqual(service.createAlertsBatch('delayed-user', [alert('deleted-before-create', 'delayed-user')]), []);
+  assert.equal(service.getAllAlerts('delayed-user').length, 0);
+});
+
+test('deleted alerts cannot be resurrected by stale sync after a server restart', () => {
+  const created = { ...service.createAlert(alert('deleted-before-restart', 'restart-user')) };
+  service.deleteAlert(created.id, 'restart-user');
+  const moduleUrl = new URL('../server/alertService.ts', import.meta.url).href;
+  const script = `const service = await import(${JSON.stringify(moduleUrl)});
+    const merged = service.syncUserAlerts('restart-user', [${JSON.stringify(created)}]);
+    if (merged.some(a => a.id === 'deleted-before-restart')) process.exit(1);`;
+  const restarted = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+    cwd: fixtureDir, encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(restarted.status, 0, restarted.stderr || restarted.error?.message);
 });
 
 test('setup groups are idempotent and isolated between users', () => {

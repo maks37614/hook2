@@ -153,7 +153,7 @@ export class SetupEngine {
     // receiving a flood of weak independent confirmations.
     const deduped = new Map<string, SetupInstance>();
     for (const setup of results) {
-      const key = `${setup.direction}:${setup.entryZone.low.toFixed(6)}:${setup.type}`;
+      const key = `${setup.direction}:${setup.entryZone.low.toPrecision(12)}:${setup.type}`;
       const old = deduped.get(key);
       if (!old || setup.confluenceScore > old.confluenceScore) deduped.set(key, setup);
     }
@@ -215,10 +215,11 @@ export class SetupEngine {
     const atr = Math.max(candles15m.length >= 15 ? calculateATR(candles15m.slice(-30)) : Math.abs(zone.zoneHigh - zone.zoneLow), rawEntry * 0.002);
     const invalidation = Math.min(zone.zoneLow - atr * 0.15, sweep?.sweepPrice ? sweep.sweepPrice - atr * 0.10 : rawEntry - atr * 0.75);
     const target = rawEntry + Math.abs(rawEntry - invalidation) * 2.2;
+    if (![rawEntry, invalidation, target].every(p => Number.isFinite(p) && p > 0) || invalidation >= rawEntry) return null;
     const entryZone = { low: Math.min(rawEntry, zone.zoneCenter), high: Math.max(rawEntry, zone.zoneCenter) };
     const aggressiveEntry = sweep?.reclaimPrice || zone.zoneCenter;
     const confirmationEntry = breakInfo?.price || rawEntry;
-    const rr = (target - rawEntry) / Math.max(0.00000001, rawEntry - invalidation);
+    const rr = (target - rawEntry) / (rawEntry - invalidation);
     const confluence = this.buildConfluence({ direction: 'LONG', patternScore, htfScore, levelScore, triggerScore, volumeScore, flowScore, liquidityScore, oiScore, btcScore, rr, orderBookImbalance, pattern, breakInfo, density, rvol });
     const score = confluence.total;
     const independent = confluence.independentConfirmations;
@@ -309,7 +310,8 @@ export class SetupEngine {
     const entryZone = { low: Math.min(rawEntry, zone.zoneCenter), high: Math.max(rawEntry, zone.zoneCenter) };
     const aggressiveEntry = sweep?.reclaimPrice || zone.zoneCenter;
     const confirmationEntry = breakInfo?.price || rawEntry;
-    const rr = (rawEntry - target) / Math.max(0.00000001, invalidation - rawEntry);
+    if (![rawEntry, invalidation, target].every(p => Number.isFinite(p) && p > 0) || invalidation <= rawEntry) return null;
+    const rr = (rawEntry - target) / (invalidation - rawEntry);
     const confluence = this.buildConfluence({ direction: 'SHORT', patternScore, htfScore, levelScore, triggerScore, volumeScore, flowScore, liquidityScore, oiScore, btcScore, rr, orderBookImbalance, pattern, breakInfo, density, rvol });
     const score = confluence.total;
     const independent = confluence.independentConfirmations;
@@ -394,10 +396,17 @@ export class SetupEngine {
       ...(oiScore >= 4 ? ['OI regime aligned'] : []),
       ...(btcScore >= 4 ? ['BTC context aligned'] : []),
     ];
-    const entry = breakInfo ? (breakInfo.price + boundary) / 2 : boundary;
-    const risk = Math.abs(entry - boundary) * 1.5 + Math.max(entry * 0.003, 0.00000001);
-    const target = direction === 'LONG' ? entry + risk * 2.2 : entry - risk * 2.2;
-    const rr = 2.2;
+    const measured = pattern.levels;
+    const entry = measured?.entryPrice ?? (breakInfo ? (breakInfo.price + boundary) / 2 : boundary);
+    const fallbackRisk = Math.abs(entry - boundary) * 1.5 + entry * 0.003;
+    const stop = measured?.stopLossPrice ?? (direction === 'LONG' ? entry - fallbackRisk : entry + fallbackRisk);
+    const target = measured?.targetPrice ?? (direction === 'LONG' ? entry + fallbackRisk * 2.2 : entry - fallbackRisk * 2.2);
+    const validLevels = [entry, stop, target].every(p => Number.isFinite(p) && p > 0) &&
+      (direction === 'LONG' ? stop < entry && entry < target : target < entry && entry < stop);
+    if (!validLevels || (direction === 'LONG' ? currentPrice <= stop || currentPrice >= target : currentPrice >= stop || currentPrice <= target)) return null;
+    const risk = Math.abs(entry - stop);
+    const rr = Math.abs(target - entry) / risk;
+    const targets = measured ? [target] : [target, direction === 'LONG' ? entry + risk * 3.2 : entry - risk * 3.2];
     const confluence = this.buildConfluence({
       direction,
       patternScore: pattern.score,
@@ -418,11 +427,11 @@ export class SetupEngine {
     });
     const score = confluence.total;
     const independent = confluence.independentConfirmations;
-    const hardGatesPassed = pattern.status === 'BROKEN' && triggerScore >= 10 && !!breakInfo?.volumeConfirmed && independent >= 3 && rr >= 2 && this.distancePct(currentPrice, entry) <= 0.35;
+    const hardGatesPassed = pattern.status === 'BROKEN' && pattern.validationPassed !== false && triggerScore >= 10 && !!breakInfo?.volumeConfirmed && independent >= 3 && rr >= 2 && this.distancePct(currentPrice, entry) <= 0.35;
     const confirmed = hardGatesPassed && independent >= 3 && score >= 78;
 
     return this.upsert({
-      id: `${symbol}_FORMATION_${direction}_${pattern.name.replace(/\s+/g, '_')}`,
+      id: `${symbol}_FORMATION_${direction}_${pattern.id ?? pattern.name.replace(/\s+/g, '_')}`,
       type: breakInfo ? 'BREAKOUT_RETEST' : 'STRUCTURE_SHIFT',
       symbol, exchange, marketType,
       timeframe: pattern.timeframe,
@@ -430,8 +439,8 @@ export class SetupEngine {
       direction,
       entryZone: { low: Math.min(entry, boundary), high: Math.max(entry, boundary) },
       preferredEntry: entry, aggressiveEntry: sweep?.reclaimPrice || boundary, confirmationEntry: breakInfo?.price || entry,
-      targets: [target, direction === 'LONG' ? entry + risk * 3.2 : entry - risk * 3.2],
-      invalidationPrice: direction === 'LONG' ? entry - risk : entry + risk,
+      targets,
+      invalidationPrice: stop,
       targetPrice: target,
       confluenceScore: score,
       confirmations,
@@ -454,7 +463,7 @@ export class SetupEngine {
         formationScore: patternScore, htfScore, levelScore, triggerScore, volumeScore, flowScore, orderBookScore: confluence.components.orderBook.score, oiScore, marketContextScore: btcScore,
         structureScore: triggerScore,
         entryType: breakInfo ? 'BREAKOUT_RETEST' : 'BOS_RETEST',
-        preferredEntry: entry, entryZone: { low: Math.min(entry, boundary), high: Math.max(entry, boundary) }, invalidation: direction === 'LONG' ? entry - risk : entry + risk, targets: [target, direction === 'LONG' ? entry + risk * 3.2 : entry - risk * 3.2],
+        preferredEntry: entry, entryZone: { low: Math.min(entry, boundary), high: Math.max(entry, boundary) }, invalidation: stop, targets,
       },
       createdAt: Date.now(), updatedAt: Date.now(),
     });
@@ -478,7 +487,7 @@ export class SetupEngine {
 
   private bestPattern(patterns: DetectedPattern[], price: number, zone: LevelZone): DetectedPattern | undefined {
     return patterns
-      .filter((p) => p.status !== 'INVALIDATED')
+      .filter((p) => p.status !== 'INVALIDATED' && p.validationPassed !== false)
       .sort((a, b) => this.patternFit(b, price, zone) - this.patternFit(a, price, zone))[0];
   }
 
@@ -504,7 +513,7 @@ export class SetupEngine {
     const now = Date.now();
     return Object.values(structures)
       .filter((s) => allowed.includes(s.timeframe) && s.lastBreak?.direction === direction && s.lastBreak.confirmed)
-      .filter((s) => !!s.lastBreak && now - s.lastBreak.time <= 6 * 60 * 60 * 1000)
+      .filter((s) => !!s.lastBreak && now >= s.lastBreak.time && now - s.lastBreak.time <= 6 * 60 * 60 * 1000)
       .sort((a, b) => {
         const weight = (tf: Timeframe) => tf === '5m' ? 3 : tf === '15m' ? 2 : 1;
         return weight(b.timeframe) - weight(a.timeframe) || (b.lastBreak?.time || 0) - (a.lastBreak?.time || 0);
@@ -739,7 +748,7 @@ export class SetupEngine {
   }
 
   private distancePct(a: number, b: number): number {
-    return Math.abs(a - b) / Math.max(Math.abs(b), 0.00000001) * 100;
+    return Number.isFinite(a) && Number.isFinite(b) && b !== 0 ? Math.abs(a - b) / Math.abs(b) * 100 : Infinity;
   }
 
   private structureSummary(structures: Record<Timeframe, TimeframeStructure>): string {

@@ -4,8 +4,6 @@ import {
   doc,
   setDoc,
   deleteDoc,
-  updateDoc,
-  deleteField,
   onSnapshot,
   query,
   orderBy,
@@ -18,6 +16,7 @@ import { PriceAlert, AlertHistoryItem } from '../types';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { cleanForFirestore } from '../lib/firestoreUtils';
 import { playAlertChime } from '../utils/domSound';
+import { getAlertMirrorWrites, getAlertMirrorDeletes } from '../utils/alertSync';
 
 interface AlertsContextType {
   alerts: PriceAlert[];
@@ -62,7 +61,13 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
 
   const notifiedTriggers = useRef(new Set<string>());
-  useEffect(() => { notifiedTriggers.current.clear(); }, [user?.uid]);
+  const firestoreAlertsRef = useRef<PriceAlert[]>([]);
+  const pendingMirrors = useRef(new Set<string>());
+  useEffect(() => {
+    notifiedTriggers.current.clear();
+    firestoreAlertsRef.current = [];
+    pendingMirrors.current.clear();
+  }, [user?.uid]);
 
   const alertsRef = useRef(alerts);
   alertsRef.current = alerts;
@@ -70,6 +75,28 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   userRef.current = user;
   const profileRef = useRef(profile);
   profileRef.current = profile;
+
+  const mirrorServerAlerts = useCallback((userId: string, serverAlerts: PriceAlert[], syncedAlerts: PriceAlert[] = []) => {
+    if (userRef.current?.uid !== userId) return;
+    // Delete only documents sent in this request; a newer snapshot may contain
+    // an alert created while the response was in flight.
+    for (const id of getAlertMirrorDeletes(serverAlerts, syncedAlerts)) {
+      const key = `${userId}:${id}`;
+      if (pendingMirrors.current.has(key)) continue;
+      pendingMirrors.current.add(key);
+      deleteDoc(doc(db, 'users', userId, 'alerts', id))
+        .catch(() => {})
+        .finally(() => pendingMirrors.current.delete(key));
+    }
+    for (const alert of getAlertMirrorWrites(serverAlerts, firestoreAlertsRef.current)) {
+      const key = `${userId}:${alert.id}`;
+      if (pendingMirrors.current.has(key)) continue;
+      pendingMirrors.current.add(key);
+      setDoc(doc(db, 'users', userId, 'alerts', alert.id), cleanForFirestore(alert))
+        .catch(() => {})
+        .finally(() => pendingMirrors.current.delete(key));
+    }
+  }, []);
 
   const requestNotificationPermission = useCallback(async (): Promise<NotificationPermission> => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -254,10 +281,13 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
+        if (userRef.current?.uid !== user.uid) return;
         const list: PriceAlert[] = [];
         snapshot.forEach((docSnap) => {
           list.push(docSnap.data() as PriceAlert);
         });
+        firestoreAlertsRef.current = list;
+        alertsRef.current = list;
         setAlerts(list);
         setLoading(false);
 
@@ -276,23 +306,15 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           .then((data) => {
             if (userRef.current?.uid !== user.uid) return;
             if (data.success && Array.isArray(data.alerts)) {
-              // Only update triggered status for existing alerts that fired on the server
               data.alerts.forEach((serverAlert: PriceAlert) => {
                 const localMatch = list.find((a) => a.id === serverAlert.id);
                 if (localMatch && serverAlert.triggered && !localMatch.triggered) {
                   handleServerAlertTriggeredRef.current(serverAlert);
-                  const docRef = doc(db, 'users', user.uid, 'alerts', serverAlert.id);
-                  updateDoc(
-                    docRef,
-                    cleanForFirestore({
-                      isActive: false,
-                      triggered: true,
-                      triggeredAt: serverAlert.triggeredAt || Date.now(),
-                      triggeredPrice: serverAlert.triggeredPrice || 0,
-                    })
-                  ).catch(() => {});
                 }
               });
+              alertsRef.current = data.alerts;
+              setAlerts(data.alerts);
+              mirrorServerAlerts(user.uid, data.alerts, list);
             }
           })
           .catch(() => {});
@@ -351,31 +373,20 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (localMatch && serverAlert.triggered && !localMatch.triggered) {
               hasNewlyTriggered = true;
               handleServerAlertTriggeredRef.current(serverAlert);
-
-              if (!isLocal) {
-                const docRef = doc(db, 'users', currentUser.uid, 'alerts', serverAlert.id);
-                updateDoc(
-                  docRef,
-                  cleanForFirestore({
-                    isActive: false,
-                    triggered: true,
-                    triggeredAt: serverAlert.triggeredAt || Date.now(),
-                    triggeredPrice: serverAlert.triggeredPrice || 0,
-                  })
-                ).catch(() => {});
-              }
             }
           });
 
+          alertsRef.current = data.alerts;
+          setAlerts((prev) => {
+            if (JSON.stringify(prev) === JSON.stringify(data.alerts)) return prev;
+            return data.alerts;
+          });
           if (isLocal) {
-            alertsRef.current = data.alerts;
-            setAlerts((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(data.alerts)) return prev;
-              return data.alerts;
-            });
             try {
               localStorage.setItem(`signalhook_user_alerts_${currentUser.uid}`, JSON.stringify(data.alerts));
             } catch {}
+          } else {
+            mirrorServerAlerts(currentUser.uid, data.alerts, currentAlertsList);
           }
 
           if (hasNewlyTriggered) {
@@ -660,48 +671,26 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!existing) return;
 
       const newActive = !existing.isActive;
-      const localUpdates: Partial<PriceAlert> = {
-        isActive: newActive,
-      };
-      const firestoreUpdates: Record<string, any> = {
-        isActive: newActive,
-      };
-
-      if (newActive && existing.triggered) {
-        localUpdates.triggered = false;
-        localUpdates.triggeredAt = undefined;
-        localUpdates.triggeredPrice = undefined;
-
-        firestoreUpdates.triggered = false;
-        firestoreUpdates.triggeredAt = deleteField();
-        firestoreUpdates.triggeredPrice = deleteField();
-      }
-
       const isFirebase = Boolean(user && !(user as any).isLocalUser);
-
-      if (isFirebase && user) {
-        try {
-          const alertDocRef = doc(db, 'users', user.uid, 'alerts', id);
-          await updateDoc(alertDocRef, cleanForFirestore(firestoreUpdates));
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/alerts/${id}`);
-          return;
-        }
-
-        fetch(`/api/alerts/${id}/toggle?userId=${encodeURIComponent(user.uid)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isActive: newActive }) }).catch(() => {});
+      const response = await fetch(`/api/alerts/${encodeURIComponent(id)}/toggle?userId=${encodeURIComponent(user.uid)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isActive: newActive }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.alert) throw new Error(data.error || 'Не вдалося змінити сповіщення');
+      if (userRef.current?.uid !== user.uid) return;
+      const updated = alertsRef.current.map(a => a.id === id ? data.alert as PriceAlert : a);
+      alertsRef.current = updated;
+      setAlerts(updated);
+      if (isFirebase) {
+        mirrorServerAlerts(user.uid, updated);
       } else {
         const storageKey = `signalhook_user_alerts_${user.uid}`;
-        setAlerts((prev) => {
-          const updated = prev.map((a) => (a.id === id ? { ...a, ...localUpdates } : a));
-          try {
-            localStorage.setItem(storageKey, JSON.stringify(updated));
-          } catch {}
-          return updated;
-        });
-        fetch(`/api/alerts/${id}/toggle?userId=${encodeURIComponent(user.uid)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isActive: newActive }) }).catch(() => {});
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(updated));
+        } catch {}
       }
     },
-    [user, alerts]
+    [user, alerts, mirrorServerAlerts]
   );
 
   const clearTriggered = useCallback(async (): Promise<number> => {

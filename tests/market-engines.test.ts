@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 import { normalizeKlineTimeMs, validateFormation } from '../src/utils/formationValidation';
 import { detectFormations } from '../src/utils/patternRecognition';
 import { OrderBookEngine } from '../server/surveillance/orderBookEngine';
 import { ExchangeStreamClient } from '../server/surveillance/exchangeStream';
 import { MultiTimeframeEngine } from '../server/surveillance/multiTimeframeEngine';
+import { LevelsAndFormationsEngine, toSurveillancePattern } from '../server/surveillance/levelsAndFormationsEngine';
+import { SetupEngine } from '../server/surveillance/setupEngine';
 import { fetchOrderBook, fetchRecentTrades } from '../server/marketService';
 import type { DetectedFormation, Kline } from '../src/types';
 
@@ -58,6 +61,143 @@ test('fulfilled targets and failed breakouts are not actionable', () => {
   assert.equal(validateFormation(data, pattern()).validation?.passed, false);
   data[39] = { ...data[39], high: 112, close: 111, volume: 200 };
   assert.equal(validateFormation(data, pattern()).validation?.passed, false);
+});
+
+test('a target or stop touched after entry invalidates a formation even after price recovers', () => {
+  for (const touched of ['target', 'stop'] as const) {
+    const data = candles();
+    for (let i = 37; i < data.length; i++) {
+      data[i] = { ...data[i], open: 101, high: 102, low: 100, close: 101, volume: 200 };
+    }
+    data[38] = { ...data[38], high: touched === 'target' ? 111 : 102, low: touched === 'stop' ? 97 : 100 };
+    const result = validateFormation(data, pattern());
+    assert.equal(result.validation?.breakoutConfirmed, true);
+    assert.equal(result.validation?.passed, false, touched);
+    assert.ok(result.validation?.rejectionReasons.some(reason => /Ціль|Стоп/.test(reason)), touched);
+  }
+});
+
+test('bearish entries reject historical target/stop wicks but ignore wicks before entry', () => {
+  const short = pattern({ bias: 'bearish', levels: { entryPrice: 99, stopLossPrice: 102, targetPrice: 90, necklinePrice: 99 } });
+  for (const touched of ['target', 'stop'] as const) {
+    const data = candles().map(c => ({ ...c, open: 100, high: 101, low: 99, close: 100 }));
+    for (let i = 37; i < data.length; i++) data[i] = { ...data[i], open: 98, high: 99, low: 97, close: 98, volume: 200 };
+    data[38] = { ...data[38], low: touched === 'target' ? 89 : 97, high: touched === 'stop' ? 103 : 99 };
+    assert.equal(validateFormation(data, short).validation?.passed, false, touched);
+  }
+  const data = candles();
+  data[30] = { ...data[30], high: 111 };
+  data[39] = { ...data[39], high: 111, close: 101, volume: 200 };
+  assert.equal(validateFormation(data, pattern()).validation?.passed, true);
+});
+
+test('a stop before the target or in the same candle is never labelled as a successful target', () => {
+  for (const sameBar of [false, true]) {
+    const data = candles();
+    for (let i = 37; i < data.length; i++) data[i] = { ...data[i], open: 101, high: 102, low: 100, close: 101, volume: 200 };
+    data[38].low = 97;
+    data[sameBar ? 38 : 39].high = 111;
+    const result = validateFormation(data, pattern());
+    assert.equal(result.validation?.passed, false);
+    assert.notEqual(result.status, 'target_reached');
+    assert.match(result.statusLabel, /стоп/);
+  }
+});
+
+const setupContext = () => ({
+  symbol: 'BTCUSDT', exchange: 'binance' as const, marketType: 'futures' as const, currentPrice: 101,
+  structures: Object.fromEntries(['1d', '4h', '1h', '15m', '5m'].map(timeframe => [timeframe, {
+    timeframe, trend: 'BULLISH', score: 100, recentSwings: [], higherHighsCount: 4,
+    lowerHighsCount: 0, higherLowsCount: 4, lowerLowsCount: 0,
+    lastBreak: { type: 'BOS', direction: 'BULLISH', price: 101, brokenSwingPrice: 100,
+      time: Date.now() - 1000, timeframe, confirmed: true, volumeConfirmed: true },
+  }])) as any,
+  zones: [], thirdTouches: [], rvol: 2, orderBookImbalance: 0.4,
+  densities: [{ id: 'bid', price: 100, side: 'BID', quantity: 1000, notionalUsd: 100000,
+    distancePct: 1, firstSeenAt: 0, lastSeenAt: Date.now(), ageSeconds: 100, maxSizeUsd: 100000,
+    averageSizeUsd: 100000, persistenceRatio: 1, classification: 'PERSISTENT_LIQUIDITY', qualityScore: 100 }] as any,
+  tradeFlow: { aggressiveBuyUsd: 200000, aggressiveSellUsd: 100000, imbalanceRatio: 2,
+    largeTradeCount: 10, totalTradeCount: 30, averageTradeSizeUsd: 10000, recentTradesWindowMs: 60000,
+    deltaZScore: 2, deltaAcceleration: 1 },
+  oiSnapshot: { currentUsd: 1000000, amountCoins: 10000, change1mPct: 1, change5mPct: 2,
+    change15mPct: 3, change1hPct: 4, change4hPct: 5, regime: 'PRICE_UP_OI_UP' as const, isAnomaly: false },
+  btcContext: { currentPrice: 100, trend1d: 'Bullish', trend4h: 'Bullish', trend1h: 'Bullish',
+    trend15m: 'Bullish', btcDominance: 50, btcDominanceRegime: 'range', totalMarketCapUsd: 1e12,
+    totalMarketCapRegime: 'expansion', correlationAltBtc: 1, relativeStrength: 'STRONG', lastUpdated: Date.now() } as any,
+});
+
+test('surveillance confirms valid formations with their measured entry, stop and target', () => {
+  const data = candles();
+  data[39] = { ...data[39], high: 102, close: 101, volume: 200 };
+  const formation = validateFormation(data, pattern());
+  assert.equal(formation.validation?.passed, true);
+  const result = new SetupEngine().evaluateSetups({ ...setupContext(), patterns: [toSurveillancePattern(formation)] });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].stage, 'CONFIRMED');
+  assert.equal(result[0].preferredEntry, formation.levels.entryPrice);
+  assert.equal(result[0].invalidationPrice, formation.levels.stopLossPrice);
+  assert.equal(result[0].targetPrice, formation.levels.targetPrice);
+});
+
+test('surveillance rejects failed formations despite confirmed breakouts and strong external evidence', () => {
+  const data = candles();
+  data[39] = { ...data[39], high: 102, close: 101, volume: 200 };
+  const invalid = validateFormation(data, pattern({ levels: { entryPrice: 100, stopLossPrice: 95, targetPrice: 102, necklinePrice: 100 } }));
+  assert.equal(invalid.validation?.breakoutConfirmed, true);
+  assert.equal(invalid.validation?.passed, false);
+  const mapped = toSurveillancePattern(invalid);
+  assert.equal(mapped.status, 'INVALIDATED');
+  assert.deepEqual(new SetupEngine().evaluateSetups({ ...setupContext(), patterns: [mapped] }), []);
+});
+
+test('setup engine cannot inflate weak measured R:R or confirm future structural breaks', () => {
+  const data = candles();
+  data[39] = { ...data[39], high: 102, close: 101, volume: 200 };
+  const mapped = toSurveillancePattern(validateFormation(data, pattern()));
+  const weak = { ...mapped, levels: { entryPrice: 101, stopLossPrice: 95, targetPrice: 102 } };
+  const weakResult = new SetupEngine().evaluateSetups({ ...setupContext(), patterns: [weak] });
+  assert.equal(weakResult[0].targetPrice, 102);
+  assert.ok(weakResult[0].entryQuality!.riskReward < 2);
+  assert.notEqual(weakResult[0].stage, 'CONFIRMED');
+  const context = setupContext();
+  for (const structure of Object.values(context.structures) as any[]) structure.lastBreak.time = Date.now() + 3600000;
+  assert.notEqual(new SetupEngine().evaluateSetups({ ...context, patterns: [mapped] })[0].stage, 'CONFIRMED');
+});
+
+test('distinct micro-price support/resistance zones retain distinct identities', () => {
+  const data = Array.from({ length: 40 }, (_, i) => ({
+    time: (1700000000 + i * 3600) * 1000, open: (100 + Math.sin(i) * 10) * 1e-10,
+    high: (101 + Math.sin(i) * 10) * 1e-10, low: (99 + Math.sin(i) * 10) * 1e-10,
+    close: (100 + Math.sin(i) * 10) * 1e-10, volume: 100,
+  }));
+  data[15].low = 80e-10;
+  const zones = new LevelsAndFormationsEngine('BACKTEST').findSupportResistanceZones([], [], data);
+  assert.ok(zones.filter(z => z.type === 'SUPPORT').length >= 2);
+  assert.equal(new Set(zones.map(z => z.id)).size, zones.length);
+});
+
+test('micro-price proximity filters use percentages instead of an absolute price floor', () => {
+  const context = setupContext();
+  const mapped = toSurveillancePattern(pattern());
+  mapped.status = 'BROKEN';
+  mapped.validationPassed = true;
+  mapped.upperBoundary = 2e-11;
+  mapped.lowerBoundary = 1e-11;
+  mapped.levels = { entryPrice: 1e-11, stopLossPrice: 5e-12, targetPrice: 3e-11 };
+  assert.deepEqual(new SetupEngine().evaluateSetups({ ...context, currentPrice: 1e-11, patterns: [mapped] }), []);
+});
+
+test('destroying a websocket during its opening handshake does not crash the server', () => {
+  const moduleUrl = new URL('../server/surveillance/exchangeStream.ts', import.meta.url).href;
+  const script = `import WebSocket from 'ws'; import { EventEmitter } from 'node:events';
+    const { ExchangeStreamClient } = await import(${JSON.stringify(moduleUrl)});
+    const stream = Object.assign(new EventEmitter(), { ws: new WebSocket('ws://127.0.0.1:1') });
+    Object.setPrototypeOf(stream, ExchangeStreamClient.prototype);
+    stream.destroy(); await new Promise(resolve => setImmediate(resolve));`;
+  const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+    cwd: process.cwd(), encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(child.status, 0, child.stderr || child.error?.message);
 });
 
 test('micro-priced formations retain positive levels', () => {

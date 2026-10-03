@@ -9,6 +9,7 @@ const DATA_DIR = path.join(process.cwd(), 'server', 'data');
 const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'alert_history.json');
 const USER_TELEGRAM_FILE = path.join(DATA_DIR, 'user_telegram.json');
+const DELETED_ALERTS_FILE = path.join(DATA_DIR, 'deleted_alerts.json');
 
 // Ensure directory exists
 function ensureDataDir() {
@@ -47,7 +48,28 @@ let isUserTelegramLoaded = false;
 
 let monitorInterval: any = null;
 const deletedAlertIds = new Set<string>();
+let areDeletedAlertIdsLoaded = false;
 const alertIdentity = (userId: string, id: string) => `${userId}:${id}`;
+
+function loadDeletedAlertIds() {
+  if (areDeletedAlertIdsLoaded) return;
+  ensureDataDir();
+  if (fs.existsSync(DELETED_ALERTS_FILE)) {
+    const stored: unknown = JSON.parse(fs.readFileSync(DELETED_ALERTS_FILE, 'utf-8'));
+    if (!Array.isArray(stored) || stored.some(id => typeof id !== 'string')) {
+      throw new Error('Invalid deleted alert persistence');
+    }
+    for (const id of stored) deletedAlertIds.add(id);
+  }
+  areDeletedAlertIdsLoaded = true;
+}
+
+function saveDeletedAlertIds() {
+  ensureDataDir();
+  const temporary = `${DELETED_ALERTS_FILE}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify([...deletedAlertIds]), 'utf-8');
+  fs.renameSync(temporary, DELETED_ALERTS_FILE);
+}
 
 // --- User Telegram persistence ---
 export function loadUserTelegram(): Map<string, UserTelegramData> {
@@ -93,6 +115,7 @@ export function getUserTelegram(userId?: string): UserTelegramData | undefined {
 
 // --- Alerts persistence ---
 export function loadAlerts(): PriceAlert[] {
+  loadDeletedAlertIds();
   if (isAlertsLoaded) return alertsCache;
   try {
     ensureDataDir();
@@ -107,6 +130,7 @@ export function loadAlerts(): PriceAlert[] {
     alertsCache = [];
   }
   isAlertsLoaded = true;
+  alertsCache = alertsCache.filter(a => !deletedAlertIds.has(alertIdentity(a.userId || 'guest', a.id)));
   return alertsCache;
 }
 
@@ -223,6 +247,9 @@ export function createAlert(
   const effectiveChatId = data.telegramChatId || userTg?.chatId;
 
   const alertId = data.id || `alert_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  if (deletedAlertIds.has(alertIdentity(userId, alertId))) throw new Error('Сповіщення вже видалено');
+  const existing = alerts.find(a => a.id === alertId && a.userId === userId);
+  if (existing) return existing;
 
   const newAlert: PriceAlert = {
     id: alertId,
@@ -242,12 +269,7 @@ export function createAlert(
     telegramChatId: effectiveChatId,
   };
 
-  const existingIdx = alerts.findIndex((a) => a.id === alertId && a.userId === userId);
-  if (existingIdx >= 0) {
-    alerts[existingIdx] = newAlert;
-  } else {
-    alerts.unshift(newAlert);
-  }
+  alerts.unshift(newAlert);
   saveAlerts(alerts);
   return newAlert;
 }
@@ -284,6 +306,12 @@ export function createAlertsBatch(
 
   for (const item of alertsList) {
     const alertId = item.id || `alert_${Date.now()}_${Math.random().toString(36).substring(2, 8)}_${index++}`;
+    if (deletedAlertIds.has(alertIdentity(userId, alertId))) continue;
+    const existing = alerts.find(a => a.id === alertId && a.userId === userId);
+    if (existing) {
+      createdAlerts.push(existing);
+      continue;
+    }
     const newAlert: PriceAlert = {
       id: alertId,
       userId,
@@ -302,12 +330,7 @@ export function createAlertsBatch(
       telegramChatId: item.telegramChatId || effectiveChatId,
     };
 
-    const existingIdx = alerts.findIndex((a) => a.id === alertId && a.userId === userId);
-    if (existingIdx >= 0) {
-      alerts[existingIdx] = newAlert;
-    } else {
-      alerts.unshift(newAlert);
-    }
+    alerts.unshift(newAlert);
     createdAlerts.push(newAlert);
   }
 
@@ -497,6 +520,9 @@ export function syncUserAlerts(
       mergedUserAlerts.push({
         ...incoming,
         userId,
+        // Changes to the active state use the explicit toggle endpoint.
+        // A delayed Firestore/browser snapshot must not undo a server pause.
+        isActive: existing?.isActive ?? incoming.isActive,
         telegramBotToken: effectiveBotToken || incoming.telegramBotToken || existing?.telegramBotToken,
         telegramChatId: effectiveChatId || incoming.telegramChatId || existing?.telegramChatId,
       });
@@ -523,22 +549,15 @@ export function syncUserAlerts(
 
 // Delete alert
 export function deleteAlert(id: string, userId?: string): boolean {
+  if (!userId || userId === 'guest') return false;
   const alerts = loadAlerts();
   const initialCount = alerts.length;
-  const filtered = alerts.filter((a) => {
-    if (a.id === id) {
-      // If a userId is specified, ensure it belongs to this user or is unassigned
-      if (!userId || !a.userId || a.userId === 'guest' || a.userId === userId) {
-        return false; // Remove
-      }
-    }
-    return true; // Keep
-  });
+  // Record deletion even when it arrives before a delayed create request.
+  deletedAlertIds.add(alertIdentity(userId, id));
+  saveDeletedAlertIds();
+  const filtered = alerts.filter(a => !(a.id === id && a.userId === userId));
 
   if (filtered.length !== initialCount) {
-    for (const removed of alerts) {
-      if (!filtered.includes(removed)) deletedAlertIds.add(alertIdentity(removed.userId || 'guest', removed.id));
-    }
     saveAlerts(filtered);
     return true;
   }
@@ -547,8 +566,9 @@ export function deleteAlert(id: string, userId?: string): boolean {
 
 // Toggle alert active state
 export function toggleAlert(id: string, userId?: string, isActive?: boolean): PriceAlert | null {
+  if (!userId || userId === 'guest') return null;
   const alerts = loadAlerts();
-  const alert = alerts.find((a) => a.id === id && (!userId || !a.userId || a.userId === userId));
+  const alert = alerts.find((a) => a.id === id && a.userId === userId);
   if (alert) {
     alert.isActive = isActive ?? !alert.isActive;
     // If reactivating a triggered alert, reset triggered status
@@ -565,16 +585,18 @@ export function toggleAlert(id: string, userId?: string, isActive?: boolean): Pr
 
 // Clear triggered alerts
 export function clearTriggeredAlerts(userId?: string): number {
+  if (!userId || userId === 'guest') return 0;
   const alerts = loadAlerts();
   const remaining = alerts.filter((a) => {
     if (!a.triggered) return true;
-    if (userId && a.userId && a.userId !== userId) return true; // keep triggered alerts of other users
+    if (a.userId !== userId) return true;
     return false;
   });
   const clearedCount = alerts.length - remaining.length;
   for (const removed of alerts) {
     if (!remaining.includes(removed)) deletedAlertIds.add(alertIdentity(removed.userId || 'guest', removed.id));
   }
+  if (clearedCount > 0) saveDeletedAlertIds();
   saveAlerts(remaining);
   return clearedCount;
 }

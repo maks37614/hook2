@@ -90,7 +90,7 @@ export class SurveillanceManager {
   public getAllSnapshots(userId?: string): CoinWorkerSnapshot[] {
     const snapshots: CoinWorkerSnapshot[] = [];
     for (const worker of this.workers.values()) {
-      if (!userId || userId === 'all' || worker.coin.userId === userId || worker.coin.userId === 'guest') {
+      if (!userId || worker.coin.userId === userId) {
         snapshots.push(worker.getSnapshot());
       }
     }

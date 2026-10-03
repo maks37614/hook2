@@ -309,6 +309,9 @@ export class ExchangeStreamClient extends EventEmitter {
     if (this.ws) {
       try {
         this.ws.removeAllListeners();
+        // Closing during the opening handshake emits an asynchronous error.
+        // Keep a listener while the discarded socket shuts down.
+        this.ws.on('error', () => {});
         this.ws.close();
       } catch (e) {}
       this.ws = null;

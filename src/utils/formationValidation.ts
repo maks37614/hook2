@@ -265,11 +265,19 @@ export function validateFormation(klinesInput: Kline[], formation: DetectedForma
   const level = formation.levels.necklinePrice ??
     (formation.bias === 'bullish' ? formation.levels.resistancePrice : formation.levels.supportPrice) ?? structuralEntry;
   const stillBeyondBreakout = formation.bias === 'bullish' ? current.close > level : current.close < level;
-  const targetReached = formation.status === 'target_reached' ||
-    (formation.bias === 'bullish' ? current.close >= target : current.close <= target);
-  const structure = formation.bias !== 'neutral' && breakoutConfirmed && stillBeyondBreakout && !targetReached;
+  // The entry is known at the breakout candle's close. Check subsequent
+  // closed bars, including their wicks, for completed or invalidated trades.
+  const afterEntry = breakoutConfirmed ? klines.slice(breakout.index! + 1) : [];
+  const targetTouch = afterEntry.findIndex(c => formation.bias === 'bullish' ? c.high >= target : c.low <= target);
+  const stopTouch = afterEntry.findIndex(c => formation.bias === 'bullish' ? c.low <= stop : c.high >= stop);
+  // If both are touched in one bar, OHLC cannot prove which came first.
+  const stopReached = stopTouch >= 0 && (targetTouch < 0 || stopTouch <= targetTouch);
+  const targetReached = !stopReached && (formation.status === 'target_reached' || targetTouch >= 0 ||
+    (formation.bias === 'bullish' ? current.close >= target : current.close <= target));
+  const structure = formation.bias !== 'neutral' && breakoutConfirmed && stillBeyondBreakout && !targetReached && !stopReached;
   if (!directionalLevels) reasons.push('Некоректний порядок рівнів входу, стопа і цілі');
   if (targetReached) reasons.push('Ціль уже досягнута');
+  if (stopReached) reasons.push('Стоп уже досягнутий після входу');
   if (!structure) reasons.push('Немає підтвердженого пробою рівня');
   if (!volumeFilter) reasons.push('Обсяг не підтверджує рух');
   if (!volatilityFilter) reasons.push('Волатильність поза робочим діапазоном');
@@ -300,8 +308,9 @@ export function validateFormation(klinesInput: Kline[], formation: DetectedForma
   return {
     ...formation,
     id: stableFormationId('formation', formation),
+    status: targetReached ? 'target_reached' : formation.status,
     confidence: Math.round(confidence),
-    statusLabel: targetReached ? formation.statusLabel : passed ? `${formation.statusLabel} · ПІДТВЕРДЖЕНО` : `${formation.statusLabel} · ${entryMode === 'WAIT_BREAKOUT' ? 'очікування пробою' : 'очікування підтвердження'}`,
+    statusLabel: targetReached ? 'Ціль досягнуто (TP)' : stopReached ? 'Вхід скасовано: стоп досягнуто' : passed ? `${formation.statusLabel} · ПІДТВЕРДЖЕНО` : `${formation.statusLabel} · ${entryMode === 'WAIT_BREAKOUT' ? 'очікування пробою' : 'очікування підтвердження'}`,
     levels: {
       ...formation.levels,
       entryPrice: structuralEntry,

@@ -39,6 +39,7 @@ import {
   findSurveillanceCoinById,
   updateSurveillanceCoinActive,
   setAllSurveillanceCoinsActive,
+  copyGuestSurveillanceCoins,
 } from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
 import { cronManager } from './server/cronService';
@@ -665,7 +666,7 @@ async function startServer() {
       if (list.length === 0 && userId !== 'guest') {
         const guestList = loadSurveillanceList('guest');
         if (guestList.length > 0) {
-          const migrated = guestList.map((c) => ({ ...c, userId }));
+          const migrated = copyGuestSurveillanceCoins(guestList, userId);
           saveSurveillanceList(userId, migrated);
           list = migrated;
         }
@@ -782,13 +783,7 @@ async function startServer() {
       const found = findSurveillanceCoinById(id, userId);
 
       if (!found) {
-        // Fallback: try by userId directly
-        const uid = userId || 'guest';
-        const list = loadSurveillanceList(uid);
-        const filtered = list.filter((c) => c.id !== id);
-        saveSurveillanceList(uid, filtered);
-        surveillanceManager.stopWorkerForCoin(id);
-        return res.json({ success: true });
+        return res.status(404).json({ success: false, error: 'Монету не знайдено в нагляді' });
       }
 
       const filtered = found.list.filter((c) => c.id !== id);
