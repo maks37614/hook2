@@ -191,7 +191,8 @@ test('destroying a websocket during its opening handshake does not crash the ser
   const moduleUrl = new URL('../server/surveillance/exchangeStream.ts', import.meta.url).href;
   const script = `import WebSocket from 'ws'; import { EventEmitter } from 'node:events';
     const { ExchangeStreamClient } = await import(${JSON.stringify(moduleUrl)});
-    const stream = Object.assign(new EventEmitter(), { ws: new WebSocket('ws://127.0.0.1:1') });
+    const stream = Object.assign(new EventEmitter(), { ws: new WebSocket('ws://127.0.0.1:1'),
+      additionalSockets: [new WebSocket('ws://127.0.0.1:1')] });
     Object.setPrototypeOf(stream, ExchangeStreamClient.prototype);
     stream.destroy(); await new Promise(resolve => setImmediate(resolve));`;
   const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {

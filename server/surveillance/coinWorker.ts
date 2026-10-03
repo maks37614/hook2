@@ -39,6 +39,8 @@ export interface CoinWorkerSnapshot {
   volume24hUsd: number;
   orderBookState: OrderBookState;
   densities: DensityItem[];
+  densityMode: string;
+  densityThresholdUsd: number;
   structures: Record<Timeframe, TimeframeStructure>;
   levelZones: LevelZone[];
   thirdTouches: ThirdTouchTracker[];
@@ -143,6 +145,7 @@ export class CoinWorker {
       this.high24h = data.high24h;
       this.low24h = data.low24h;
       this.volume24hUsd = data.volume24hUsd;
+      this.orderBookEngine.setVolume24hUsd(data.volume24hUsd);
       if (Number.isFinite(data.change24h)) this.change24h = data.change24h!;
     });
 
@@ -511,6 +514,7 @@ export class CoinWorker {
   }
 
   public getSnapshot(): CoinWorkerSnapshot {
+    const orderBookState = this.orderBookEngine.getState();
     return {
       id: this.coin.id,
       userId: this.coin.userId,
@@ -518,14 +522,16 @@ export class CoinWorker {
       exchange: this.coin.exchange,
       marketType: this.coin.marketType,
       isActive: this.coin.isActive,
-      status: this.streamClient.status,
+      status: orderBookState.status,
       currentPrice: this.currentPrice,
       change24h: this.change24h,
       high24h: this.high24h,
       low24h: this.low24h,
       volume24hUsd: this.volume24hUsd,
-      orderBookState: this.orderBookEngine.getState(),
+      orderBookState,
       densities: this.orderBookEngine.getDensities(),
+      densityMode: this.coin.config.densityMode || 'AUTO',
+      densityThresholdUsd: this.orderBookEngine.calculateAdaptiveThreshold(),
       structures: this.structures,
       levelZones: this.levelZones,
       thirdTouches: this.thirdTouches,

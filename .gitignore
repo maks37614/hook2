@@ -7,3 +7,7 @@ coverage/
 .env*
 !.env.example
 bun.lock*
+/server/data/surveillance.json
+/server/data/*.tmp
+/.test-surveillance-*/
+/.test-alerts-*/

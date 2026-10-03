@@ -11,6 +11,8 @@ const fixtureDir = fs.mkdtempSync(path.join(originalCwd, '.test-alerts-'));
 process.chdir(fixtureDir);
 const service = await import('../server/alertService');
 const { NotificationRouter } = await import('../server/notificationRouter');
+const surveillance = await import('../server/surveillanceService');
+const telegram = await import('../server/telegramService');
 process.chdir(originalCwd);
 test.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 
@@ -153,5 +155,44 @@ test('notification dispatch deduplicates concurrent requests and respects setup 
     const blocked = { ...payload, eventIdentity: 'other', coin: { isActive: true, config: { setupsEnabled: false } } };
     assert.equal(await router.dispatch(blocked), false);
     assert.equal(calls, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('notifications use current pause, deletion, trigger mode and density switches', () => {
+  service.saveUserTelegram('gate-user', { botToken: '123:fixture', chatId: 'fixture-chat' });
+  const router = new NotificationRouter();
+  const coin: any = { id: 'gate-coin', userId: 'gate-user', symbol: 'BTCUSDT', exchange: 'binance', marketType: 'futures',
+    isActive: true, config: { ...surveillance.getDefaultSurveillanceConfig(), triggerModes: ['realtime'], densityAlerts: true } };
+  const payload: any = { source: 'ORDERBOOK', userId: coin.userId, coinId: coin.id, coin,
+    symbol: coin.symbol, exchange: coin.exchange, marketType: coin.marketType,
+    eventType: 'DENSITY_APPEARED', eventIdentity: 'wall', triggerMode: 'realtime' };
+  surveillance.saveSurveillanceList(coin.userId, [{ ...coin, isActive: false }]);
+  assert.equal(router.shouldNotify(payload).reason, 'coin_inactive');
+  surveillance.saveSurveillanceList(coin.userId, [{ ...coin, config: { ...coin.config, densityAlerts: false } }]);
+  assert.equal(router.shouldNotify(payload).reason, 'density_alerts_disabled');
+  surveillance.saveSurveillanceList(coin.userId, [coin]);
+  assert.equal(router.shouldNotify(payload).allowed, true);
+  assert.equal(router.shouldNotify({ ...payload, triggerMode: 'bar_close_1h' }).reason, 'trigger_mode_disabled');
+  surveillance.saveSurveillanceList(coin.userId, []);
+  assert.equal(router.shouldNotify(payload).reason, 'coin_removed');
+});
+
+test('a user price alert without Telegram credentials never uses the global destination', async () => {
+  const originalFetch = globalThis.fetch;
+  telegram.saveTelegramConfig({ botToken: '999:global-fixture', chatId: 'global-fixture-chat' });
+  service.saveAlerts([]);
+  service.createAlert(alert('no-user-telegram', 'unconfigured-user'));
+  let sends = 0;
+  globalThis.fetch = async input => {
+    if (String(input).includes('api.telegram.org')) sends++;
+    return Response.json({ price: '120', ok: true, result: {} });
+  };
+  try {
+    await service.checkAlertsOnce();
+    assert.equal(sends, 0);
+    const history = service.getAlertHistory('unconfigured-user');
+    assert.equal(history.length, 1);
+    assert.equal(history[0].telegramSent, false);
+    assert.match(history[0].telegramError!, /не налаштовано/);
   } finally { globalThis.fetch = originalFetch; }
 });
