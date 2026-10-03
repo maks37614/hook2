@@ -39,6 +39,7 @@ import {
   findSurveillanceCoinById,
   updateSurveillanceCoinActive,
   setAllSurveillanceCoinsActive,
+  copyGuestSurveillanceCoins,
 } from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
 import { cronManager } from './server/cronService';
@@ -520,7 +521,7 @@ async function startServer() {
       }
 
       const numPrice = parseFloat(targetPrice);
-      if (isNaN(numPrice) || numPrice <= 0) {
+      if (!Number.isFinite(numPrice) || numPrice <= 0 || !['gte', 'lte'].includes(condition)) {
         return res.status(400).json({ success: false, error: 'Цільова ціна повинна бути додатнім числом' });
       }
 
@@ -574,6 +575,10 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Масив сповіщень порожній або відсутній' });
       }
 
+      if (alerts.some(a => !a || typeof a.symbol !== 'string' || !a.symbol.trim() ||
+        !Number.isFinite(Number(a.targetPrice)) || Number(a.targetPrice) <= 0 || !['gte', 'lte'].includes(a.condition))) {
+        return res.status(400).json({ success: false, error: 'Некоректні рівні сповіщень' });
+      }
       const created = createAlertsBatch(String(userId), alerts, telegramBotToken, telegramChatId);
       const cfg = getEffectiveTelegramConfig();
       res.json({
@@ -631,7 +636,7 @@ async function startServer() {
   app.post('/api/alerts/:id/toggle', (req, res) => {
     try {
       const userId = req.query.userId as string | undefined;
-      const alert = toggleAlert(req.params.id, userId);
+      const alert = toggleAlert(req.params.id, userId, typeof req.body?.isActive === 'boolean' ? req.body.isActive : undefined);
       if (!alert) {
         return res.status(404).json({ success: false, error: 'Алерт не знайдено' });
       }
@@ -661,7 +666,7 @@ async function startServer() {
       if (list.length === 0 && userId !== 'guest') {
         const guestList = loadSurveillanceList('guest');
         if (guestList.length > 0) {
-          const migrated = guestList.map((c) => ({ ...c, userId }));
+          const migrated = copyGuestSurveillanceCoins(guestList, userId);
           saveSurveillanceList(userId, migrated);
           list = migrated;
         }
@@ -682,7 +687,7 @@ async function startServer() {
       const cleanSymbol = symbol.toUpperCase().replace('/', '').trim();
       const list = loadSurveillanceList(uid);
 
-      const existing = list.find((c) => c.symbol === cleanSymbol && c.exchange === (exchange || 'binance'));
+      const existing = list.find((c) => c.symbol === cleanSymbol && c.exchange === (exchange || 'binance') && c.marketType === (marketType || 'futures'));
       if (existing) {
         // Coin already on surveillance: ensure it is active and update config/analysis
         existing.isActive = true; // Always active upon user add/resume
@@ -778,13 +783,7 @@ async function startServer() {
       const found = findSurveillanceCoinById(id, userId);
 
       if (!found) {
-        // Fallback: try by userId directly
-        const uid = userId || 'guest';
-        const list = loadSurveillanceList(uid);
-        const filtered = list.filter((c) => c.id !== id);
-        saveSurveillanceList(uid, filtered);
-        surveillanceManager.stopWorkerForCoin(id);
-        return res.json({ success: true });
+        return res.status(404).json({ success: false, error: 'Монету не знайдено в нагляді' });
       }
 
       const filtered = found.list.filter((c) => c.id !== id);
@@ -835,7 +834,11 @@ async function startServer() {
   app.get('/api/surveillance/worker/:id', (req, res) => {
     try {
       const { id } = req.params;
+      const userId = typeof req.query.userId === 'string' ? req.query.userId : 'guest';
       const snapshot = surveillanceManager.getWorkerSnapshot(id);
+      if (snapshot && snapshot.userId !== userId) {
+        return res.status(404).json({ success: false, error: 'Worker not found' });
+      }
       if (!snapshot) {
         return res.status(404).json({ success: false, error: 'Worker not found or not active' });
       }

@@ -129,6 +129,9 @@ export interface ThirdTouchTracker {
 }
 
 export interface DetectedPattern {
+  id?: string;
+  validationPassed?: boolean;
+  levels?: { entryPrice: number; stopLossPrice: number; targetPrice: number };
   name: string;
   type:
     | 'Double Top'

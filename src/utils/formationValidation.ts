@@ -36,7 +36,7 @@ const finitePositive = (v: number | undefined | null): v is number => typeof v =
 const pctDistance = (a: number, b: number) => Math.abs(a - b) / Math.max(Math.abs(b), 1e-12) * 100;
 
 export function normalizeKlineTimeMs(time: number): number {
-  return time > 2_000_000_000_000 ? time : time * 1000;
+  return time >= 100_000_000_000 ? time : time * 1000;
 }
 
 export function isKlineClosed(k: Kline, nextKline?: Kline, nowMs = Date.now()): boolean {
@@ -70,12 +70,13 @@ export function swingTolerancePct(klines: Kline[], price: number): number {
 }
 
 export function stableFormationId(symbol: string, formation: DetectedFormation): string {
+  if (formation.id) return formation.id;
   const raw = [
     symbol,
     formation.patternKey,
     formation.candleStartIndex ?? -1,
     formation.candleEndIndex ?? -1,
-    Math.round(formation.levels.necklinePrice ?? formation.levels.entryPrice),
+    (formation.levels.necklinePrice ?? formation.levels.entryPrice).toPrecision(12),
   ].join('|');
   let hash = 2166136261;
   for (let i = 0; i < raw.length; i++) {
@@ -96,7 +97,7 @@ function isClosedCandleSet(klines: Kline[]): boolean {
 function sanitize(klines: Kline[]): Kline[] {
   return klines
     .filter((k) => k && [k.open, k.high, k.low, k.close, k.volume, k.time].every(Number.isFinite))
-    .filter((k) => k.high >= k.low && k.high > 0 && k.low > 0 && k.close > 0 && k.open > 0 && k.volume >= 0)
+    .filter((k) => k.high >= Math.max(k.open, k.close) && k.low <= Math.min(k.open, k.close) && k.high >= k.low && k.high > 0 && k.low > 0 && k.close > 0 && k.open > 0 && k.volume >= 0)
     .sort((a, b) => a.time - b.time)
     .filter((k, i, arr) => i === 0 || k.time !== arr[i - 1].time);
 }
@@ -104,7 +105,7 @@ function sanitize(klines: Kline[]): Kline[] {
 function isBullishBreakout(formation: DetectedFormation, candles: Kline[], anchor: number): { ok: boolean; index?: number; price?: number } {
   const level = formation.levels.necklinePrice ?? formation.levels.resistancePrice ?? formation.levels.entryPrice;
   if (!finitePositive(level)) return { ok: false };
-  for (let i = Math.max(anchor + 1, 1); i < candles.length; i++) {
+  for (let i = candles.length - 1; i >= Math.max((formation.structureEndIndex ?? anchor) + 1, 1); i--) {
     if (candles[i].close > level && candles[i - 1].close <= level) return { ok: true, index: i, price: candles[i].close };
   }
   return { ok: false };
@@ -113,7 +114,7 @@ function isBullishBreakout(formation: DetectedFormation, candles: Kline[], ancho
 function isBearishBreakout(formation: DetectedFormation, candles: Kline[], anchor: number): { ok: boolean; index?: number; price?: number } {
   const level = formation.levels.necklinePrice ?? formation.levels.supportPrice ?? formation.levels.entryPrice;
   if (!finitePositive(level)) return { ok: false };
-  for (let i = Math.max(anchor + 1, 1); i < candles.length; i++) {
+  for (let i = candles.length - 1; i >= Math.max((formation.structureEndIndex ?? anchor) + 1, 1); i--) {
     if (candles[i].close < level && candles[i - 1].close >= level) return { ok: true, index: i, price: candles[i].close };
   }
   return { ok: false };
@@ -218,13 +219,15 @@ export function validateFormation(klinesInput: Kline[], formation: DetectedForma
   const atrPct = current.close > 0 ? atr / current.close * 100 : 0;
   const tolPct = swingTolerancePct(klines, current.close);
   const anchor = Math.max(0, formation.candleStartIndex ?? klines.length - 20);
-  const endIndex = Math.min(klines.length - 1, formation.candleEndIndex ?? klines.length - 1);
+  const endIndex = formation.candleEndIndex ?? klines.length - 1;
 
   // Look-ahead rule: the pattern anchor and any confirmation must be at or
   // before the latest closed candle. Swing fractals need `window` future bars;
   // the formation detector itself is responsible for only exposing confirmed
   // swings. Here we additionally reject impossible future indices.
-  const lookAheadSafe = anchor <= endIndex && endIndex < klines.length;
+  const lookAheadSafe = Number.isInteger(anchor) && Number.isInteger(endIndex) &&
+    (formation.candleStartIndex ?? 0) >= 0 && anchor <= endIndex && endIndex < klines.length &&
+    (formation.structureEndIndex === undefined || (formation.structureEndIndex >= anchor && formation.structureEndIndex <= endIndex));
   if (!lookAheadSafe) reasons.push('Порушення часової послідовності');
 
   const volumeSample = klines.slice(Math.max(0, klines.length - 21), klines.length - 1);
@@ -247,24 +250,34 @@ export function validateFormation(klinesInput: Kline[], formation: DetectedForma
   const breakoutConfirmed = breakout.ok && (breakout.index ?? 0) <= klines.length - 1;
   const retestConfirmed = breakoutConfirmed && hasRetest(formation, klines, breakout.index!, atr);
   const structuralEntry = breakoutConfirmed
-    ? (retestConfirmed ? (formation.levels.necklinePrice ?? breakout.price!) : breakout.price!)
+    ? (retestConfirmed ? current.close : breakout.price!)
     : formation.levels.entryPrice;
 
-  const structuralStop = formation.bias === 'bullish'
-    ? Math.min(current.low, formation.levels.supportPrice ?? current.low) - atr * 0.25
-    : Math.max(current.high, formation.levels.resistancePrice ?? current.high) + atr * 0.25;
-  let stop = structuralStop;
-  if (!finitePositive(stop) || (formation.bias === 'bullish' && stop >= structuralEntry) || (formation.bias === 'bearish' && stop <= structuralEntry)) {
-    stop = formation.bias === 'bullish' ? structuralEntry - Math.max(atr, structuralEntry * 0.005) : structuralEntry + Math.max(atr, structuralEntry * 0.005);
-  }
-
+  // Keep the detector's measured levels. Moving the target to manufacture a
+  // minimum R:R turns an invalid trade into an apparently valid signal.
+  const stop = formation.levels.stopLossPrice;
+  const target = formation.levels.targetPrice;
+  const directionalLevels = finitePositive(structuralEntry) && finitePositive(stop) && finitePositive(target) &&
+    (formation.bias === 'bullish' ? stop < structuralEntry && target > structuralEntry :
+      formation.bias === 'bearish' && target < structuralEntry && stop > structuralEntry);
   const risk = Math.abs(structuralEntry - stop);
-  let target = formation.levels.targetPrice;
-  const minTarget = formation.bias === 'bullish' ? structuralEntry + risk * 2 : structuralEntry - risk * 2;
-  if (!finitePositive(target) || (formation.bias === 'bullish' && target < minTarget) || (formation.bias === 'bearish' && target > minTarget)) target = minTarget;
-  const rr = risk > 0 ? Math.abs(target - structuralEntry) / risk : 0;
-
-  const structure = formation.bias !== 'neutral' && breakoutConfirmed;
+  const rr = directionalLevels && risk > 0 ? Math.abs(target - structuralEntry) / risk : 0;
+  const level = formation.levels.necklinePrice ??
+    (formation.bias === 'bullish' ? formation.levels.resistancePrice : formation.levels.supportPrice) ?? structuralEntry;
+  const stillBeyondBreakout = formation.bias === 'bullish' ? current.close > level : current.close < level;
+  // The entry is known at the breakout candle's close. Check subsequent
+  // closed bars, including their wicks, for completed or invalidated trades.
+  const afterEntry = breakoutConfirmed ? klines.slice(breakout.index! + 1) : [];
+  const targetTouch = afterEntry.findIndex(c => formation.bias === 'bullish' ? c.high >= target : c.low <= target);
+  const stopTouch = afterEntry.findIndex(c => formation.bias === 'bullish' ? c.low <= stop : c.high >= stop);
+  // If both are touched in one bar, OHLC cannot prove which came first.
+  const stopReached = stopTouch >= 0 && (targetTouch < 0 || stopTouch <= targetTouch);
+  const targetReached = !stopReached && (formation.status === 'target_reached' || targetTouch >= 0 ||
+    (formation.bias === 'bullish' ? current.close >= target : current.close <= target));
+  const structure = formation.bias !== 'neutral' && breakoutConfirmed && stillBeyondBreakout && !targetReached && !stopReached;
+  if (!directionalLevels) reasons.push('Некоректний порядок рівнів входу, стопа і цілі');
+  if (targetReached) reasons.push('Ціль уже досягнута');
+  if (stopReached) reasons.push('Стоп уже досягнутий після входу');
   if (!structure) reasons.push('Немає підтвердженого пробою рівня');
   if (!volumeFilter) reasons.push('Обсяг не підтверджує рух');
   if (!volatilityFilter) reasons.push('Волатильність поза робочим діапазоном');
@@ -295,13 +308,14 @@ export function validateFormation(klinesInput: Kline[], formation: DetectedForma
   return {
     ...formation,
     id: stableFormationId('formation', formation),
+    status: targetReached ? 'target_reached' : formation.status,
     confidence: Math.round(confidence),
-    statusLabel: passed ? `${formation.statusLabel} · ПІДТВЕРДЖЕНО` : `${formation.statusLabel} · ${entryMode === 'WAIT_BREAKOUT' ? 'очікування пробою' : 'очікування підтвердження'}`,
+    statusLabel: targetReached ? 'Ціль досягнуто (TP)' : stopReached ? 'Вхід скасовано: стоп досягнуто' : passed ? `${formation.statusLabel} · ПІДТВЕРДЖЕНО` : `${formation.statusLabel} · ${entryMode === 'WAIT_BREAKOUT' ? 'очікування пробою' : 'очікування підтвердження'}`,
     levels: {
       ...formation.levels,
-      entryPrice: Number(structuralEntry.toFixed(8)),
-      stopLossPrice: Number(stop.toFixed(8)),
-      targetPrice: Number(target.toFixed(8)),
+      entryPrice: structuralEntry,
+      stopLossPrice: stop,
+      targetPrice: target,
     },
     potentialRiskPct: Number((risk / Math.max(structuralEntry, 1e-12) * 100).toFixed(2)),
     potentialProfitPct: Number((Math.abs(target - structuralEntry) / Math.max(structuralEntry, 1e-12) * 100).toFixed(2)),
@@ -320,9 +334,9 @@ export function validateFormation(klinesInput: Kline[], formation: DetectedForma
       breakoutPrice: breakout.price,
       breakoutIndex: breakout.index,
       entryMode,
-      entryPrice: Number(structuralEntry.toFixed(8)),
-      stopPrice: Number(stop.toFixed(8)),
-      targetPrice: Number(target.toFixed(8)),
+      entryPrice: structuralEntry,
+      stopPrice: stop,
+      targetPrice: target,
       riskReward: Number(rr.toFixed(2)),
       minRiskReward: 2,
       volumeRatio: Number(volumeRatio.toFixed(2)),
@@ -339,7 +353,7 @@ export function validateFormationSet(klines: Kline[], formations: DetectedFormat
   const validated = formations.map((f) => ({ ...validateFormation(klines, f), id: stableFormationId(symbol, f) }));
   const dedupe = new Map<string, DetectedFormation>();
   for (const f of validated) {
-    const key = `${f.patternKey}|${f.candleStartIndex ?? -1}|${f.candleEndIndex ?? -1}|${Math.round(f.levels.entryPrice * 10000)}`;
+    const key = `${f.patternKey}|${f.candleStartIndex ?? -1}|${f.candleEndIndex ?? -1}|${f.levels.entryPrice.toPrecision(12)}`;
     const old = dedupe.get(key);
     if (!old || f.confidence > old.confidence) dedupe.set(key, f);
   }

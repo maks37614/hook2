@@ -1,5 +1,6 @@
 import { DetectedFormation, Kline, Timeframe } from '../../src/types';
 import { detectFormations as detectCanonicalFormations } from '../../src/utils/patternRecognition';
+import { normalizeKlineTimeMs } from '../../src/utils/formationValidation';
 import { calculateATR } from './multiTimeframeEngine';
 import { DetectedPattern, LevelZone, ThirdTouchTracker } from './types';
 
@@ -29,18 +30,18 @@ export class LevelsAndFormationsEngine {
     const zones: LevelZone[] = [];
 
     const filterCandles = (candles: Kline[], tfMs: number) => {
-      let filtered = candles;
+      let filtered = candles.map(k => ({ ...k, time: normalizeKlineTimeMs(k.time) }));
       if (asOfTime) {
         filtered = filtered.filter((k) => {
-          const t = k.time > 2_000_000_000_000 ? k.time : k.time * 1000;
+          const t = k.time >= 100_000_000_000 ? k.time : k.time * 1000;
           return t <= asOfTime;
         });
       }
       if (currentMode === 'LIVE') {
         const closed = (c: Kline[]) => {
           if (c.length <= 2) return c;
-          const t = c[c.length - 1].time > 2_000_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000;
-          const interval = c.length > 2 ? Math.max(1000, ((c[c.length - 1].time > 2_000_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000) - (c[c.length - 2].time > 2_000_000_000_000 ? c[c.length - 2].time : c[c.length - 2].time * 1000))) : tfMs;
+          const t = c[c.length - 1].time >= 100_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000;
+          const interval = c.length > 2 ? Math.max(1000, ((c[c.length - 1].time >= 100_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000) - (c[c.length - 2].time >= 100_000_000_000 ? c[c.length - 2].time : c[c.length - 2].time * 1000))) : tfMs;
           return t + Math.min(tfMs, interval) > Date.now() ? c.slice(0, -1) : c;
         };
         return closed(filtered);
@@ -137,7 +138,7 @@ export class LevelsAndFormationsEngine {
       existing.maxReactionPct = Math.max(existing.maxReactionPct, reactionPct);
     } else {
       zones.push({
-        id: `zone_${tf}_${type}_${Math.round(price)}`,
+        id: `zone_${tf}_${type}_${price.toPrecision(12)}`,
         timeframe: tf,
         type,
         zoneLow: price - tolerance * 0.5,
@@ -221,34 +222,7 @@ export class LevelsAndFormationsEngine {
   }
 
   public detectFormations(candles1h: Kline[], currentPrice: number): DetectedPattern[] {
-    const canonical = detectCanonicalFormations(candles1h, `${this.levelZones.length ? 'SURVEILLANCE' : 'SURVEILLANCE'}`);
-    const mapType = (f: DetectedFormation): DetectedPattern['type'] => {
-      const n = f.nameEn.toLowerCase();
-      if (n.includes('double bottom')) return 'Double Bottom';
-      if (n.includes('double top')) return 'Double Top';
-      if (n.includes('ascending triangle')) return 'Ascending Triangle';
-      if (n.includes('descending triangle')) return 'Descending Triangle';
-      if (n.includes('symmetrical triangle')) return 'Symmetrical Triangle';
-      if (n.includes('flag')) return 'Flag';
-      if (n.includes('pennant')) return 'Pennant';
-      if (n.includes('wedge')) return 'Wedge';
-      if (n.includes('channel')) return 'Channel';
-      if (n.includes('compression') || n.includes('squeeze')) return 'Compression';
-      return 'Range';
-    };
-    return canonical.map((f) => ({
-      name: f.name,
-      type: mapType(f),
-      bias: f.bias,
-      score: f.validation?.confluence?.total ?? f.confidence,
-      upperBoundary: f.levels.resistancePrice ?? f.levels.necklinePrice ?? f.levels.entryPrice,
-      lowerBoundary: f.levels.supportPrice ?? f.levels.necklinePrice ?? f.levels.entryPrice,
-      touchesUpper: f.extremeContext?.testsCount ?? 0,
-      touchesLower: f.extremeContext?.testsCount ?? 0,
-      compression: f.category === 'compression',
-      timeframe: '1h',
-      status: f.validation?.breakoutConfirmed ? 'BROKEN' : f.validation?.passed ? 'READY' : 'FORMING',
-    }));
+    return detectCanonicalFormations(candles1h, 'SURVEILLANCE').map(toSurveillancePattern);
   }
 
   private findSwings(candles: Kline[], window=2): Array<{index:number;price:number;type:'HIGH'|'LOW'}> {
@@ -274,6 +248,39 @@ export class LevelsAndFormationsEngine {
     const directional=direction==='LONG'?c.close>boundary:c.close<boundary;
     return directional && c.volume>avg*1.2 ? Math.min(1,c.volume/Math.max(avg*2,0.00000001)) : 0;
   }
+}
+
+export function toSurveillancePattern(f: DetectedFormation): DetectedPattern {
+    const mapType = (f: DetectedFormation): DetectedPattern['type'] => {
+      const n = f.nameEn.toLowerCase();
+      if (n.includes('double bottom')) return 'Double Bottom';
+      if (n.includes('double top')) return 'Double Top';
+      if (n.includes('ascending triangle')) return 'Ascending Triangle';
+      if (n.includes('descending triangle')) return 'Descending Triangle';
+      if (n.includes('symmetrical triangle')) return 'Symmetrical Triangle';
+      if (n.includes('flag')) return 'Flag';
+      if (n.includes('pennant')) return 'Pennant';
+      if (n.includes('wedge')) return 'Wedge';
+      if (n.includes('channel')) return 'Channel';
+      if (n.includes('compression') || n.includes('squeeze')) return 'Compression';
+      return 'Range';
+    };
+    return {
+      id: f.id,
+      validationPassed: f.validation?.passed ?? false,
+      levels: { entryPrice: f.levels.entryPrice, stopLossPrice: f.levels.stopLossPrice, targetPrice: f.levels.targetPrice },
+      name: f.name,
+      type: mapType(f),
+      bias: f.bias,
+      score: f.validation?.confluence?.total ?? f.confidence,
+      upperBoundary: f.levels.resistancePrice ?? f.levels.necklinePrice ?? f.levels.entryPrice,
+      lowerBoundary: f.levels.supportPrice ?? f.levels.necklinePrice ?? f.levels.entryPrice,
+      touchesUpper: f.extremeContext?.testsCount ?? 0,
+      touchesLower: f.extremeContext?.testsCount ?? 0,
+      compression: f.category === 'compression',
+      timeframe: '1h',
+      status: f.validation?.passed ? 'BROKEN' : f.validation?.breakoutConfirmed || f.status === 'target_reached' ? 'INVALIDATED' : 'FORMING',
+    };
 }
 
 function lowPairs(xs:Array<{index:number;price:number;type:'HIGH'|'LOW'}>) { const out:Array<[typeof xs[number],typeof xs[number]]>=[]; for(let i=1;i<xs.length;i++)out.push([xs[i-1],xs[i]]); return out; }

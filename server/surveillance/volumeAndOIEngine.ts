@@ -66,7 +66,7 @@ export class VolumeAndOIEngine {
     if (candles.length < 5) return { rvol: 1.0, zScore: 0 };
     const last = candles[candles.length - 1];
     const prev = candles.length > 2 ? candles[candles.length - 2] : undefined;
-    const normalize = (t: number) => t > 2_000_000_000_000 ? t : t * 1000;
+    const normalize = (t: number) => t >= 100_000_000_000 ? t : t * 1000;
     const interval = prev ? Math.max(1000, normalize(last.time) - normalize(prev.time)) : 0;
     const closed = interval > 0 && Date.now() < normalize(last.time) + interval ? candles.slice(0, -1) : candles;
     if (closed.length < 5) return { rvol: 1.0, zScore: 0 };

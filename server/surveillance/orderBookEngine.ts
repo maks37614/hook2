@@ -54,14 +54,14 @@ export class OrderBookEngine {
 
   public applyDepth(delta: RawDepthDelta) {
     const now = Date.now();
-    this.lastReceivedAt = now;
     const seq = delta.sequence || now;
-    if (!delta.isSnapshot && this.lastUpdateId > 0 && seq <= this.lastUpdateId) {
-      this.sequenceGap = true;
-      this.dataValid = false;
-      this.status = 'RESYNCING';
+    // Old/duplicate deltas are harmless; never invalidate a good book for them.
+    if (!delta.isSnapshot && this.lastUpdateId > 0 && seq <= this.lastUpdateId) return;
+    if (!delta.isSnapshot && this.lastUpdateId === 0) {
+      this.status = 'SYNCING';
       return;
     }
+    this.lastReceivedAt = now;
     this.sequenceGap = false;
     this.lastUpdateId = seq;
     if (delta.isSnapshot) {
@@ -71,16 +71,25 @@ export class OrderBookEngine {
       this.status = 'SYNCING';
     }
 
-    for (const [price, qty] of delta.bids) qty <= 0 ? this.bids.delete(price) : this.bids.set(price, qty);
-    for (const [price, qty] of delta.asks) qty <= 0 ? this.asks.delete(price) : this.asks.set(price, qty);
+    for (const [price, qty] of delta.bids) {
+      if (Number.isFinite(price) && price > 0 && Number.isFinite(qty) && qty >= 0)
+        qty === 0 ? this.bids.delete(price) : this.bids.set(price, qty);
+    }
+    for (const [price, qty] of delta.asks) {
+      if (Number.isFinite(price) && price > 0 && Number.isFinite(qty) && qty >= 0)
+        qty === 0 ? this.asks.delete(price) : this.asks.set(price, qty);
+    }
 
     this.bestBid = Math.max(0, ...this.bids.keys());
     this.bestAsk = this.asks.size ? Math.min(...this.asks.keys()) : 0;
     if (this.bestBid > 0 && this.bestAsk > 0 && this.bestAsk >= this.bestBid) {
       this.spread = this.bestAsk - this.bestBid;
       this.spreadPct = (this.spread / this.bestBid) * 100;
-      this.status = this.dataValid ? 'LIVE' : 'SYNCING';
+      this.status = 'LIVE';
       this.dataValid = true;
+    } else {
+      this.dataValid = false;
+      this.status = 'RESYNCING';
     }
     if (this.dataValid) this.evaluateDensities();
   }
@@ -121,13 +130,14 @@ export class OrderBookEngine {
   private newlyAppearedDensities: DensityItem[] = [];
 
   public pollNewlyAppearedDensities(): DensityItem[] {
-    const items = [...this.newlyAppearedDensities];
+    const visible = new Set(this.getDensities().map((d) => d.id));
+    const items = this.newlyAppearedDensities.filter((d) => visible.has(d.id));
     this.newlyAppearedDensities = [];
     return items;
   }
 
   private evaluateDensities() {
-    const now = Date.now();
+    const now = this.lastReceivedAt;
     const mid = (this.bestBid + this.bestAsk) / 2 || this.bestBid || this.bestAsk || 1;
     const threshold = this.calculateAdaptiveThreshold();
     const seen = new Set<string>();
@@ -158,6 +168,7 @@ export class OrderBookEngine {
         // Keep order alive in persistence memory without falsely increasing cancellation rate
         if (now - item.lastSeenAt > 600000) { // Clean up after 10 mins outside window
           this.activeDensities.delete(id);
+          this.densityStats.delete(id);
         }
         continue;
       }
@@ -174,6 +185,7 @@ export class OrderBookEngine {
       this.densityHistory.unshift(item);
       if (this.densityHistory.length > 100) this.densityHistory.pop();
       this.activeDensities.delete(id);
+      this.densityStats.delete(id);
     }
   }
 
@@ -202,7 +214,7 @@ export class OrderBookEngine {
     } else {
       const item:DensityItem={id,price,side,quantity:qty,notionalUsd:notional,distancePct:Number(distPct.toFixed(3)),firstSeenAt:now,lastSeenAt:now,ageSeconds:0,maxSizeUsd:notional,averageSizeUsd:notional,persistenceRatio:1,classification:'STANDARD',persistenceSamples:1,cancellationRate:0,replenishmentRate:0,qualityScore:20,lastSizeChangeAt:now};
       this.activeDensities.set(id,item);
-      if (isBrandNew && notional >= 300000) {
+      if (isBrandNew) {
         this.newlyAppearedDensities.push(item);
       }
     }
@@ -229,10 +241,10 @@ export class OrderBookEngine {
   }
 
   public getDensityQualityAtPrice(side:'BID'|'ASK', price:number, maxDistancePct=0.6):DensityItem|undefined {
-    return this.getDensities().filter(d=>d.side===side && d.classification!=='POSSIBLE_SPOOF' && Math.abs(d.price-price)/Math.max(price,1)*100<=maxDistancePct).sort((a,b)=>(b.qualityScore||0)-(a.qualityScore||0))[0];
+    return this.getDensities().filter(d=>d.side===side && d.classification!=='POSSIBLE_SPOOF' && Math.abs(d.price-price)/Math.max(price,1e-12)*100<=maxDistancePct).sort((a,b)=>(b.qualityScore||0)-(a.qualityScore||0))[0];
   }
 
-  public getDensities(): DensityItem[] { return this.dataValid && Date.now() - this.lastReceivedAt <= 5000 ? Array.from(this.activeDensities.values()).sort((a,b)=>b.notionalUsd-a.notionalUsd) : []; }
+  public getDensities(): DensityItem[] { return this.dataValid && Date.now() - this.lastReceivedAt <= 5000 ? Array.from(this.activeDensities.values()).filter(d => d.lastSeenAt === this.lastReceivedAt).sort((a,b)=>b.notionalUsd-a.notionalUsd) : []; }
   public getSignificantDensities(minNotional=500000):DensityItem[]{return this.getDensities().filter(d=>d.notionalUsd>=minNotional);}
-  public clear(){this.bids.clear();this.asks.clear();this.activeDensities.clear();this.densityStats.clear();this.dataValid=false;this.sequenceGap=false;this.status='CONNECTING';}
+  public clear(){this.bids.clear();this.asks.clear();this.activeDensities.clear();this.densityStats.clear();this.dataValid=false;this.sequenceGap=false;this.status='CONNECTING';this.lastUpdateId=0;this.lastReceivedAt=0;this.bestBid=0;this.bestAsk=0;this.newlyAppearedDensities=[];}
 }

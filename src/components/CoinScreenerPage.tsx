@@ -105,28 +105,8 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
   const { t } = useLanguage();
   const { user } = useAuth();
   const isGuest = !user;
-  const [coins, setCoins] = useState<MarketCoin[]>(() =>
-    TOP_POPULAR_PAIRS.map((p, idx) => ({
-      symbol: p.symbol,
-      baseAsset: p.baseAsset,
-      quoteAsset: 'USDT',
-      exchange: 'binance',
-      marketType: 'futures',
-      price: idx === 0 ? 84500 : idx === 1 ? 2200 : idx === 2 ? 140 : 1.5,
-      change24h: 1.25,
-      volumeUsd: 100_000_000 - idx * 2_000_000,
-      high24h: idx === 0 ? 85500 : 2300,
-      low24h: idx === 0 ? 83500 : 2150,
-      distanceToHighPct: 1.1,
-      distanceToLowPct: 1.2,
-      volatility24hPct: 2.3,
-      isNearHigh: false,
-      isNearLow: false,
-      isActiveCoin: true,
-      exchangeUrl: `https://www.binance.com/en/futures/${p.symbol}`,
-    }))
-  );
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [coins, setCoins] = useState<MarketCoin[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
@@ -213,7 +193,7 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
           exchange === 'all' || exchange === 'binance' ? fetchDirectBinanceTickers() : Promise.resolve([]),
           exchange === 'all' || exchange === 'bybit' ? fetchDirectBybitTickers() : Promise.resolve([]),
         ]);
-        const directCoins = [...binanceCoins, ...bybitCoins];
+        const directCoins = [...binanceCoins, ...bybitCoins].filter(c => marketType === 'all' || c.marketType === marketType);
         if (directCoins.length > 0) {
           setCoins(directCoins);
           setLastUpdated(Date.now());
@@ -224,6 +204,10 @@ export const CoinScreenerPage: React.FC<CoinScreenerPageProps> = ({
       }
     }
 
+    if (!dataLoaded) {
+      setCoins([]);
+      setError('Не вдалося отримати актуальні дані біржі. Спробуйте оновити сторінку.');
+    }
     setIsLoading(false);
   }, [exchange, marketType, minVolumeUsd]);
 

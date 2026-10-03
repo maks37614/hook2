@@ -28,6 +28,8 @@ export class ExchangeStreamClient extends EventEmitter {
   private reconnectAttempts = 0;
   private readonly backoffSchedule = [1000, 2000, 5000, 10000, 30000, 60000];
 
+  private bybitTicker: Record<string, any> = {};
+
   public status: OrderBookStatus = 'CONNECTING';
   public lastDataReceivedAt = 0;
 
@@ -50,9 +52,9 @@ export class ExchangeStreamClient extends EventEmitter {
     if (this.exchange === 'binance') {
       const lower = sym.toLowerCase();
       if (this.marketType === 'futures') {
-        return `wss://fstream.binance.com/ws/${lower}@ticker/${lower}@aggTrade/${lower}@depth20@100ms`;
+        return `wss://fstream.binance.com/stream?streams=${lower}@ticker/${lower}@aggTrade/${lower}@depth20@100ms`;
       } else {
-        return `wss://stream.binance.com:9443/ws/${lower}@ticker/${lower}@trade/${lower}@depth20@100ms`;
+        return `wss://stream.binance.com:9443/stream?streams=${lower}@ticker/${lower}@trade/${lower}@depth20@100ms`;
       }
     } else {
       // Bybit
@@ -88,6 +90,7 @@ export class ExchangeStreamClient extends EventEmitter {
         this.reconnectAttempts = 0;
         this.setStatus('SYNCING');
         this.lastDataReceivedAt = Date.now();
+        this.bybitTicker = {};
 
         // If Bybit, send subscription payload and start ping interval
         if (this.exchange === 'bybit') {
@@ -138,7 +141,7 @@ export class ExchangeStreamClient extends EventEmitter {
 
   private handleIncomingMessage(msg: any) {
     if (this.exchange === 'binance') {
-      this.handleBinanceMessage(msg);
+      this.handleBinanceMessage(msg.data ?? msg);
     } else {
       this.handleBybitMessage(msg);
     }
@@ -159,6 +162,7 @@ export class ExchangeStreamClient extends EventEmitter {
           high24h,
           low24h,
           volume24hUsd,
+          change24h: Number(msg.P || 0),
           time: msg.E || Date.now(),
         });
       }
@@ -185,15 +189,17 @@ export class ExchangeStreamClient extends EventEmitter {
     }
 
     // Depth stream (depth20)
-    if (msg.bids && msg.asks) {
+    const rawBids = msg.bids ?? (eventType === 'depthUpdate' ? msg.b : undefined);
+    const rawAsks = msg.asks ?? (eventType === 'depthUpdate' ? msg.a : undefined);
+    if (Array.isArray(rawBids) && Array.isArray(rawAsks)) {
       this.setStatus('LIVE');
-      const bids: [number, number][] = msg.bids.map((b: any) => [parseFloat(b[0]), parseFloat(b[1])]);
-      const asks: [number, number][] = msg.asks.map((a: any) => [parseFloat(a[0]), parseFloat(a[1])]);
+      const bids: [number, number][] = rawBids.map((b: any) => [parseFloat(b[0]), parseFloat(b[1])]);
+      const asks: [number, number][] = rawAsks.map((a: any) => [parseFloat(a[0]), parseFloat(a[1])]);
       this.emit('depth', {
         bids,
         asks,
         isSnapshot: true,
-        sequence: msg.lastUpdateId || Date.now(),
+        sequence: msg.lastUpdateId ?? msg.u ?? Date.now(),
       } as RawDepthDelta);
     }
   }
@@ -207,7 +213,9 @@ export class ExchangeStreamClient extends EventEmitter {
 
     // Tickers
     if (topic.startsWith('tickers.')) {
-      const data = msg.data;
+      if (msg.type === 'snapshot') this.bybitTicker = {};
+      Object.assign(this.bybitTicker, msg.data || {});
+      const data = this.bybitTicker;
       if (data) {
         const lastPrice = parseFloat(data.lastPrice);
         const high24h = parseFloat(data.highPrice24h || 0);
@@ -219,6 +227,7 @@ export class ExchangeStreamClient extends EventEmitter {
             high24h,
             low24h,
             volume24hUsd,
+            change24h: Number(data.price24hPcnt || 0) * 100,
             time: msg.ts || Date.now(),
           });
         }
@@ -256,7 +265,7 @@ export class ExchangeStreamClient extends EventEmitter {
         this.emit('depth', {
           bids,
           asks,
-          isSnapshot: type === 'snapshot',
+          isSnapshot: type === 'snapshot' || data.u === 1,
           sequence: msg.data?.seq || msg.data?.u || Date.now(),
         } as RawDepthDelta);
       }
@@ -270,7 +279,7 @@ export class ExchangeStreamClient extends EventEmitter {
       const elapsed = now - this.lastDataReceivedAt;
 
       // Watchdog: If no message for > 12 seconds, consider STALE and trigger reconnect
-      if (this.status === 'LIVE' && elapsed > 12000) {
+      if (elapsed > 12000 && this.status !== 'CONNECTING') {
         this.setStatus('STALE');
         console.warn(`[Watchdog] Stale stream detected for ${this.symbol} (${this.exchange}) - reconnecting`);
         this.scheduleReconnect();
@@ -300,6 +309,9 @@ export class ExchangeStreamClient extends EventEmitter {
     if (this.ws) {
       try {
         this.ws.removeAllListeners();
+        // Closing during the opening handshake emits an asynchronous error.
+        // Keep a listener while the discarded socket shuts down.
+        this.ws.on('error', () => {});
         this.ws.close();
       } catch (e) {}
       this.ws = null;

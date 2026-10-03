@@ -1,4 +1,5 @@
 import { Kline, Timeframe } from '../../src/types';
+import { normalizeKlineTimeMs } from '../../src/utils/formationValidation';
 import { RawTradeEvent } from './exchangeStream';
 import { StructureBreak, SwingPoint, TimeframeStructure } from './types';
 
@@ -42,7 +43,7 @@ export class MultiTimeframeEngine {
 
   public setCandles(tf: Timeframe, candles: Kline[]) {
     // Keep max 150 candles per timeframe for fast and deep processing
-    this.candlesByTimeframe.set(tf, candles.slice(-150));
+    this.candlesByTimeframe.set(tf, candles.slice(-150).map(c => ({ ...c, time: normalizeKlineTimeMs(c.time) })));
   }
 
   public getCandles(tf: Timeframe): Kline[] {
@@ -207,12 +208,12 @@ export class MultiTimeframeEngine {
     // Detect BOS / CHoCH
     let lastBreak: StructureBreak | undefined;
     if (candles.length > 2 && recentHigh && recentLow) {
-      const closedCandles = candles.length > 2 ? candles.slice(0, -1) : candles;
+      const closedCandles = candles;
       if (closedCandles.length < 3) return { timeframe: tf, trend, score: Math.max(-100, Math.min(100, score)), recentSwings: swings.slice(-6), higherHighsCount: hh, lowerHighsCount: lh, higherLowsCount: hl, lowerLowsCount: ll };
       const lastClosed = closedCandles[closedCandles.length - 1];
       const lastClose = lastClosed.close;
       const lastVol = lastClosed.volume;
-      const volSample = closedCandles.slice(-20);
+      const volSample = closedCandles.slice(-21, -1);
       const avgVol = volSample.reduce((a, c) => a + c.volume, 0) / volSample.length;
 
       // Bullish break of recent high

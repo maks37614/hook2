@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import {
   SurveillanceCoin,
   SurveillanceConfig,
@@ -209,6 +210,10 @@ export function saveSurveillanceList(userId: string, list: SurveillanceCoin[]): 
   return saveSurveillanceStore(store);
 }
 
+export function copyGuestSurveillanceCoins(coins: SurveillanceCoin[], userId: string): SurveillanceCoin[] {
+  return coins.map(coin => ({ ...structuredClone(coin), id: `surv_${randomUUID()}`, userId }));
+}
+
 export function updateSurveillanceCoinActive(
   id: string,
   isActive: boolean,
@@ -263,26 +268,11 @@ export function findSurveillanceCoinById(
 ): { userId: string; coin: SurveillanceCoin; index: number; list: SurveillanceCoin[] } | null {
   const store = loadSurveillanceStore();
 
-  // Try preferred user first
-  if (preferredUserId && store[preferredUserId]) {
-    const list = store[preferredUserId];
-    const idx = list.findIndex((c) => c.id === id);
-    if (idx !== -1) {
-      return { userId: preferredUserId, coin: list[idx], index: idx, list };
-    }
-  }
-
-  // Fallback: search across all user stores
-  for (const [uid, list] of Object.entries(store)) {
-    if (Array.isArray(list)) {
-      const idx = list.findIndex((c) => c.id === id);
-      if (idx !== -1) {
-        return { userId: uid, coin: list[idx], index: idx, list };
-      }
-    }
-  }
-
-  return null;
+  const userId = preferredUserId?.trim() || 'guest';
+  const list = store[userId];
+  if (!Array.isArray(list)) return null;
+  const index = list.findIndex(coin => coin.id === id);
+  return index === -1 ? null : { userId, coin: list[index], index, list };
 }
 
 export function getAllActiveSurveillanceCoins(): { userId: string; coin: SurveillanceCoin }[] {

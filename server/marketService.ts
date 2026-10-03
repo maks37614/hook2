@@ -192,12 +192,7 @@ export async function fetchKlines(
   if (exchange === 'binance') {
     const interval = toBinanceInterval(timeframe);
     const mirrors = market === 'futures'
-      ? [
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-          `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-          `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-          `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-        ]
+      ? [`https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`]
       : [
           `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
           `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
@@ -237,10 +232,9 @@ export async function fetchKlines(
   } else {
     // Bybit
     const primaryCategory = market === 'futures' ? 'linear' : 'spot';
-    const fallbackCategory = primaryCategory === 'linear' ? 'spot' : 'linear';
     const interval = toBybitInterval(timeframe);
 
-    const categories = [primaryCategory, fallbackCategory];
+    const categories = [primaryCategory];
     const hosts = [
       'https://api.bybit.com',
       'https://api.bytick.com',
@@ -830,15 +824,12 @@ export async function fetchOrderBook(
         // Try next
       }
     }
+    return { symbol: cleanSymbol, exchange, marketType: market, bids: [], asks: [], timestamp: Date.now() };
   }
 
   // Binance (Futures or Spot with multi-mirror)
   const mirrors = market === 'futures'
-    ? [
-        `https://fapi.binance.com/fapi/v1/depth?symbol=${cleanSymbol}&limit=${safeLimit}`,
-        `https://data-api.binance.vision/api/v3/depth?symbol=${cleanSymbol}&limit=${safeLimit}`,
-        `https://api.binance.com/api/v3/depth?symbol=${cleanSymbol}&limit=${safeLimit}`,
-      ]
+    ? [`https://fapi.binance.com/fapi/v1/depth?symbol=${cleanSymbol}&limit=${safeLimit}`]
     : [
         `https://data-api.binance.vision/api/v3/depth?symbol=${cleanSymbol}&limit=${safeLimit}`,
         `https://api.binance.com/api/v3/depth?symbol=${cleanSymbol}&limit=${safeLimit}`,
@@ -930,15 +921,12 @@ export async function fetchRecentTrades(
         }
       } catch {}
     }
+    return [];
   }
 
   // Binance
   const mirrors = market === 'futures'
-    ? [
-        `https://fapi.binance.com/fapi/v1/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
-        `https://data-api.binance.vision/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
-        `https://api.binance.com/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
-      ]
+    ? [`https://fapi.binance.com/fapi/v1/trades?symbol=${cleanSymbol}&limit=${safeLimit}`]
     : [
         `https://data-api.binance.vision/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,
         `https://api.binance.com/api/v3/trades?symbol=${cleanSymbol}&limit=${safeLimit}`,

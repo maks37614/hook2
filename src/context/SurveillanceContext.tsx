@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import {
   SurveillanceCoin,
@@ -45,14 +45,9 @@ const SurveillanceContext = createContext<SurveillanceContextType | undefined>(u
 
 export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const [coins, setCoins] = useState<SurveillanceCoin[]>(() => {
-    try {
-      const cached = localStorage.getItem('signalhook_surveillance_cache');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [coins, setCoins] = useState<SurveillanceCoin[]>([]);
+  const currentUserId = useRef(user?.uid || 'guest');
+  currentUserId.current = user?.uid || 'guest';
   const [loading, setLoading] = useState<boolean>(true);
 
   const fetchCoins = useCallback(async () => {
@@ -61,17 +56,18 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const res = await fetch(`/api/surveillance?userId=${encodeURIComponent(userId)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (currentUserId.current !== userId) return;
       if (data.success && Array.isArray(data.data)) {
         setCoins(data.data);
         try {
           localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(data.data));
-          localStorage.setItem('signalhook_surveillance_cache', JSON.stringify(data.data));
         } catch {}
       }
     } catch (err) {
+      if (currentUserId.current !== userId) return;
       console.warn('[Surveillance] Fetch error, checking localStorage:', err);
       try {
-        const cached = localStorage.getItem(`signalhook_surveillance_${userId}`) || localStorage.getItem('signalhook_surveillance_cache');
+        const cached = localStorage.getItem(`signalhook_surveillance_${userId}`);
         if (cached) {
           setCoins(JSON.parse(cached));
         }
@@ -82,6 +78,8 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   }, [user?.uid]);
 
   useEffect(() => {
+    setCoins([]);
+    setLoading(true);
     fetchCoins();
     const interval = setInterval(() => {
       fetchCoins();
@@ -89,16 +87,16 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => clearInterval(interval);
   }, [fetchCoins]);
 
-  const getWorkerSnapshot = async (id: string): Promise<any | null> => {
+  const getWorkerSnapshot = useCallback(async (id: string): Promise<any | null> => {
     try {
-      const res = await fetch(`/api/surveillance/worker/${encodeURIComponent(id)}`);
+      const res = await fetch(`/api/surveillance/worker/${encodeURIComponent(id)}?userId=${encodeURIComponent(user?.uid || 'guest')}`);
       if (!res.ok) return null;
       const json = await res.json();
       return json.success ? json.data : null;
     } catch {
       return null;
     }
-  };
+  }, [user?.uid]);
 
   const runBacktest = async (
     symbol: string,
@@ -302,7 +300,6 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         setCoins(data.data);
         try {
           localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(data.data));
-          localStorage.setItem('signalhook_surveillance_cache', JSON.stringify(data.data));
         } catch {}
         return true;
       }

@@ -323,9 +323,8 @@ export async function fetchDirectKlines(
   if (exchange === 'bybit') {
     const interval = toBybitInterval(timeframe);
     const primaryCategory = market === 'futures' ? 'linear' : 'spot';
-    const fallbackCategory = primaryCategory === 'linear' ? 'spot' : 'linear';
 
-    const categories = [primaryCategory, fallbackCategory];
+    const categories = [primaryCategory];
     const hosts = [
       'https://api.bybit.com',
       'https://api.bytick.com',
@@ -367,12 +366,7 @@ export async function fetchDirectKlines(
   // Binance
   const interval = toBinanceInterval(timeframe);
   const mirrors = market === 'futures'
-    ? [
-        `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-        `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-        `https://api1.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
-      ]
+    ? [`https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`]
     : [
         `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
         `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${interval}&limit=${safeLimit}${extraBinance}`,
@@ -419,7 +413,7 @@ export async function runDirectClientScan(params: {
       params.exchange === 'all' || params.exchange === 'bybit' ? fetchDirectBybitTickers() : Promise.resolve([]),
     ]);
 
-    const allCoins = [...binanceCoins, ...bybitCoins];
+    const allCoins = [...binanceCoins, ...bybitCoins].filter(c => params.marketType === 'all' || c.marketType === params.marketType);
     if (allCoins.length === 0) {
       return getFallbackScannedCoins(params.timeframe);
     }
@@ -474,11 +468,11 @@ export function getFallbackScannedCoins(timeframe: Timeframe = '1h'): ScannedCoi
     quoteAsset: 'USDT',
     exchange: 'binance',
     marketType: 'futures',
-    currentPrice: idx === 0 ? 84500 : idx === 1 ? 2200 : idx === 2 ? 140 : 1.5,
-    priceChange24h: 1.25,
-    highPrice24h: idx === 0 ? 85500 : 2300,
-    lowPrice24h: idx === 0 ? 83500 : 2150,
-    volume24hUsd: 100_000_000 - idx * 2_000_000,
+    currentPrice: 0,
+    priceChange24h: 0,
+    highPrice24h: 0,
+    lowPrice24h: 0,
+    volume24hUsd: 0,
     formations: [],
     timeframe,
     lastUpdated: Date.now(),

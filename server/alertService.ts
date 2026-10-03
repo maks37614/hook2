@@ -9,6 +9,7 @@ const DATA_DIR = path.join(process.cwd(), 'server', 'data');
 const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'alert_history.json');
 const USER_TELEGRAM_FILE = path.join(DATA_DIR, 'user_telegram.json');
+const DELETED_ALERTS_FILE = path.join(DATA_DIR, 'deleted_alerts.json');
 
 // Ensure directory exists
 function ensureDataDir() {
@@ -46,6 +47,29 @@ let userTelegramMap = new Map<string, UserTelegramData>();
 let isUserTelegramLoaded = false;
 
 let monitorInterval: any = null;
+const deletedAlertIds = new Set<string>();
+let areDeletedAlertIdsLoaded = false;
+const alertIdentity = (userId: string, id: string) => `${userId}:${id}`;
+
+function loadDeletedAlertIds() {
+  if (areDeletedAlertIdsLoaded) return;
+  ensureDataDir();
+  if (fs.existsSync(DELETED_ALERTS_FILE)) {
+    const stored: unknown = JSON.parse(fs.readFileSync(DELETED_ALERTS_FILE, 'utf-8'));
+    if (!Array.isArray(stored) || stored.some(id => typeof id !== 'string')) {
+      throw new Error('Invalid deleted alert persistence');
+    }
+    for (const id of stored) deletedAlertIds.add(id);
+  }
+  areDeletedAlertIdsLoaded = true;
+}
+
+function saveDeletedAlertIds() {
+  ensureDataDir();
+  const temporary = `${DELETED_ALERTS_FILE}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify([...deletedAlertIds]), 'utf-8');
+  fs.renameSync(temporary, DELETED_ALERTS_FILE);
+}
 
 // --- User Telegram persistence ---
 export function loadUserTelegram(): Map<string, UserTelegramData> {
@@ -91,6 +115,7 @@ export function getUserTelegram(userId?: string): UserTelegramData | undefined {
 
 // --- Alerts persistence ---
 export function loadAlerts(): PriceAlert[] {
+  loadDeletedAlertIds();
   if (isAlertsLoaded) return alertsCache;
   try {
     ensureDataDir();
@@ -105,6 +130,7 @@ export function loadAlerts(): PriceAlert[] {
     alertsCache = [];
   }
   isAlertsLoaded = true;
+  alertsCache = alertsCache.filter(a => !deletedAlertIds.has(alertIdentity(a.userId || 'guest', a.id)));
   return alertsCache;
 }
 
@@ -221,6 +247,9 @@ export function createAlert(
   const effectiveChatId = data.telegramChatId || userTg?.chatId;
 
   const alertId = data.id || `alert_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  if (deletedAlertIds.has(alertIdentity(userId, alertId))) throw new Error('Сповіщення вже видалено');
+  const existing = alerts.find(a => a.id === alertId && a.userId === userId);
+  if (existing) return existing;
 
   const newAlert: PriceAlert = {
     id: alertId,
@@ -240,12 +269,7 @@ export function createAlert(
     telegramChatId: effectiveChatId,
   };
 
-  const existingIdx = alerts.findIndex((a) => a.id === alertId);
-  if (existingIdx >= 0) {
-    alerts[existingIdx] = newAlert;
-  } else {
-    alerts.unshift(newAlert);
-  }
+  alerts.unshift(newAlert);
   saveAlerts(alerts);
   return newAlert;
 }
@@ -282,6 +306,12 @@ export function createAlertsBatch(
 
   for (const item of alertsList) {
     const alertId = item.id || `alert_${Date.now()}_${Math.random().toString(36).substring(2, 8)}_${index++}`;
+    if (deletedAlertIds.has(alertIdentity(userId, alertId))) continue;
+    const existing = alerts.find(a => a.id === alertId && a.userId === userId);
+    if (existing) {
+      createdAlerts.push(existing);
+      continue;
+    }
     const newAlert: PriceAlert = {
       id: alertId,
       userId,
@@ -300,12 +330,7 @@ export function createAlertsBatch(
       telegramChatId: item.telegramChatId || effectiveChatId,
     };
 
-    const existingIdx = alerts.findIndex((a) => a.id === alertId);
-    if (existingIdx >= 0) {
-      alerts[existingIdx] = newAlert;
-    } else {
-      alerts.unshift(newAlert);
-    }
+    alerts.unshift(newAlert);
     createdAlerts.push(newAlert);
   }
 
@@ -428,16 +453,18 @@ export function createSetupAlertsGroup(
 
   const alerts = loadAlerts();
   for (const newAlert of alertsToCreate) {
-    const existingIdx = alerts.findIndex((a) => a.id === newAlert.id);
+    if (deletedAlertIds.has(alertIdentity(userId, newAlert.id))) continue;
+    const existingIdx = alerts.findIndex((a) => a.id === newAlert.id && a.userId === userId);
     if (existingIdx >= 0) {
-      alerts[existingIdx] = newAlert;
+      // Repeated analysis must not rearm a fired setup or undo a manual pause.
+      Object.assign(newAlert, alerts[existingIdx]);
     } else {
       alerts.unshift(newAlert);
     }
   }
 
   saveAlerts(alerts);
-  return { success: true, alerts: alertsToCreate };
+  return { success: true, alerts: alertsToCreate.filter(a => !deletedAlertIds.has(alertIdentity(userId, a.id))) };
 }
 
 // Sync user alerts batch from client/Firestore with smart merge
@@ -472,6 +499,7 @@ export function syncUserAlerts(
   const processedIds = new Set<string>();
 
   for (const incoming of userAlerts) {
+    if (deletedAlertIds.has(alertIdentity(userId, incoming.id))) continue;
     processedIds.add(incoming.id);
     const existing = existingUserAlerts.get(incoming.id);
 
@@ -492,16 +520,18 @@ export function syncUserAlerts(
       mergedUserAlerts.push({
         ...incoming,
         userId,
+        // Changes to the active state use the explicit toggle endpoint.
+        // A delayed Firestore/browser snapshot must not undo a server pause.
+        isActive: existing?.isActive ?? incoming.isActive,
         telegramBotToken: effectiveBotToken || incoming.telegramBotToken || existing?.telegramBotToken,
         telegramChatId: effectiveChatId || incoming.telegramChatId || existing?.telegramChatId,
       });
     }
   }
 
-  // Only preserve alerts on server if they were triggered while the user was offline,
-  // so the triggered event is never lost. Any untriggered alerts removed by the user stay deleted!
+  // Absence in a stale browser snapshot is not a deletion. Deletions use the DELETE endpoint.
   for (const [id, existing] of existingUserAlerts.entries()) {
-    if (!processedIds.has(id) && existing.triggered) {
+    if (!processedIds.has(id)) {
       mergedUserAlerts.push({
         ...existing,
         telegramBotToken: effectiveBotToken || existing.telegramBotToken,
@@ -519,17 +549,13 @@ export function syncUserAlerts(
 
 // Delete alert
 export function deleteAlert(id: string, userId?: string): boolean {
+  if (!userId || userId === 'guest') return false;
   const alerts = loadAlerts();
   const initialCount = alerts.length;
-  const filtered = alerts.filter((a) => {
-    if (a.id === id) {
-      // If a userId is specified, ensure it belongs to this user or is unassigned
-      if (!userId || !a.userId || a.userId === 'guest' || a.userId === userId) {
-        return false; // Remove
-      }
-    }
-    return true; // Keep
-  });
+  // Record deletion even when it arrives before a delayed create request.
+  deletedAlertIds.add(alertIdentity(userId, id));
+  saveDeletedAlertIds();
+  const filtered = alerts.filter(a => !(a.id === id && a.userId === userId));
 
   if (filtered.length !== initialCount) {
     saveAlerts(filtered);
@@ -539,11 +565,12 @@ export function deleteAlert(id: string, userId?: string): boolean {
 }
 
 // Toggle alert active state
-export function toggleAlert(id: string, userId?: string): PriceAlert | null {
+export function toggleAlert(id: string, userId?: string, isActive?: boolean): PriceAlert | null {
+  if (!userId || userId === 'guest') return null;
   const alerts = loadAlerts();
-  const alert = alerts.find((a) => a.id === id && (!userId || !a.userId || a.userId === userId));
+  const alert = alerts.find((a) => a.id === id && a.userId === userId);
   if (alert) {
-    alert.isActive = !alert.isActive;
+    alert.isActive = isActive ?? !alert.isActive;
     // If reactivating a triggered alert, reset triggered status
     if (alert.isActive && alert.triggered) {
       alert.triggered = false;
@@ -558,13 +585,18 @@ export function toggleAlert(id: string, userId?: string): PriceAlert | null {
 
 // Clear triggered alerts
 export function clearTriggeredAlerts(userId?: string): number {
+  if (!userId || userId === 'guest') return 0;
   const alerts = loadAlerts();
   const remaining = alerts.filter((a) => {
     if (!a.triggered) return true;
-    if (userId && a.userId && a.userId !== userId) return true; // keep triggered alerts of other users
+    if (a.userId !== userId) return true;
     return false;
   });
   const clearedCount = alerts.length - remaining.length;
+  for (const removed of alerts) {
+    if (!remaining.includes(removed)) deletedAlertIds.add(alertIdentity(removed.userId || 'guest', removed.id));
+  }
+  if (clearedCount > 0) saveDeletedAlertIds();
   saveAlerts(remaining);
   return clearedCount;
 }
@@ -585,83 +617,39 @@ async function fetchCurrentPrice(exchange: ExchangeId, market: MarketType, symbo
     'Accept': 'application/json',
   };
 
-  const binanceMirrors = market === 'futures'
-    ? [
-        `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${cleanSymbol}`,
-        `https://data-api.binance.vision/api/v3/ticker/price?symbol=${cleanSymbol}`,
-        `https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
-        `https://api1.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
-      ]
-    : [
-        `https://data-api.binance.vision/api/v3/ticker/price?symbol=${cleanSymbol}`,
-        `https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
-        `https://api1.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`,
-      ];
-
-  const bybitCategory = market === 'futures' ? 'linear' : 'spot';
-  const bybitMirrors = [
-    `https://api.bybit.com/v5/market/tickers?category=${bybitCategory}&symbol=${cleanSymbol}`,
-    `https://api.bytick.com/v5/market/tickers?category=${bybitCategory}&symbol=${cleanSymbol}`,
-  ];
-
-  if (exchange === 'binance') {
-    for (const url of binanceMirrors) {
-      try {
-        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3500) });
-        if (res.ok) {
-          const data = await res.json();
-          const p = parseFloat(data.price);
-          if (!isNaN(p) && p > 0) return p;
-        }
-      } catch {}
-    }
-    // Fallback to Bybit
-    for (const url of bybitMirrors) {
-      try {
-        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) });
-        if (res.ok) {
-          const data = await res.json();
-          const list = data?.result?.list;
-          if (Array.isArray(list) && list.length > 0 && list[0].lastPrice) {
-            const p = parseFloat(list[0].lastPrice);
-            if (!isNaN(p) && p > 0) return p;
-          }
-        }
-      } catch {}
-    }
-  } else {
-    // Bybit primary
-    for (const url of bybitMirrors) {
-      try {
-        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3500) });
-        if (res.ok) {
-          const data = await res.json();
-          const list = data?.result?.list;
-          if (Array.isArray(list) && list.length > 0 && list[0].lastPrice) {
-            const p = parseFloat(list[0].lastPrice);
-            if (!isNaN(p) && p > 0) return p;
-          }
-        }
-      } catch {}
-    }
-    // Fallback to Binance
-    for (const url of binanceMirrors) {
-      try {
-        const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) });
-        if (res.ok) {
-          const data = await res.json();
-          const p = parseFloat(data.price);
-          if (!isNaN(p) && p > 0) return p;
-        }
-      } catch {}
-    }
+  const urls = exchange === 'binance'
+    ? market === 'futures'
+      ? [`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${cleanSymbol}`]
+      : [`https://data-api.binance.vision/api/v3/ticker/price?symbol=${cleanSymbol}`,
+         `https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`]
+    : [`https://api.bybit.com/v5/market/tickers?category=${market === 'futures' ? 'linear' : 'spot'}&symbol=${cleanSymbol}`,
+       `https://api.bytick.com/v5/market/tickers?category=${market === 'futures' ? 'linear' : 'spot'}&symbol=${cleanSymbol}`];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(3500) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const price = Number(exchange === 'binance' ? data.price : data?.result?.list?.[0]?.lastPrice);
+      if (Number.isFinite(price) && price > 0) return price;
+    } catch {}
   }
 
   return null;
 }
 
 // Check active alerts against live prices
+let checkInFlight = false;
 export async function checkAlertsOnce() {
+  if (checkInFlight) return;
+  checkInFlight = true;
+  try {
+    await checkAlertsInternal();
+  } finally {
+    checkInFlight = false;
+  }
+}
+
+async function checkAlertsInternal() {
   const alerts = loadAlerts();
   const activeAlerts = alerts.filter((a) => a.isActive && !a.triggered);
   if (activeAlerts.length === 0) return;
@@ -688,7 +676,9 @@ export async function checkAlertsOnce() {
 
   let updated = false;
 
-  for (const alert of activeAlerts) {
+  for (const candidate of activeAlerts) {
+    const alert = loadAlerts().find((a) => a.id === candidate.id && a.userId === candidate.userId);
+    if (!alert || !alert.isActive || alert.triggered) continue;
     const key = `${alert.exchange}:${alert.marketType}:${alert.symbol}`;
     const currentPrice = priceMap.get(key);
     if (currentPrice === undefined) continue;
@@ -706,6 +696,7 @@ export async function checkAlertsOnce() {
       alert.triggeredAt = Date.now();
       alert.triggeredPrice = currentPrice;
       updated = true;
+      saveAlerts(loadAlerts());
 
       console.log(`[ALERT TRIGGERED] ${alert.symbol} target: ${alert.targetPrice}, live price: ${currentPrice}, condition: ${alert.condition}`);
 
@@ -785,7 +776,7 @@ export async function checkAlertsOnce() {
   }
 
   if (updated) {
-    saveAlerts(alerts);
+    saveAlerts(loadAlerts());
   }
 }
 
