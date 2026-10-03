@@ -50,6 +50,7 @@ export class SurveillanceManager {
   public startWorkerForCoin(coin: SurveillanceCoin): CoinWorker {
     const existing = this.workers.get(coin.id);
     if (existing) {
+      existing.updateCoin(coin);
       return existing;
     }
 
@@ -57,6 +58,13 @@ export class SurveillanceManager {
     const worker = new CoinWorker(coin, this.macroEngine, this.alertManager);
     this.workers.set(coin.id, worker);
     return worker;
+  }
+
+  public updateWorkerCoin(coin: SurveillanceCoin) {
+    const worker = this.workers.get(coin.id);
+    if (worker) {
+      worker.updateCoin(coin);
+    }
   }
 
   public stopWorkerForCoin(coinId: string): boolean {

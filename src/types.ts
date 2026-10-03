@@ -784,6 +784,11 @@ export interface SurveillanceState {
   btcTrend4h?: string;
   formationName?: string;
   formationScore?: number;
+  lastProcessedCandleTimes?: {
+    '15m'?: number;
+    '1h'?: number;
+    '4h'?: number;
+  };
 }
 
 export interface SurveillanceCoin {

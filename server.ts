@@ -714,6 +714,13 @@ async function startServer() {
       found.list[found.index] = updatedCoin;
       saveSurveillanceList(found.userId, found.list);
 
+      // Keep 24/7 worker synced with updated coin config & active state (#4)
+      if (updatedCoin.isActive) {
+        surveillanceManager.startWorkerForCoin(updatedCoin);
+      } else {
+        surveillanceManager.stopWorkerForCoin(updatedCoin.id);
+      }
+
       res.json({ success: true, coin: updatedCoin });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -744,11 +751,13 @@ async function startServer() {
         const list = loadSurveillanceList(uid);
         const filtered = list.filter((c) => c.id !== id);
         saveSurveillanceList(uid, filtered);
+        surveillanceManager.stopWorkerForCoin(id);
         return res.json({ success: true });
       }
 
       const filtered = found.list.filter((c) => c.id !== id);
       saveSurveillanceList(found.userId, filtered);
+      surveillanceManager.stopWorkerForCoin(id);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -776,7 +785,11 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'Монету не знайдено' });
       }
 
-      const { coin: updated } = await checkCoinSurveillance(found.coin, Boolean(forceNotify));
+      // #6: Single coin manual check explicitly supports forceNotify if requested by user
+      const { coin: updated } = await checkCoinSurveillance(found.coin, {
+        forceCheck: true,
+        forceNotify: Boolean(forceNotify),
+      });
       found.list[found.index] = updated;
       saveSurveillanceList(found.userId, found.list);
 

@@ -32,7 +32,7 @@ export interface FormationValidation {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const finitePositive = (v: number) => Number.isFinite(v) && v > 0;
+const finitePositive = (v: number | undefined | null): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 const pctDistance = (a: number, b: number) => Math.abs(a - b) / Math.max(Math.abs(b), 1e-12) * 100;
 
 export function normalizeKlineTimeMs(time: number): number {

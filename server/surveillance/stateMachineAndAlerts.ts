@@ -31,10 +31,10 @@ export class StateMachineAndAlerts {
     STRUCTURE_SHIFT: 20 * 60 * 1000,
   };
 
-  public canSendAlert(key: string, eventType: string): boolean {
+  public canSendAlert(key: string, eventType: string, customCooldownMs?: number): boolean {
     const now = Date.now();
     const lastTime = this.lastAlertTimestamps.get(key) || 0;
-    const cooldown = this.cooldowns[eventType] || 15 * 60 * 1000;
+    const cooldown = customCooldownMs !== undefined ? customCooldownMs : (this.cooldowns[eventType] || 15 * 60 * 1000);
 
     if (now - lastTime >= cooldown) {
       this.lastAlertTimestamps.set(key, now);
@@ -43,37 +43,64 @@ export class StateMachineAndAlerts {
     return false;
   }
 
+  public recordAlertSent(key: string, timestamp = Date.now()) {
+    this.lastAlertTimestamps.set(key, timestamp);
+  }
+
+  public getLastAlertTime(key: string): number {
+    return this.lastAlertTimestamps.get(key) || 0;
+  }
+
   // Telegram Support Retest formatted message (#83)
   public formatSupportRetestMessage(setup: SetupInstance, currentPrice: number): string {
     const sym = setup.symbol;
     const ex = setup.exchange.toUpperCase();
     const mkt = setup.marketType === 'futures' ? 'Linear / Futures' : 'Spot';
-    const isLong = setup.direction === 'LONG';
-    const sideLabel = isLong ? 'LONG' : 'SHORT';
-    const levelLabel = isLong ? 'Зона підтримки' : 'Зона опору';
-    const quality = setup.entryQuality;
 
-    return `${isLong ? '🟢' : '🔴'} <b>${sideLabel} ENTRY — CONFIRMED</b>\n\n` +
-      `<b>${sym}</b>\n${ex} ${mkt}\n\n` +
-      `<b>Поточна ціна:</b> $${formatCryptoPrice(currentPrice)}\n` +
-      `<b>${levelLabel}:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}\n` +
-      `<b>Рекомендований вхід:</b> $${formatCryptoPrice(quality?.preferredEntry || currentPrice)}\n` +
-      `<b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>\n` +
-      `<b>R:R:</b> ${quality?.riskReward?.toFixed(2) || '—'}\n\n` +
-      `━━━━━━━━━━━━\n\n` +
-      `<b>ПІДТВЕРДЖЕННЯ</b>\n` +
-      `${setup.confirmations.map(c => `• ✓ ${c}`).join('\n')}\n\n` +
-      `<b>СТРУКТУРА</b>\n` +
-      `• HTF: ${setup.evidence.htfStructure}\n` +
-      `• Рівень: ${setup.evidence.levelStrength}/100\n` +
-      `• RVOL: ${setup.evidence.volumeProfile}\n` +
-      `• Стакан: ${setup.evidence.densityPresence}\n` +
-      `• OI: ${setup.evidence.oiContext}\n` +
-      `• BTC: ${setup.evidence.btcContext}\n` +
-      `• Формація: ${setup.evidence.formationScore > 0 ? `${setup.evidence.formationScore}/100` : '—'}\n\n` +
-      `<b>SL:</b> $${formatCryptoPrice(setup.invalidationPrice)}\n` +
-      `<b>TP:</b> $${formatCryptoPrice(setup.targetPrice)}\n\n` +
-      `<b>СТАТУС:</b> <b>CONFIRMED — ${quality?.independentConfirmations || setup.confirmations.length} незалежних підтверджень</b>`;
+    return `🟢 <b>SUPPORT RETEST — ${setup.stage === 'CONFIRMED' ? 'CONFIRMED' : 'WATCH'}</b>
+
+<b>${sym}</b>
+${ex} ${mkt}
+
+<b>Ціна:</b> $${formatCryptoPrice(currentPrice)}
+<b>Підтримка:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}
+<b>Сила рівня:</b> ${setup.evidence.levelStrength}/100
+<b>Поточний стан:</b> ${setup.stage}
+
+━━━━━━━━━━━━
+
+<b>СТРУКТУРА</b>
+• <b>HTF:</b> ${setup.evidence.htfStructure}
+• <b>Статус:</b> ${setup.waitingFor}
+
+━━━━━━━━━━━━
+
+<b>СТАКАН ТА ЩІЛЬНОСТІ</b>
+• <b>Стакан:</b> ${setup.evidence.densityPresence}
+
+━━━━━━━━━━━━
+
+<b>OPEN INTEREST</b>
+• <b>Режим:</b> ${setup.evidence.oiContext}
+
+━━━━━━━━━━━━
+
+<b>КОНТЕКСТ РИНКУ</b>
+• <b>BTC Context:</b> ${setup.evidence.btcContext}
+• <b>Формація:</b> ${setup.evidence.formationScore > 0 ? `${setup.evidence.formationScore}/100` : 'Компресія'}
+
+━━━━━━━━━━━━
+
+<b>СЕТАП & КОНФЛЮЕНС</b>
+<b>Тип:</b> ПОВТОРНЕ ТЕСТУВАННЯ ПІДТРИМКИ
+<b>Підтвердження:</b>
+${setup.confirmations.map((c) => `• ✓ ${c}`).join('\n') || '• Очікування'}
+
+<b>Скасування (SL):</b> $${formatCryptoPrice(setup.invalidationPrice)}
+<b>Ціль (TP):</b> $${formatCryptoPrice(setup.targetPrice)}
+<b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>
+
+<b>СТАТУС:</b> <b>${setup.stage}</b>`;
   }
 
   // Telegram Third Touch message (#84)
@@ -136,12 +163,14 @@ ${exchange.toUpperCase()}
   }
 
   // Dispatch alert to user Telegram
-  public async dispatchAlert(userId: string, htmlMessage: string) {
+  public async dispatchAlert(userId: string, htmlMessage: string, enabled = true) {
+    if (!enabled) return;
     const userTg = getUserTelegram(userId);
+    if (!userTg?.botToken || !userTg?.chatId) return;
     try {
       await sendTelegramMessage(htmlMessage, {
-        botToken: userTg?.botToken,
-        chatId: userTg?.chatId,
+        botToken: userTg.botToken,
+        chatId: userTg.chatId,
       });
     } catch (e) {
       console.error(`[AlertDispatcher] Error sending Telegram message to user ${userId}:`, e);

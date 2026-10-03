@@ -139,7 +139,8 @@ class CronManager {
               }
 
               // 2. Perform surveillance calculation (levels, momentum, golden pocket, channel, etc.)
-              const { coin: updated } = await checkCoinSurveillance(currentCoin);
+              // #1 & #6: Cron surveillance only checks candle close events and strictly enforces cooldowns
+              const { coin: updated } = await checkCoinSurveillance(currentCoin, { forceCheck: false, forceNotify: false });
 
               // 3. Atomically write back state without ever altering or resetting isActive
               const freshStore = loadSurveillanceStore();

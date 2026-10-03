@@ -732,7 +732,7 @@ export class SetupEngine {
   }
 
   private structureSummary(structures: Record<Timeframe, TimeframeStructure>): string {
-    return ['1d', '4h', '1h', '15m', '5m'].map((tf) => `${tf}:${structures[tf]?.trend || 'NA'}`).join(' | ');
+    return (['1d', '4h', '1h', '15m', '5m'] as Timeframe[]).map((tf) => `${tf}:${structures[tf]?.trend || 'NA'}`).join(' | ');
   }
 
   public getActiveSetups(): SetupInstance[] {

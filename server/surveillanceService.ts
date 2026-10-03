@@ -562,11 +562,14 @@ ${state.momentumRecentPct !== undefined ? `• <b>Імпульс (${coin.config.
 
 export async function checkCoinSurveillance(
   coin: SurveillanceCoin,
-  forceCheck = false
+  options: { forceCheck?: boolean; forceNotify?: boolean } | boolean = false
 ): Promise<{ coin: SurveillanceCoin; newEvents: SurveillanceEvent[] }> {
   const newEvents: SurveillanceEvent[] = [];
   const prevState = coin.state;
   const config = coin.config;
+
+  const forceCheck = typeof options === 'boolean' ? options : Boolean(options?.forceCheck);
+  const forceNotify = typeof options === 'boolean' ? options : Boolean(options?.forceNotify);
 
   const [klines1h, klines15m] = await Promise.all([
     fetchKlines(coin.exchange, coin.marketType, coin.symbol, '1h', 30).catch(() => []),
@@ -587,40 +590,87 @@ export async function checkCoinSurveillance(
   const now = Date.now();
   const cooldownMs = (config.cooldownMinutes || 15) * 60 * 1000;
   const lastNotified = coin.lastNotifiedAt ? new Date(coin.lastNotifiedAt).getTime() : 0;
-  const canNotify = forceCheck || now - lastNotified >= cooldownMs;
+  // #6: forceNotify is only true when explicitly intended for single coin test; otherwise respects cooldown
+  const canNotify = forceNotify || now - lastNotified >= cooldownMs;
 
   const cur = newState.currentPrice;
   const prev = prevState?.currentPrice || cur;
 
   // Evaluate trigger modes (supports multiple active modes)
   const modes = config.triggerModes || (config.triggerMode ? [config.triggerMode] : ['bar_close']);
-  const isRealtime = modes.includes('realtime');
   const isBarClose15 = modes.includes('bar_close_15m');
   const isBarClose1h = modes.includes('bar_close_1h');
   const isBarClose4h = modes.includes('bar_close');
 
-  let isTriggerAllowed = forceCheck || isRealtime;
+  // Track processed candle timestamps (#2 & #3)
+  const processedCandles: { '15m': number; '1h': number; '4h': number } = {
+    '15m': prevState?.lastProcessedCandleTimes?.['15m'] || 0,
+    '1h': prevState?.lastProcessedCandleTimes?.['1h'] || 0,
+    '4h': prevState?.lastProcessedCandleTimes?.['4h'] || 0,
+  };
+  const newProcessedCandles = { ...processedCandles };
 
-  if (!isTriggerAllowed) {
-    if (isBarClose15 && klines15m.length >= 2) {
-      const completedCandle = klines15m[klines15m.length - 2];
-      const crossedUp15 = completedCandle.close > newState.resistance4h || completedCandle.close > newState.localHigh15m;
-      const crossedDown15 = completedCandle.close < newState.support4h || completedCandle.close < newState.localLow15m;
-      if (crossedUp15 || crossedDown15) isTriggerAllowed = true;
+  // Note (#1 & #5): realtime triggers are dispatched by CoinWorker stream.
+  // Polling checkCoinSurveillance handles discrete candle close events (15m, 1h, 4h).
+  let isTriggerAllowed = forceCheck;
+
+  // 1. 15m Candle Close Check (#3: bind to specific newly closed candle timestamp)
+  if (isBarClose15 && klines15m.length >= 2) {
+    const completedCandle15 = klines15m[klines15m.length - 2];
+    const candleTime15 = completedCandle15.time > 1e11 ? completedCandle15.time : completedCandle15.time * 1000;
+    if (candleTime15 > processedCandles['15m']) {
+      newProcessedCandles['15m'] = candleTime15;
+      const crossedUp15 = completedCandle15.close > newState.resistance4h || completedCandle15.close > newState.localHigh15m;
+      const crossedDown15 = completedCandle15.close < newState.support4h || completedCandle15.close < newState.localLow15m;
+      if (crossedUp15 || crossedDown15) {
+        isTriggerAllowed = true;
+      }
     }
-    if (isBarClose1h && klines1h.length >= 2) {
-      const completedCandle = klines1h[klines1h.length - 2];
-      const crossedUp1h = completedCandle.close > newState.resistance4h || completedCandle.close > newState.localHigh1h;
-      const crossedDown1h = completedCandle.close < newState.support4h || completedCandle.close < newState.localLow1h;
-      if (crossedUp1h || crossedDown1h) isTriggerAllowed = true;
+  }
+
+  // 2. 1H Candle Close Check (#3: bind to specific newly closed candle timestamp)
+  if (isBarClose1h && klines1h.length >= 2) {
+    const completedCandle1h = klines1h[klines1h.length - 2];
+    const candleTime1h = completedCandle1h.time > 1e11 ? completedCandle1h.time : completedCandle1h.time * 1000;
+    if (candleTime1h > processedCandles['1h']) {
+      newProcessedCandles['1h'] = candleTime1h;
+      const crossedUp1h = completedCandle1h.close > newState.resistance4h || completedCandle1h.close > newState.localHigh1h;
+      const crossedDown1h = completedCandle1h.close < newState.support4h || completedCandle1h.close < newState.localLow1h;
+      if (crossedUp1h || crossedDown1h) {
+        isTriggerAllowed = true;
+      }
     }
-    if (isBarClose4h) {
+  }
+
+  // 3. 4H Candle Close Check (#2: 4H bucket window calculation)
+  if (isBarClose4h) {
+    const fourHourBucket = Math.floor(now / (4 * 60 * 60 * 1000));
+    const last4hBucket = Math.floor(processedCandles['4h'] / (4 * 60 * 60 * 1000));
+    if (fourHourBucket > last4hBucket) {
+      newProcessedCandles['4h'] = fourHourBucket * 4 * 60 * 60 * 1000;
       isTriggerAllowed = true;
     }
   }
 
+  // Baseline initialization for brand new coin tracking state
+  if (!prevState) {
+    if (klines15m.length >= 2 && !newProcessedCandles['15m']) {
+      const c15 = klines15m[klines15m.length - 2];
+      newProcessedCandles['15m'] = c15.time > 1e11 ? c15.time : c15.time * 1000;
+    }
+    if (klines1h.length >= 2 && !newProcessedCandles['1h']) {
+      const c1h = klines1h[klines1h.length - 2];
+      newProcessedCandles['1h'] = c1h.time > 1e11 ? c1h.time : c1h.time * 1000;
+    }
+    if (!newProcessedCandles['4h']) {
+      newProcessedCandles['4h'] = Math.floor(now / (4 * 60 * 60 * 1000)) * (4 * 60 * 60 * 1000);
+    }
+  }
+
+  newState.lastProcessedCandleTimes = newProcessedCandles;
+
   // 1. Senior & Local Levels (Crossing Up / Down)
-  if (config.levelsEnabled && (isTriggerAllowed || forceCheck)) {
+  if (config.levelsEnabled && isTriggerAllowed) {
     if (prev <= newState.resistance4h && cur > newState.resistance4h) {
       newEvents.push({
         id: `level_break_up_4h_${now}`,
@@ -713,7 +763,7 @@ export async function checkCoinSurveillance(
   }
 
   // 2. Momentum Moves
-  if (config.momentumEnabled && newState.momentumRecentPct !== undefined) {
+  if (config.momentumEnabled && newState.momentumRecentPct !== undefined && isTriggerAllowed) {
     if (Math.abs(newState.momentumRecentPct) >= config.momentumPct) {
       const dir = newState.momentumRecentPct > 0 ? 'вгору' : 'вниз';
       const emoji = newState.momentumRecentPct > 0 ? '🚀' : '📉';
@@ -730,7 +780,7 @@ export async function checkCoinSurveillance(
   }
 
   // 3. Structure Changes
-  if (config.structureEnabled && prevState?.structureTrend && prevState.structureTrend !== newState.structureTrend) {
+  if (config.structureEnabled && prevState?.structureTrend && prevState.structureTrend !== newState.structureTrend && isTriggerAllowed) {
     newEvents.push({
       id: `structure_change_${now}`,
       type: 'structure',
@@ -743,7 +793,7 @@ export async function checkCoinSurveillance(
   }
 
   // 4. Channel Breakout
-  if (config.channelEnabled) {
+  if (config.channelEnabled && isTriggerAllowed) {
     if (prev <= newState.channelUpper && cur > newState.channelUpper) {
       newEvents.push({
         id: `channel_out_up_${now}`,
@@ -768,7 +818,7 @@ export async function checkCoinSurveillance(
   }
 
   // 5. Fibonacci Reaction
-  if (config.fibonacciEnabled && newState.fib618 > 0) {
+  if (config.fibonacciEnabled && newState.fib618 > 0 && isTriggerAllowed) {
     const distToFib = Math.abs(cur - newState.fib618) / newState.fib618;
     if (distToFib <= 0.0035) {
       newEvents.push({
@@ -793,25 +843,40 @@ export async function checkCoinSurveillance(
     },
   };
 
-  if (newEvents.length > 0 && canNotify) {
+  // #4 & #5: Ensure telegramEnabled is respected and use shared deduplication with CoinWorker
+  const tgEnabled = config.telegramEnabled !== false;
+
+  if (newEvents.length > 0 && tgEnabled && canNotify) {
     const highestSeverityEvent =
       newEvents.find((e) => e.severity === 'critical') ||
       newEvents.find((e) => e.severity === 'warning') ||
       newEvents[0];
 
-    const messageHtml = formatSurveillanceTelegramMessage(updatedCoin, newState, highestSeverityEvent);
-    const userCreds = getUserTelegram(coin.userId);
+    // Shared deduplication key across both CoinWorker and Cron candle-close checks
+    const dedupeKey = `${coin.symbol}_${highestSeverityEvent.type}_${highestSeverityEvent.title.replace(/\s+/g, '_')}`;
+    const canSendDedupe = forceNotify || surveillanceManager.alertManager.canSendAlert(
+      dedupeKey,
+      highestSeverityEvent.type.toUpperCase(),
+      cooldownMs
+    );
 
-    sendTelegramMessage(messageHtml, {
-      botToken: userCreds?.botToken,
-      chatId: userCreds?.chatId,
-    }).then((res) => {
-      if (res.success) {
-        console.log(`[Surveillance] Notification sent to Telegram for ${coin.symbol}`);
-      }
-    });
+    if (canSendDedupe) {
+      const messageHtml = formatSurveillanceTelegramMessage(updatedCoin, newState, highestSeverityEvent);
+      const userCreds = getUserTelegram(coin.userId);
 
-    updatedCoin.lastNotifiedAt = new Date().toISOString();
+      sendTelegramMessage(messageHtml, {
+        botToken: userCreds?.botToken,
+        chatId: userCreds?.chatId,
+      }).then((res) => {
+        if (res.success) {
+          console.log(`[Surveillance] Notification sent to Telegram for ${coin.symbol}: ${highestSeverityEvent.title}`);
+        }
+      });
+
+      // Record alert timestamp into shared StateMachineAndAlerts
+      surveillanceManager.alertManager.recordAlertSent(dedupeKey, now);
+      updatedCoin.lastNotifiedAt = new Date().toISOString();
+    }
   }
 
   return { coin: updatedCoin, newEvents };
@@ -828,7 +893,9 @@ export async function checkAllUserCoins(userId: string): Promise<SurveillanceCoi
   const updatedList: SurveillanceCoin[] = [];
   for (const coin of list) {
     try {
-      const { coin: updated } = await checkCoinSurveillance(coin, true);
+      // #6: check-all runs with forceCheck: true (re-evaluates current levels) but forceNotify: false
+      // This strictly enforces cooldown to prevent mass Telegram spam!
+      const { coin: updated } = await checkCoinSurveillance(coin, { forceCheck: true, forceNotify: false });
       updatedList.push(updated);
     } catch {
       updatedList.push(coin);

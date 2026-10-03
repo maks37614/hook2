@@ -75,7 +75,7 @@ export class CoinWorker {
   private recentEvents: EngineAlertEvent[] = [];
 
   constructor(
-    public readonly coin: SurveillanceCoin,
+    public coin: SurveillanceCoin,
     private macroEngine: MacroAndNewsEngine,
     private alertManager: StateMachineAndAlerts
   ) {
@@ -87,6 +87,33 @@ export class CoinWorker {
     this.setupEngine = new SetupEngine();
 
     this.init();
+  }
+
+  public updateCoin(coin: SurveillanceCoin) {
+    this.coin = coin;
+  }
+
+  public canDispatchTelegramAlert(alertCategory?: string): boolean {
+    if (this.isDestroyed) return false;
+    if (!this.coin.isActive) return false;
+
+    // 1. Explicit telegramEnabled toggle check (#4)
+    if (this.coin.config.telegramEnabled === false) return false;
+
+    // 2. Realtime trigger mode check (#1 & #5):
+    // Realtime Telegram alerts from CoinWorker are ONLY dispatched if 'realtime' is active in triggerModes
+    const modes = this.coin.config.triggerModes ||
+      (this.coin.config.triggerMode ? [this.coin.config.triggerMode] : ['bar_close']);
+    if (!modes.includes('realtime')) return false;
+
+    // 3. Category toggles check
+    if (alertCategory === 'OI_ANOMALY' && this.coin.config.oiAlerts === false) return false;
+    if (alertCategory === 'DENSITY' && this.coin.config.densityAlerts === false) return false;
+    if (alertCategory === 'THIRD_TOUCH' && this.coin.config.thirdTouchAlerts === false) return false;
+    if (alertCategory === 'SETUP' && this.coin.config.setupsEnabled === false) return false;
+    if (alertCategory === 'STRUCTURE' && this.coin.config.structureEnabled === false) return false;
+
+    return true;
   }
 
   private async init() {
@@ -202,7 +229,10 @@ export class CoinWorker {
             `${struct.lastBreak.type} ${struct.lastBreak.direction}`,
             price
           );
-          this.alertManager.dispatchAlert(this.coin.userId, alertHtml);
+          if (this.canDispatchTelegramAlert('STRUCTURE')) {
+            this.alertManager.dispatchAlert(this.coin.userId, alertHtml);
+            this.coin.lastNotifiedAt = new Date().toISOString();
+          }
           this.addEvent({
             eventId: alertKey,
             symbol: this.coin.symbol,
@@ -232,7 +262,10 @@ export class CoinWorker {
         const ttKey = `${this.coin.symbol}_THIRD_TOUCH_${tt.levelId}`;
         if (this.alertManager.canSendAlert(ttKey, 'THIRD_TOUCH_APPROACHING')) {
           const msg = this.alertManager.formatThirdTouchMessage(tt, this.coin.symbol, this.coin.exchange, price);
-          this.alertManager.dispatchAlert(this.coin.userId, msg);
+          if (this.canDispatchTelegramAlert('THIRD_TOUCH')) {
+            this.alertManager.dispatchAlert(this.coin.userId, msg);
+            this.coin.lastNotifiedAt = new Date().toISOString();
+          }
           this.addEvent({
             eventId: ttKey,
             symbol: this.coin.symbol,
@@ -265,7 +298,10 @@ export class CoinWorker {
       const oiKey = `${this.coin.symbol}_OI_ANOMALY_${Math.floor(Date.now() / 600000)}`;
       if (this.alertManager.canSendAlert(oiKey, 'OI_ANOMALY')) {
         const oiMsg = this.alertManager.formatOIMessage(oiSnapshot, this.coin.symbol, price);
-        this.alertManager.dispatchAlert(this.coin.userId, oiMsg);
+        if (this.canDispatchTelegramAlert('OI_ANOMALY')) {
+          this.alertManager.dispatchAlert(this.coin.userId, oiMsg);
+          this.coin.lastNotifiedAt = new Date().toISOString();
+        }
       }
     }
 
@@ -278,7 +314,10 @@ export class CoinWorker {
         const dKey = `${this.coin.symbol}_DENSITY_${d.side}_${d.price}`;
         if (this.alertManager.canSendAlert(dKey, 'DENSITY_PERSISTENT')) {
           const dMsg = this.alertManager.formatDensityMessage(d, this.coin.symbol, this.coin.exchange);
-          this.alertManager.dispatchAlert(this.coin.userId, dMsg);
+          if (this.canDispatchTelegramAlert('DENSITY')) {
+            this.alertManager.dispatchAlert(this.coin.userId, dMsg);
+            this.coin.lastNotifiedAt = new Date().toISOString();
+          }
         }
       }
     }
@@ -312,7 +351,10 @@ export class CoinWorker {
         const setupKey = `${setup.id}_${setup.stage}`;
         if (this.alertManager.canSendAlert(setupKey, alertType)) {
           const setupMsg = this.alertManager.formatSupportRetestMessage(setup, price);
-          this.alertManager.dispatchAlert(this.coin.userId, setupMsg);
+          if (this.canDispatchTelegramAlert('SETUP')) {
+            this.alertManager.dispatchAlert(this.coin.userId, setupMsg);
+            this.coin.lastNotifiedAt = new Date().toISOString();
+          }
           this.addEvent({
             eventId: setupKey,
             symbol: this.coin.symbol,

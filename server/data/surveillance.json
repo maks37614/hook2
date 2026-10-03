@@ -28,38 +28,108 @@
         ]
       },
       "state": {
-        "currentPrice": 84215.9,
-        "change24h": 0.71,
+        "currentPrice": 84540,
+        "change24h": 0.07,
         "high1d": 87385.1,
-        "low1d": 62268.2,
-        "swingHigh4h": 84554.9,
-        "swingLow4h": 82851.5,
-        "localHigh1h": 85632.7,
-        "localLow1h": 82901.3,
-        "localHigh15m": 85632.7,
-        "localLow15m": 83325.1,
-        "rangePositionPct": 76.5,
-        "resistance4h": 84350,
-        "support4h": 83778.4,
-        "nextZoneUp": 84635.8,
-        "nextZoneDown": 83492.59999999999,
-        "fib618": 83502.1988,
-        "fib786": 83216.0276,
+        "low1d": 62484.2,
+        "swingHigh4h": 87249.6,
+        "swingLow4h": 83841.9,
+        "localHigh1h": 84872.1,
+        "localLow1h": 83841.9,
+        "localHigh15m": 84642.4,
+        "localLow15m": 84497.5,
+        "rangePositionPct": 97.9,
+        "resistance4h": 84554.9,
+        "support4h": 83841.9,
+        "nextZoneUp": 84911.4,
+        "nextZoneDown": 83485.4,
+        "fib618": 85143.6414,
+        "fib786": 84571.14779999999,
         "structureTrend": "bullish",
-        "channelUpper": 85632.7,
-        "channelLower": 82901.3,
-        "momentumRecentPct": 0.55,
-        "lastCalculated": 1790783672136,
+        "channelUpper": 87123,
+        "channelLower": 83841.9,
+        "momentumRecentPct": -0.06,
+        "lastCalculated": 1791015833009,
+        "lastProcessedCandleTimes": {
+          "15m": 0,
+          "1h": 0,
+          "4h": 1791014400000
+        },
         "lastEvent": {
-          "id": "structure_change_1790783672136",
-          "type": "structure",
-          "title": "🔄 Зміна структури ринку (BULLISH)",
-          "description": "Структура змінила тренд на bullish.",
-          "price": 84215.9,
-          "timestamp": 1790783672136,
-          "severity": "critical"
+          "id": "level_retest_res_1791015618899",
+          "type": "level",
+          "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+          "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+          "price": 84543.7,
+          "timestamp": 1791015618899,
+          "severity": "warning"
         },
         "recentEvents": [
+          {
+            "id": "level_retest_res_1791015618899",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84543.7,
+            "timestamp": 1791015618899,
+            "severity": "warning"
+          },
+          {
+            "id": "BTCUSDT_THIRD_TOUCH_zone_1h_SUPPORT_84454",
+            "type": "risk",
+            "title": "Третій тест рівня $84441",
+            "description": "Наближення до рівня SUPPORT. Дистанція: 0.192%. Компресія: ТАК",
+            "price": 84602.9,
+            "timestamp": 1791015141694,
+            "severity": "warning",
+            "details": {
+              "timeframe": "1h",
+              "confluenceScore": 80,
+              "type": "THIRD_TOUCH_APPROACHING",
+              "evidence": {
+                "levelId": "zone_1h_SUPPORT_84454",
+                "levelType": "SUPPORT",
+                "price": 84441,
+                "touchCount": 4,
+                "state": "APPROACHING",
+                "distancePct": 0.192,
+                "approachSpeed": "NORMAL",
+                "compression": true,
+                "higherLowsCount": 5,
+                "lowerHighsCount": 4,
+                "volumeRatio": 1,
+                "updatedAt": 1791015141533
+              }
+            }
+          },
+          {
+            "id": "BTCUSDT_THIRD_TOUCH_zone_4h_RESISTANCE_84297",
+            "type": "risk",
+            "title": "Третій тест рівня $84425.75",
+            "description": "Наближення до рівня RESISTANCE. Дистанція: 0.21%. Компресія: ТАК",
+            "price": 84602.9,
+            "timestamp": 1791015141692,
+            "severity": "warning",
+            "details": {
+              "timeframe": "1h",
+              "confluenceScore": 80,
+              "type": "THIRD_TOUCH_APPROACHING",
+              "evidence": {
+                "levelId": "zone_4h_RESISTANCE_84297",
+                "levelType": "RESISTANCE",
+                "price": 84425.75,
+                "touchCount": 5,
+                "state": "ACTIVE",
+                "distancePct": 0.21,
+                "approachSpeed": "NORMAL",
+                "compression": true,
+                "higherLowsCount": 5,
+                "lowerHighsCount": 4,
+                "volumeRatio": 1,
+                "updatedAt": 1791015141533
+              }
+            }
+          },
           {
             "id": "structure_change_1790783672136",
             "type": "structure",
@@ -71,8 +141,8 @@
           }
         ]
       },
-      "lastCheckedAt": "2026-09-30T15:54:32.136Z",
-      "lastNotifiedAt": "2026-09-30T15:54:32.144Z"
+      "lastCheckedAt": "2026-10-03T08:23:53.009Z",
+      "lastNotifiedAt": "2026-10-03T08:20:18.902Z"
     }
   ],
   "usr_hookprof_wkmp9c": [
@@ -86,7 +156,7 @@
       "marketType": "futures",
       "isActive": true,
       "createdAt": "2026-09-24T01:16:06.698Z",
-      "updatedAt": "2026-09-24T01:16:06.698Z",
+      "updatedAt": "2026-09-30T15:54:41.081Z",
       "config": {
         "timeframe": "4h",
         "triggerMode": "bar_close",
@@ -104,51 +174,153 @@
         ]
       },
       "state": {
-        "currentPrice": 84215.9,
-        "change24h": 0.71,
+        "currentPrice": 84540,
+        "change24h": 0.07,
         "high1d": 87385.1,
-        "low1d": 62268.2,
-        "swingHigh4h": 84554.9,
-        "swingLow4h": 82851.5,
-        "localHigh1h": 85632.7,
-        "localLow1h": 82901.3,
-        "localHigh15m": 85632.7,
-        "localLow15m": 83325.1,
-        "rangePositionPct": 76.5,
-        "resistance4h": 84350,
-        "support4h": 83778.4,
-        "nextZoneUp": 84635.8,
-        "nextZoneDown": 83492.59999999999,
-        "fib618": 83502.1988,
-        "fib786": 83216.0276,
+        "low1d": 62484.2,
+        "swingHigh4h": 87249.6,
+        "swingLow4h": 83841.9,
+        "localHigh1h": 84872.1,
+        "localLow1h": 83841.9,
+        "localHigh15m": 84642.4,
+        "localLow15m": 84497.5,
+        "rangePositionPct": 97.9,
+        "resistance4h": 84554.9,
+        "support4h": 83841.9,
+        "nextZoneUp": 84911.4,
+        "nextZoneDown": 83485.4,
+        "fib618": 85143.6414,
+        "fib786": 84571.14779999999,
         "structureTrend": "bullish",
-        "channelUpper": 85632.7,
-        "channelLower": 82901.3,
-        "momentumRecentPct": 0.55,
-        "lastCalculated": 1790783672146,
+        "channelUpper": 87123,
+        "channelLower": 83841.9,
+        "momentumRecentPct": -0.06,
+        "lastCalculated": 1791015826983,
+        "lastProcessedCandleTimes": {
+          "15m": 0,
+          "1h": 0,
+          "4h": 1791014400000
+        },
         "lastEvent": {
-          "id": "structure_change_1790783672146",
-          "type": "structure",
-          "title": "🔄 Зміна структури ринку (BULLISH)",
-          "description": "Структура змінила тренд на bullish.",
-          "price": 84215.9,
-          "timestamp": 1790783672146,
-          "severity": "critical"
+          "id": "level_retest_res_1791015813921",
+          "type": "level",
+          "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+          "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+          "price": 84540,
+          "timestamp": 1791015813921,
+          "severity": "warning"
         },
         "recentEvents": [
           {
-            "id": "structure_change_1790783672146",
-            "type": "structure",
-            "title": "🔄 Зміна структури ринку (BULLISH)",
-            "description": "Структура змінила тренд на bullish.",
-            "price": 84215.9,
-            "timestamp": 1790783672146,
-            "severity": "critical"
+            "id": "level_retest_res_1791015813921",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84540,
+            "timestamp": 1791015813921,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015798905",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84540,
+            "timestamp": 1791015798905,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015783906",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84540,
+            "timestamp": 1791015783906,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015768915",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84540,
+            "timestamp": 1791015768915,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015753912",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84543.7,
+            "timestamp": 1791015753912,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015738904",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84543.7,
+            "timestamp": 1791015738904,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015723906",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84543.8,
+            "timestamp": 1791015723906,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015708903",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84543.7,
+            "timestamp": 1791015708903,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015693888",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84543.7,
+            "timestamp": 1791015693888,
+            "severity": "warning"
+          },
+          {
+            "id": "level_retest_res_1791015678912",
+            "type": "level",
+            "title": "⚠️ Повернення нижче 4H опору (Crossing Down $84,554.90)",
+            "description": "Ціна повернулася нижче рівня опору $84,554.90.",
+            "price": 84543.7,
+            "timestamp": 1791015678912,
+            "severity": "warning"
           }
-        ]
+        ],
+        "engineStatus": "SYNCING",
+        "spreadPct": 0,
+        "bestBid": 0,
+        "bestAsk": 0,
+        "densitiesCount": 0,
+        "activeSetupType": "SUPPORT_RETEST",
+        "activeSetupStage": "APPROACHING",
+        "activeSetupConfluence": 16.4,
+        "oiRegime": "NEUTRAL",
+        "oiChange15mPct": 0,
+        "oiAnomaly": false,
+        "tradeFlowBuyUsd": 0,
+        "tradeFlowSellUsd": 0,
+        "tradeFlowImbalance": 1,
+        "formationName": "Пробій ключового опору",
+        "formationScore": 44.1
       },
-      "lastCheckedAt": "2026-09-30T15:54:32.146Z",
-      "lastNotifiedAt": "2026-09-30T15:54:32.147Z"
+      "lastCheckedAt": "2026-10-03T08:23:45.059Z",
+      "lastNotifiedAt": "2026-10-03T08:20:18.905Z"
     }
   ]
 }
