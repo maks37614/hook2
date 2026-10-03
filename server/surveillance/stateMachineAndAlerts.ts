@@ -111,13 +111,14 @@ export class StateMachineAndAlerts {
     const ex = setup.exchange.toUpperCase();
     const mkt = setup.marketType === 'futures' ? 'Linear / Futures' : 'Spot';
 
-    return `🟢 <b>SUPPORT RETEST — ${setup.stage === 'CONFIRMED' ? 'CONFIRMED' : 'WATCH'}</b>
+    return `🟢 <b>SUPPORT RETEST — ${setup.stage === 'CONFIRMED' ? 'CONFIRMED' : 'WATCH'} (LONG)</b>
 
 <b>${sym}</b>
 ${ex} ${mkt}
 
 <b>Ціна:</b> $${formatCryptoPrice(currentPrice)}
 <b>Підтримка:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}
+<b>Точка входу (Entry):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
 <b>Сила рівня:</b> ${setup.evidence.levelStrength}/100
 <b>Поточний стан:</b> ${setup.stage}
 
@@ -145,16 +146,152 @@ ${ex} ${mkt}
 
 ━━━━━━━━━━━━
 
-<b>СЕТАП & КОНФЛЮЕНС</b>
-<b>Тип:</b> ПОВТОРНЕ ТЕСТУВАННЯ ПІДТРИМКИ
+<b>СЕТАП & РОЗРАХУНОК (LONG)</b>
+<b>Тип:</b> ПОВТОРНЕ ТЕСТУВАННЯ ПІДТРИМКИ (LONG)
 <b>Підтвердження:</b>
 ${setup.confirmations.map((c) => `• ✓ ${c}`).join('\n') || '• Очікування'}
 
-<b>Скасування (SL):</b> $${formatCryptoPrice(setup.invalidationPrice)}
-<b>Ціль (TP):</b> $${formatCryptoPrice(setup.targetPrice)}
+<b>Вхід (ENTRY):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
+<b>Скасування (STOP SL):</b> $${formatCryptoPrice(setup.invalidationPrice)}
+<b>Ціль (TARGET TP):</b> $${formatCryptoPrice(setup.targetPrice)}
 <b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>
 
 <b>СТАТУС:</b> <b>${setup.stage}</b>`;
+  }
+
+  // Telegram Resistance Retest / Rejection formatted message (SHORT)
+  public formatResistanceRetestMessage(setup: SetupInstance, currentPrice: number): string {
+    const sym = setup.symbol;
+    const ex = setup.exchange.toUpperCase();
+    const mkt = setup.marketType === 'futures' ? 'Linear / Futures' : 'Spot';
+
+    return `🔴 <b>RESISTANCE RETEST / REJECTION — ${setup.stage === 'CONFIRMED' ? 'CONFIRMED' : 'WATCH'} (SHORT)</b>
+
+<b>${sym}</b>
+${ex} ${mkt}
+
+<b>Ціна:</b> $${formatCryptoPrice(currentPrice)}
+<b>Опір:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}
+<b>Точка входу (Entry):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
+<b>Сила рівня:</b> ${setup.evidence.levelStrength}/100
+<b>Поточний стан:</b> ${setup.stage}
+
+━━━━━━━━━━━━
+
+<b>СТРУКТУРА</b>
+• <b>HTF:</b> ${setup.evidence.htfStructure}
+• <b>Статус:</b> ${setup.waitingFor}
+
+━━━━━━━━━━━━
+
+<b>СТАКАН ТА ЩІЛЬНОСТІ</b>
+• <b>Стакан:</b> ${setup.evidence.densityPresence}
+
+━━━━━━━━━━━━
+
+<b>OPEN INTEREST</b>
+• <b>Режим:</b> ${setup.evidence.oiContext}
+
+━━━━━━━━━━━━
+
+<b>КОНТЕКСТ РИНКУ</b>
+• <b>BTC Context:</b> ${setup.evidence.btcContext}
+• <b>Формація:</b> ${setup.evidence.formationScore > 0 ? `${setup.evidence.formationScore}/100` : 'Компресія'}
+
+━━━━━━━━━━━━
+
+<b>СЕТАП & РОЗРАХУНОК (SHORT)</b>
+<b>Тип:</b> ВІДБИТТЯ ВІД ОПОРУ (SHORT)
+<b>Підтвердження:</b>
+${setup.confirmations.map((c) => `• ✓ ${c}`).join('\n') || '• Очікування'}
+
+<b>Вхід (ENTRY):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
+<b>Скасування (STOP SL):</b> $${formatCryptoPrice(setup.invalidationPrice)}
+<b>Ціль (TARGET TP):</b> $${formatCryptoPrice(setup.targetPrice)}
+<b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>
+
+<b>СТАТУС:</b> <b>${setup.stage}</b>`;
+  }
+
+  // Telegram Breakout Retest message (LONG or SHORT)
+  public formatBreakoutRetestMessage(setup: SetupInstance, currentPrice: number): string {
+    const sym = setup.symbol;
+    const ex = setup.exchange.toUpperCase();
+    const mkt = setup.marketType === 'futures' ? 'Linear / Futures' : 'Spot';
+    const isLong = setup.direction === 'LONG';
+    const icon = isLong ? '🟢' : '🔴';
+
+    return `${icon} <b>BREAKOUT RETEST — ${setup.stage === 'CONFIRMED' ? 'CONFIRMED' : 'WATCH'} (${setup.direction})</b>
+
+<b>${sym}</b>
+${ex} ${mkt}
+
+<b>Ціна:</b> $${formatCryptoPrice(currentPrice)}
+<b>Зона пробою / ретесту:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}
+<b>Точка входу (Entry):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
+<b>Поточний стан:</b> ${setup.stage}
+
+━━━━━━━━━━━━
+
+<b>СТРУКТУРА & КОНФЛЮЕНС</b>
+• <b>HTF:</b> ${setup.evidence.htfStructure}
+• <b>Стакан:</b> ${setup.evidence.densityPresence}
+• <b>OI Режим:</b> ${setup.evidence.oiContext}
+• <b>BTC Context:</b> ${setup.evidence.btcContext}
+
+━━━━━━━━━━━━
+
+<b>ПЛАН УГОДИ (${setup.direction})</b>
+<b>Вхід (ENTRY):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
+<b>Скасування (STOP SL):</b> $${formatCryptoPrice(setup.invalidationPrice)}
+<b>Ціль (TARGET TP):</b> $${formatCryptoPrice(setup.targetPrice)}
+<b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>
+
+<b>СТАТУС:</b> <b>${setup.stage}</b>`;
+  }
+
+  // Telegram Formation Setup message
+  public formatFormationSetupMessage(setup: SetupInstance, currentPrice: number): string {
+    const sym = setup.symbol;
+    const ex = setup.exchange.toUpperCase();
+    const mkt = setup.marketType === 'futures' ? 'Linear / Futures' : 'Spot';
+    const isLong = setup.direction === 'LONG';
+    const icon = isLong ? '🟢' : '🔴';
+
+    return `${icon} <b>FORMATION SETUP — ${setup.stage === 'CONFIRMED' ? 'CONFIRMED' : 'WATCH'} (${setup.direction})</b>
+
+<b>${sym}</b>
+${ex} ${mkt}
+
+<b>Ціна:</b> $${formatCryptoPrice(currentPrice)}
+<b>Зона формації:</b> $${formatCryptoPrice(setup.entryZone.low)} – $${formatCryptoPrice(setup.entryZone.high)}
+<b>Точка входу (Entry):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
+<b>Оцінка формації:</b> ${setup.evidence.formationScore}/100
+
+━━━━━━━━━━━━
+
+<b>ПЛАН УГОДИ (${setup.direction})</b>
+<b>Вхід (ENTRY):</b> $${formatCryptoPrice(setup.preferredEntry || (setup.entryZone.low + setup.entryZone.high) / 2)}
+<b>Скасування (STOP SL):</b> $${formatCryptoPrice(setup.invalidationPrice)}
+<b>Ціль (TARGET TP):</b> $${formatCryptoPrice(setup.targetPrice)}
+<b>Конфлюенс:</b> <b>${setup.confluenceScore}/100</b>
+
+<b>СТАТУС:</b> <b>${setup.stage}</b>`;
+  }
+
+  // Master helper routing to the correct specialized formatter
+  public formatSetupAlertMessage(setup: SetupInstance, currentPrice: number, alertType: string): string {
+    switch (alertType) {
+      case 'RESISTANCE_RETEST_CONFIRMED':
+        return this.formatResistanceRetestMessage(setup, currentPrice);
+      case 'BREAKOUT_CONFIRMED':
+        return this.formatBreakoutRetestMessage(setup, currentPrice);
+      case 'FORMATION_SETUP_CONFIRMED':
+        return this.formatFormationSetupMessage(setup, currentPrice);
+      case 'SUPPORT_RETEST_CONFIRMED':
+      default:
+        return this.formatSupportRetestMessage(setup, currentPrice);
+    }
   }
 
   // Telegram Third Touch message (#84)

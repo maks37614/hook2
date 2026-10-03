@@ -3,21 +3,54 @@ import { detectFormations as detectCanonicalFormations } from '../../src/utils/p
 import { calculateATR } from './multiTimeframeEngine';
 import { DetectedPattern, LevelZone, ThirdTouchTracker } from './types';
 
+export type SREngineMode = 'LIVE' | 'BACKTEST';
+
 export class LevelsAndFormationsEngine {
   private levelZones: LevelZone[] = [];
   private thirdTouchTrackers = new Map<string, ThirdTouchTracker>();
+  public mode: SREngineMode = 'LIVE';
 
-  public findSupportResistanceZones(candles1d: Kline[], candles4h: Kline[], candles1h: Kline[]): LevelZone[] {
+  constructor(mode: SREngineMode = 'LIVE') {
+    this.mode = mode;
+  }
+
+  public setMode(mode: SREngineMode) {
+    this.mode = mode;
+  }
+
+  public findSupportResistanceZones(
+    candles1d: Kline[],
+    candles4h: Kline[],
+    candles1h: Kline[],
+    options?: { mode?: SREngineMode; asOfTime?: number }
+  ): LevelZone[] {
+    const currentMode = options?.mode || this.mode;
+    const asOfTime = options?.asOfTime;
     const zones: LevelZone[] = [];
-    const closed = (candles: Kline[], tfMs: number) => {
-      if (candles.length <= 2) return candles;
-      const t = candles[candles.length - 1].time > 2_000_000_000_000 ? candles[candles.length - 1].time : candles[candles.length - 1].time * 1000;
-      const interval = candles.length > 2 ? Math.max(1000, ((candles[candles.length - 1].time > 2_000_000_000_000 ? candles[candles.length - 1].time : candles[candles.length - 1].time * 1000) - (candles[candles.length - 2].time > 2_000_000_000_000 ? candles[candles.length - 2].time : candles[candles.length - 2].time * 1000))) : tfMs;
-      return t + Math.min(tfMs, interval) > Date.now() ? candles.slice(0, -1) : candles;
+
+    const filterCandles = (candles: Kline[], tfMs: number) => {
+      let filtered = candles;
+      if (asOfTime) {
+        filtered = filtered.filter((k) => {
+          const t = k.time > 2_000_000_000_000 ? k.time : k.time * 1000;
+          return t <= asOfTime;
+        });
+      }
+      if (currentMode === 'LIVE') {
+        const closed = (c: Kline[]) => {
+          if (c.length <= 2) return c;
+          const t = c[c.length - 1].time > 2_000_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000;
+          const interval = c.length > 2 ? Math.max(1000, ((c[c.length - 1].time > 2_000_000_000_000 ? c[c.length - 1].time : c[c.length - 1].time * 1000) - (c[c.length - 2].time > 2_000_000_000_000 ? c[c.length - 2].time : c[c.length - 2].time * 1000))) : tfMs;
+          return t + Math.min(tfMs, interval) > Date.now() ? c.slice(0, -1) : c;
+        };
+        return closed(filtered);
+      }
+      return filtered;
     };
-    candles1d = closed(candles1d, 24 * 60 * 60 * 1000);
-    candles4h = closed(candles4h, 4 * 60 * 60 * 1000);
-    candles1h = closed(candles1h, 60 * 60 * 1000);
+
+    candles1d = filterCandles(candles1d, 24 * 60 * 60 * 1000);
+    candles4h = filterCandles(candles4h, 4 * 60 * 60 * 1000);
+    candles1h = filterCandles(candles1h, 60 * 60 * 1000);
 
     const analyzeCandlesForZones = (candles: Kline[], tf: Timeframe, weight: number) => {
       if (candles.length < 10) return;
@@ -32,18 +65,28 @@ export class LevelsAndFormationsEngine {
         const isLow = c.low <= candles[i - 1].low && c.low <= candles[i - 2].low &&
                       c.low <= candles[i + 1].low && c.low <= candles[i + 2].low;
 
+        // Look-ahead bias elimination:
+        // A swing at index i requires 2 future bars (i+1, i+2) to confirm.
+        // BACKTEST mode: strictly only use data available up to confirmation moment (i+2),
+        // without peeking into future unclosed bars (i+3 ... i+6).
+        // LIVE mode: for already confirmed historical swings, subsequent formed candles up to i+6
+        // can be used to evaluate reaction quality.
         if (isHigh) {
-          const reactionEnd = Math.min(candles.length - 1, i + 6);
+          const reactionEnd = currentMode === 'BACKTEST'
+            ? Math.min(i + 2, candles.length - 1)
+            : Math.min(candles.length - 1, i + 6);
           const reactionSlice = reactionEnd > i ? candles.slice(i + 1, reactionEnd + 1) : [];
-          const minAfter = reactionSlice.length > 0 ? Math.min(...reactionSlice.map(x => x.low)) : c.high;
-          const reactionPct = Math.max(0, (c.high - minAfter) / c.high * 100);
+          const minAfter = reactionSlice.length > 0 ? Math.min(...reactionSlice.map((x) => x.low)) : c.high;
+          const reactionPct = Math.max(0, ((c.high - minAfter) / c.high) * 100);
           this.clusterZone(zones, tf, 'RESISTANCE', c.high, zoneTolerance, c.time, weight, reactionPct, reactionPct >= 1.0);
         }
         if (isLow) {
-          const reactionEnd = Math.min(candles.length - 1, i + 6);
+          const reactionEnd = currentMode === 'BACKTEST'
+            ? Math.min(i + 2, candles.length - 1)
+            : Math.min(candles.length - 1, i + 6);
           const reactionSlice = reactionEnd > i ? candles.slice(i + 1, reactionEnd + 1) : [];
-          const maxAfter = reactionSlice.length > 0 ? Math.max(...reactionSlice.map(x => x.high)) : c.low;
-          const reactionPct = Math.max(0, (maxAfter - c.low) / c.low * 100);
+          const maxAfter = reactionSlice.length > 0 ? Math.max(...reactionSlice.map((x) => x.high)) : c.low;
+          const reactionPct = Math.max(0, ((maxAfter - c.low) / c.low) * 100);
           this.clusterZone(zones, tf, 'SUPPORT', c.low, zoneTolerance, c.time, weight, reactionPct, reactionPct >= 1.0);
         }
       }

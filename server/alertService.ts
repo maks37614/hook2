@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { PriceAlert, AlertHistoryItem, ExchangeId, MarketType } from '../src/types';
 import { sendTelegramMessage } from './telegramService';
+import { SetupInstance } from './surveillance/types';
+import { validateSetupAlertsMath } from './surveillance/setupValidation';
 
 const DATA_DIR = path.join(process.cwd(), 'server', 'data');
 const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
@@ -309,6 +311,133 @@ export function createAlertsBatch(
 
   saveAlerts(alerts);
   return createdAlerts;
+}
+
+/**
+ * Creates an atomic group of 3 Price Alerts for a setup:
+ * setupId
+ *  ├── ENTRY
+ *  ├── TARGET
+ *  └── STOP
+ *
+ * Mathematically validates before creation:
+ * For LONG:  STOP < ENTRY < TARGET
+ * For SHORT: TARGET < ENTRY < STOP
+ */
+export function createSetupAlertsGroup(
+  userId: string,
+  setup: SetupInstance,
+  currentPrice?: number,
+  autoActivate = true
+): { success: boolean; alerts?: PriceAlert[]; error?: string } {
+  const mathValidation = validateSetupAlertsMath(setup);
+  if (!mathValidation.valid) {
+    return {
+      success: false,
+      error: mathValidation.reason || 'Mathematical validation failed for setup levels',
+    };
+  }
+
+  const { entry, target, stop } = mathValidation;
+  const curPrice = currentPrice || entry;
+
+  // ENTRY:
+  // For LONG: if currentPrice > entry, triggers when dropping to entry ('lte'); if below, when reclaiming ('gte')
+  // For SHORT: if currentPrice < entry, triggers when bouncing to entry ('gte'); if above, when dropping ('lte')
+  const entryCondition =
+    setup.direction === 'LONG'
+      ? curPrice >= entry
+        ? 'lte'
+        : 'gte'
+      : curPrice <= entry
+      ? 'gte'
+      : 'lte';
+
+  // TARGET:
+  // For LONG: triggers when price rises to or exceeds target ('gte')
+  // For SHORT: triggers when price falls to or drops below target ('lte')
+  const targetCondition = setup.direction === 'LONG' ? 'gte' : 'lte';
+
+  // STOP:
+  // For LONG: triggers when price falls to or drops below stop ('lte')
+  // For SHORT: triggers when price rises to or exceeds stop ('gte')
+  const stopCondition = setup.direction === 'LONG' ? 'lte' : 'gte';
+
+  const userTg = getUserTelegram(userId);
+  const now = Date.now();
+
+  const alertsToCreate: PriceAlert[] = [
+    {
+      id: `${setup.id}_ENTRY`,
+      userId,
+      setupId: setup.id,
+      setupRole: 'ENTRY',
+      symbol: setup.symbol.toUpperCase().replace('/', '').trim(),
+      exchange: setup.exchange,
+      marketType: setup.marketType,
+      targetPrice: Number(entry),
+      condition: entryCondition,
+      levelType: 'entry',
+      formationName: setup.type,
+      note: `[Setup ${setup.direction}] Точка входу (${setup.type} ${setup.timeframe})`,
+      createdAt: now,
+      isActive: autoActivate,
+      triggered: false,
+      telegramBotToken: userTg?.botToken,
+      telegramChatId: userTg?.chatId,
+    },
+    {
+      id: `${setup.id}_TARGET`,
+      userId,
+      setupId: setup.id,
+      setupRole: 'TARGET',
+      symbol: setup.symbol.toUpperCase().replace('/', '').trim(),
+      exchange: setup.exchange,
+      marketType: setup.marketType,
+      targetPrice: Number(target),
+      condition: targetCondition,
+      levelType: 'target',
+      formationName: setup.type,
+      note: `[Setup ${setup.direction}] Ціль Take-Profit (TP) +${Math.abs(((target - entry) / entry) * 100).toFixed(1)}%`,
+      createdAt: now + 1,
+      isActive: autoActivate,
+      triggered: false,
+      telegramBotToken: userTg?.botToken,
+      telegramChatId: userTg?.chatId,
+    },
+    {
+      id: `${setup.id}_STOP`,
+      userId,
+      setupId: setup.id,
+      setupRole: 'STOP',
+      symbol: setup.symbol.toUpperCase().replace('/', '').trim(),
+      exchange: setup.exchange,
+      marketType: setup.marketType,
+      targetPrice: Number(stop),
+      condition: stopCondition,
+      levelType: 'stop_loss',
+      formationName: setup.type,
+      note: `[Setup ${setup.direction}] Скасування Stop-Loss (SL) -${Math.abs(((entry - stop) / entry) * 100).toFixed(1)}%`,
+      createdAt: now + 2,
+      isActive: autoActivate,
+      triggered: false,
+      telegramBotToken: userTg?.botToken,
+      telegramChatId: userTg?.chatId,
+    },
+  ];
+
+  const alerts = loadAlerts();
+  for (const newAlert of alertsToCreate) {
+    const existingIdx = alerts.findIndex((a) => a.id === newAlert.id);
+    if (existingIdx >= 0) {
+      alerts[existingIdx] = newAlert;
+    } else {
+      alerts.unshift(newAlert);
+    }
+  }
+
+  saveAlerts(alerts);
+  return { success: true, alerts: alertsToCreate };
 }
 
 // Sync user alerts batch from client/Firestore with smart merge

@@ -27,6 +27,7 @@ import {
   deleteHistoryItem,
   saveUserTelegram,
   getUserTelegram,
+  createSetupAlertsGroup,
 } from './server/alertService';
 import {
   loadSurveillanceList,
@@ -581,6 +582,37 @@ async function startServer() {
         alerts: created,
         isTelegramConfigured: Boolean(cfg.botToken && cfg.chatId),
       });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Atomic 3 Price Alerts group creation (ENTRY, TARGET, STOP) for a setup
+  app.post('/api/alerts/setup-group', (req, res) => {
+    try {
+      const { userId, setup, currentPrice, autoActivate } = req.body;
+      if (!userId || userId === 'guest') {
+        return res.status(401).json({
+          success: false,
+          error: 'Встановлення сповіщень доступне тільки для зареєстрованих користувачів.',
+        });
+      }
+      if (!setup) {
+        return res.status(400).json({ success: false, error: 'Дані сетапу відсутні' });
+      }
+
+      const result = createSetupAlertsGroup(
+        String(userId),
+        setup,
+        currentPrice ? Number(currentPrice) : undefined,
+        autoActivate !== undefined ? Boolean(autoActivate) : true
+      );
+
+      if (!result.success) {
+        return res.status(400).json({ success: false, error: result.error });
+      }
+
+      res.json({ success: true, count: result.alerts?.length || 0, alerts: result.alerts });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

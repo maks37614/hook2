@@ -1,6 +1,7 @@
 import { ExchangeId, MarketType, SurveillanceCoin, Timeframe } from '../../src/types';
 import { fetchDualExchangeOI, fetchKlines } from '../marketService';
 import { notificationRouter } from '../notificationRouter';
+import { createSetupAlertsGroup } from '../alertService';
 import { ExchangeStreamClient, RawDepthDelta, RawTradeEvent } from './exchangeStream';
 import { LevelsAndFormationsEngine } from './levelsAndFormationsEngine';
 import { MacroAndNewsEngine } from './macroAndNewsEngine';
@@ -8,6 +9,7 @@ import { MultiTimeframeEngine } from './multiTimeframeEngine';
 import { OrderBookEngine } from './orderBookEngine';
 import { SetupEngine } from './setupEngine';
 import { StateMachineAndAlerts } from './stateMachineAndAlerts';
+import { validateSetupAlertsMath } from './setupValidation';
 import {
   DensityItem,
   DetectedPattern,
@@ -417,12 +419,33 @@ export class CoinWorker {
       candles1h, candles15m, candles5m: this.mtfEngine.getCandles('5m'),
     });
 
-    // Check Setups Telegram Alerts
+    // Check Setups Telegram Alerts (#83, #87)
     for (const setup of this.setups) {
       if (setup.stage === 'CONFIRMED') {
-        const alertType = 'SUPPORT_RETEST_CONFIRMED';
+        // 1. Separate setup alert types strictly according to direction and setup structure
+        let alertType: 'SUPPORT_RETEST_CONFIRMED' | 'RESISTANCE_RETEST_CONFIRMED' | 'BREAKOUT_CONFIRMED' | 'FORMATION_SETUP_CONFIRMED';
+
+        if (setup.id.includes('FORMATION') || setup.type === 'STRUCTURE_SHIFT') {
+          alertType = 'FORMATION_SETUP_CONFIRMED';
+        } else if (setup.type === 'BREAKOUT_RETEST') {
+          alertType = 'BREAKOUT_CONFIRMED';
+        } else if (setup.direction === 'SHORT' || setup.type === 'RESISTANCE_REJECTION') {
+          alertType = 'RESISTANCE_RETEST_CONFIRMED';
+        } else {
+          alertType = 'SUPPORT_RETEST_CONFIRMED';
+        }
+
+        // 2. Mathematical validation:
+        // For LONG:  STOP < ENTRY < TARGET
+        // For SHORT: TARGET < ENTRY < STOP
+        const mathCheck = validateSetupAlertsMath(setup);
+        if (!mathCheck.valid) {
+          console.warn(`[CoinWorker ${this.coin.symbol}] ⚠️ Setup ${setup.id} failed mathematical validation: ${mathCheck.reason}. Skipping dispatch.`);
+          continue;
+        }
+
         const setupIdentity = `${setup.id}_${setup.stage}`;
-        const setupMsg = this.alertManager.formatSupportRetestMessage(setup, price);
+        const setupMsg = this.alertManager.formatSetupAlertMessage(setup, price, alertType);
 
         notificationRouter.dispatch({
           source: 'SURVEILLANCE',
@@ -438,13 +461,22 @@ export class CoinWorker {
           coin: this.coin,
         });
 
+        // 3. Optional automatic 3-alert group creation if configured
+        if (this.coin.config?.autoSetupsAlerts) {
+          try {
+            createSetupAlertsGroup(this.coin.userId, setup, price, true);
+          } catch (e) {
+            console.error(`[CoinWorker ${this.coin.symbol}] Error creating auto setup alerts group:`, e);
+          }
+        }
+
         this.addEvent({
           eventId: setupIdentity,
           symbol: this.coin.symbol,
           exchange: this.coin.exchange,
           marketType: this.coin.marketType,
           type: alertType,
-          title: `Сетап ${setup.type}: ${setup.stage}`,
+          title: `Сетап ${setup.type}: ${setup.stage} (${setup.direction})`,
           description: `Конфлюенс: ${setup.confluenceScore}/100. Зона: $${setup.entryZone.low} - $${setup.entryZone.high}`,
           price,
           timeframe: setup.timeframe,

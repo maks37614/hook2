@@ -245,6 +245,8 @@ export interface PriceAlert {
   note?: string;
   formationName?: string;
   levelType?: AlertLevelType;
+  setupId?: string; // Grouping ID: setupId ├── ENTRY, ├── TARGET, └── STOP
+  setupRole?: 'ENTRY' | 'TARGET' | 'STOP';
   createdAt: number;
   isActive: boolean;
   triggered: boolean;
@@ -720,6 +722,7 @@ export interface SurveillanceConfig {
   oiAlerts?: boolean;
   newsAlerts?: boolean;
   setupsEnabled?: boolean;
+  autoSetupsAlerts?: boolean;
   telegramEnabled?: boolean;
 }
 
