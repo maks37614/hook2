@@ -10,7 +10,10 @@ import {
   MarketType,
   Timeframe,
   TriggerModeType,
+  Kline,
 } from '../src/types';
+import { normalizeKlineTimeMs } from '../src/utils/formationValidation';
+import { getTimeframeMs } from './surveillance/multiTimeframeEngine';
 import { fetchKlines } from './marketService';
 import { sendTelegramMessage } from './telegramService';
 import { getUserTelegram } from './alertService';
@@ -83,6 +86,18 @@ export function loadSurveillanceStore(): UserSurveillanceStore {
     console.error('Failed to read surveillance.json:', err);
     storeCache = {};
   }
+  // Older guest copies shared IDs, causing one user's worker to replace another's.
+  const ids = new Set<string>();
+  let repaired = false;
+  for (const [userId, coins] of Object.entries(storeCache)) {
+    if (!Array.isArray(coins)) { delete storeCache[userId]; repaired = true; continue; }
+    for (const coin of coins) {
+      if (coin.userId !== userId) { coin.userId = userId; repaired = true; }
+      if (!coin.id || ids.has(coin.id)) { coin.id = `surv_${randomUUID()}`; repaired = true; }
+      ids.add(coin.id);
+    }
+  }
+  if (repaired) saveSurveillanceStore(storeCache);
   isStoreLoaded = true;
   return storeCache;
 }
@@ -102,7 +117,9 @@ export function saveSurveillanceStore(store: UserSurveillanceStore): boolean {
       }
     }
     storeCache = safeStore;
-    fs.writeFileSync(SURVEILLANCE_FILE, JSON.stringify(safeStore, null, 2), 'utf-8');
+    const temporaryFile = `${SURVEILLANCE_FILE}.tmp`;
+    fs.writeFileSync(temporaryFile, JSON.stringify(safeStore, null, 2), 'utf-8');
+    fs.renameSync(temporaryFile, SURVEILLANCE_FILE);
     return true;
   } catch (err) {
     console.error('Failed to save surveillance.json:', err);
@@ -127,7 +144,7 @@ export function loadSurveillanceList(userId?: string): SurveillanceCoin[] {
 
     // Merge live metrics from worker if available
     const snapshot = surveillanceManager.getWorkerSnapshot(coin.id);
-    if (snapshot && coin.state) {
+    if (snapshot && snapshot.userId === uid && coin.state) {
       const topDensity = snapshot.densities[0];
       const activeSetup = snapshot.setups[0];
       const activePattern = snapshot.patterns[0];
@@ -206,12 +223,25 @@ export function loadSurveillanceList(userId?: string): SurveillanceCoin[] {
 export function saveSurveillanceList(userId: string, list: SurveillanceCoin[]): boolean {
   const store = loadSurveillanceStore();
   const uid = (userId && userId.trim() !== '') ? userId.trim() : 'guest';
+  for (const coin of store[uid] || []) {
+    if (!list.some(item => item.id === coin.id)) surveillanceManager.stopWorkerForCoin(coin.id);
+  }
   store[uid] = list;
   return saveSurveillanceStore(store);
 }
 
-export function copyGuestSurveillanceCoins(coins: SurveillanceCoin[], userId: string): SurveillanceCoin[] {
-  return coins.map(coin => ({ ...structuredClone(coin), id: `surv_${randomUUID()}`, userId }));
+// An async check must never restore a deleted coin or overwrite a user's edits.
+export function commitSurveillanceCheck(checked: SurveillanceCoin): SurveillanceCoin | null {
+  const found = findSurveillanceCoinById(checked.id, checked.userId);
+  if (!found) return null;
+  const current = found.coin;
+  if (current.isActive !== checked.isActive || JSON.stringify(current.config) !== JSON.stringify(checked.config)) return current;
+  const updated = { ...current, state: checked.state, lastCheckedAt: checked.lastCheckedAt,
+    lastNotifiedAt: checked.lastNotifiedAt || current.lastNotifiedAt };
+  found.list[found.index] = updated;
+  saveSurveillanceList(found.userId, found.list);
+  surveillanceManager.updateWorkerCoin(updated);
+  return updated;
 }
 
 export function updateSurveillanceCoinActive(
@@ -309,14 +339,30 @@ export function getDefaultSurveillanceConfig(): SurveillanceConfig {
   };
 }
 
+export function validateSurveillanceConfig(config: Partial<SurveillanceConfig>): string | null {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return 'Невірні налаштування стеження';
+  if (config.densityMode !== undefined && !['AUTO', 'MANUAL', 'HYBRID'].includes(config.densityMode)) return 'Невірний режим щільностей';
+  if (config.manualDensityThresholdUsd !== undefined &&
+      (!Number.isFinite(config.manualDensityThresholdUsd) || config.manualDensityThresholdUsd <= 0)) return 'Поріг щільності має бути додатним числом';
+  if (config.cooldownMinutes !== undefined && (!Number.isFinite(config.cooldownMinutes) || config.cooldownMinutes < 0)) return 'Невірний інтервал сповіщень';
+  if (config.momentumBars !== undefined && (!Number.isInteger(config.momentumBars) || config.momentumBars < 1)) return 'Невірна кількість свічок імпульсу';
+  if (config.momentumPct !== undefined && (!Number.isFinite(config.momentumPct) || config.momentumPct <= 0)) return 'Невірний поріг імпульсу';
+  if (config.triggerModes !== undefined && (!Array.isArray(config.triggerModes) || !config.triggerModes.length ||
+      config.triggerModes.some(mode => !['realtime', 'bar_close', 'bar_close_1h', 'bar_close_15m'].includes(mode)))) return 'Оберіть коректний режим підтвердження';
+  return null;
+}
+
 export async function calculateSurveillanceState(
   symbol: string,
   exchange: ExchangeId,
   marketType: MarketType,
-  config: SurveillanceConfig
+  config: SurveillanceConfig,
+  source?: Record<'1d' | '4h' | '1h' | '15m', Kline[]>
 ): Promise<SurveillanceState | null> {
   try {
-    const [klines1d, klines4h, klines1h, klines15m] = await Promise.all([
+    const [klines1d, klines4h, klines1h, klines15m] = source
+      ? [source['1d'], source['4h'], source['1h'], source['15m']]
+      : await Promise.all([
       fetchKlines(exchange, marketType, symbol, '1d', 60).catch(() => []),
       fetchKlines(exchange, marketType, symbol, '4h', 80).catch(() => []),
       fetchKlines(exchange, marketType, symbol, '1h', 60).catch(() => []),
@@ -331,13 +377,7 @@ export async function calculateSurveillanceState(
     }
 
     if (!activeCandles || activeCandles.length === 0) {
-      console.warn(`[Surveillance] Attempting fallback fetch for ${symbol}`);
-      const altMarket = marketType === 'futures' ? 'spot' : 'futures';
-      const fallbackKlines = await fetchKlines(exchange, altMarket, symbol, '1h', 30).catch(() => []);
-      if (!fallbackKlines || fallbackKlines.length === 0) {
-        return null;
-      }
-      activeCandles = fallbackKlines;
+      return null;
     }
 
     const currentCandle = activeCandles[activeCandles.length - 1];
@@ -378,7 +418,7 @@ export async function calculateSurveillanceState(
       if (isLow) swingLows.push(c.low);
     }
 
-    const recent4hSlice = klines4h.slice(-30);
+    const recent4hSlice = (klines4h.length ? klines4h : activeCandles).slice(-30);
     const maxRecent4h = Math.max(...recent4hSlice.map((k) => k.high));
     const minRecent4h = Math.min(...recent4hSlice.map((k) => k.low));
 
@@ -409,7 +449,7 @@ export async function calculateSurveillanceState(
     const swingHigh4h = swingHighs.length > 0 ? swingHighs[swingHighs.length - 1] : maxRecent4h;
     const swingLow4h = swingLows.length > 0 ? swingLows[swingLows.length - 1] : minRecent4h;
 
-    const rangeSpan = Math.max(0.00000001, resistance4h - support4h);
+    const rangeSpan = Math.max(currentPrice * 0.000001, resistance4h - support4h);
     let rangePositionPct = ((currentPrice - support4h) / rangeSpan) * 100;
     rangePositionPct = Math.max(0, Math.min(100, Number(rangePositionPct.toFixed(1))));
 
@@ -437,12 +477,12 @@ export async function calculateSurveillanceState(
       channelLower = Math.min(...last20_1h.map((k) => k.low));
     }
 
-    const fibSpan = Math.max(0.00000001, swingHigh4h - swingLow4h);
+    const fibSpan = Math.max(currentPrice * 0.000001, swingHigh4h - swingLow4h);
     const fib618 = swingHigh4h - fibSpan * 0.618;
     const fib786 = swingHigh4h - fibSpan * 0.786;
 
     const nextZoneUp = resistance4h + rangeSpan * 0.5;
-    const nextZoneDown = Math.max(0.00000001, support4h - rangeSpan * 0.5);
+    const nextZoneDown = Math.max(currentPrice * 0.000001, support4h - rangeSpan * 0.5);
 
     let structureTrend: 'bullish' | 'bearish' | 'consolidation' = 'consolidation';
     if (klines4h.length >= 20) {
@@ -457,15 +497,16 @@ export async function calculateSurveillanceState(
     }
 
     let momentumRecentPct = 0;
-    const momentumKlines =
+    const momentumSource =
       config.momentumTf === '1h'
         ? klines1h
         : config.momentumTf === '4h'
         ? klines4h
         : klines15m;
 
-    if (momentumKlines && momentumKlines.length > config.momentumBars) {
-      const startBar = momentumKlines[momentumKlines.length - 1 - config.momentumBars];
+    const momentumKlines = momentumSource.filter(c => normalizeKlineTimeMs(c.time) + getTimeframeMs(config.momentumTf) <= Date.now());
+    if (momentumKlines.length >= config.momentumBars && config.momentumBars > 0) {
+      const startBar = momentumKlines[momentumKlines.length - config.momentumBars];
       const latestBar = momentumKlines[momentumKlines.length - 1];
       if (startBar && startBar.open > 0) {
         momentumRecentPct = Number((((latestBar.close - startBar.open) / startBar.open) * 100).toFixed(2));
@@ -570,359 +611,158 @@ ${state.momentumRecentPct !== undefined ? `• <b>Імпульс (${coin.config.
 🔗 <a href="${exchangeUrl}">Перейти на біржу ${exchangeUpper}</a>`;
 }
 
+const checkFlights = new Map<string, Promise<{ coin: SurveillanceCoin; newEvents: SurveillanceEvent[] }>>();
+
 export async function checkCoinSurveillance(
-  coin: SurveillanceCoin,
+  requestedCoin: SurveillanceCoin,
   options: { forceCheck?: boolean; forceNotify?: boolean } | boolean = false
 ): Promise<{ coin: SurveillanceCoin; newEvents: SurveillanceEvent[] }> {
-  const newEvents: SurveillanceEvent[] = [];
-  const prevState = coin.state;
+  const key = `${requestedCoin.userId}:${requestedCoin.id}`;
+  const existing = checkFlights.get(key);
+  if (existing) return existing;
+  const checking = checkCoinSurveillanceInternal(requestedCoin, options);
+  checkFlights.set(key, checking);
+  try { return await checking; }
+  finally { if (checkFlights.get(key) === checking) checkFlights.delete(key); }
+}
+
+async function checkCoinSurveillanceInternal(
+  requestedCoin: SurveillanceCoin,
+  options: { forceCheck?: boolean; forceNotify?: boolean } | boolean
+): Promise<{ coin: SurveillanceCoin; newEvents: SurveillanceEvent[] }> {
+  const current = findSurveillanceCoinById(requestedCoin.id, requestedCoin.userId)?.coin;
+  if (!current) return { coin: requestedCoin, newEvents: [] };
+  const coin = structuredClone(current);
   const config = coin.config;
-
-  const forceCheck = typeof options === 'boolean' ? options : Boolean(options?.forceCheck);
-  const forceNotify = typeof options === 'boolean' ? options : Boolean(options?.forceNotify);
-
-  const [klines1h, klines15m] = await Promise.all([
-    fetchKlines(coin.exchange, coin.marketType, coin.symbol, '1h', 30).catch(() => []),
-    fetchKlines(coin.exchange, coin.marketType, coin.symbol, '15m', 30).catch(() => []),
-  ]);
-
-  const newState = await calculateSurveillanceState(
-    coin.symbol,
-    coin.exchange,
-    coin.marketType,
-    config
-  );
-
-  if (!newState) {
-    return { coin, newEvents: [] };
-  }
+  const prevState = coin.state;
+  const forceNotify = typeof options === 'object' && Boolean(options.forceNotify);
+  const frames = ['1d', '4h', '1h', '15m'] as const;
+  const fetched = await Promise.all(frames.map(tf => fetchKlines(coin.exchange, coin.marketType, coin.symbol, tf,
+    tf === '4h' ? 80 : 60).catch(() => [])));
+  const source = Object.fromEntries(frames.map((tf, i) => [tf, fetched[i]])) as Record<typeof frames[number], Kline[]>;
+  const newState = await calculateSurveillanceState(coin.symbol, coin.exchange, coin.marketType, config, source);
+  if (!newState) return { coin, newEvents: [] };
 
   const now = Date.now();
-  const cooldownMs = (config.cooldownMinutes || 15) * 60 * 1000;
-  const lastNotified = coin.lastNotifiedAt ? new Date(coin.lastNotifiedAt).getTime() : 0;
-  // #6: forceNotify is only true when explicitly intended for single coin test; otherwise respects cooldown
-  const canNotify = forceNotify || now - lastNotified >= cooldownMs;
-
-  const cur = newState.currentPrice;
-  const prev = prevState?.currentPrice || cur;
-
-  // Evaluate trigger modes (supports multiple active modes)
+  const processed = { '15m': 0, '1h': 0, '4h': 0, ...prevState?.lastProcessedCandleTimes };
   const modes = config.triggerModes || (config.triggerMode ? [config.triggerMode] : ['bar_close']);
-  const isBarClose15 = modes.includes('bar_close_15m');
-  const isBarClose1h = modes.includes('bar_close_1h');
-  const isBarClose4h = modes.includes('bar_close');
+  const closingModes = [
+    ['4h', 'bar_close'], ['1h', 'bar_close_1h'], ['15m', 'bar_close_15m'],
+  ] as const;
+  const newEvents: SurveillanceEvent[] = [];
 
-  // Track processed candle timestamps (#2 & #3)
-  const processedCandles: { '15m': number; '1h': number; '4h': number } = {
-    '15m': prevState?.lastProcessedCandleTimes?.['15m'] || 0,
-    '1h': prevState?.lastProcessedCandleTimes?.['1h'] || 0,
-    '4h': prevState?.lastProcessedCandleTimes?.['4h'] || 0,
-  };
-  const newProcessedCandles = { ...processedCandles };
+  for (const [tf, mode] of closingModes) {
+    if (!modes.includes(mode)) continue;
+    const closed = source[tf].filter(c => normalizeKlineTimeMs(c.time) + getTimeframeMs(tf) <= now);
+    const candle = closed[closed.length - 1];
+    if (!candle || closed.length < 3) continue;
+    const startTime = normalizeKlineTimeMs(candle.time);
+    // Legacy 4h state stored the live bucket instead of the last closed candle.
+    if (processed[tf] > startTime) processed[tf] = startTime;
+    if (startTime <= processed[tf]) continue;
+    const previousProcessed = processed[tf];
+    processed[tf] = startTime;
+    // Establish a baseline when tracking starts; an old candle is not a new event.
+    if (!prevState || !previousProcessed) continue;
 
-  // Note (#1 & #5): realtime triggers are dispatched by CoinWorker stream.
-  // Polling checkCoinSurveillance handles discrete candle close events (15m, 1h, 4h).
-  let isTriggerAllowed = forceCheck;
-
-  // 1. 15m Candle Close Check (#3 & #4: bind to specific newly closed candle timestamp with causal levels <= N-1)
-  if (isBarClose15 && klines15m.length >= 3) {
-    const completedCandle15 = klines15m[klines15m.length - 2];
-    const candleTime15 = completedCandle15.time > 1e11 ? completedCandle15.time : completedCandle15.time * 1000;
-    if (candleTime15 > processedCandles['15m']) {
-      newProcessedCandles['15m'] = candleTime15;
-      const prior15m = klines15m.slice(0, klines15m.length - 2);
-      const priorHigh15m = prior15m.length > 0 ? Math.max(...prior15m.slice(-15).map((k) => k.high)) : newState.localHigh15m;
-      const priorLow15m = prior15m.length > 0 ? Math.min(...prior15m.slice(-15).map((k) => k.low)) : newState.localLow15m;
-
-      const crossedUp15 = completedCandle15.close > newState.resistance4h || completedCandle15.close > priorHigh15m;
-      const crossedDown15 = completedCandle15.close < newState.support4h || completedCandle15.close < priorLow15m;
-      if (crossedUp15 || crossedDown15) {
-        isTriggerAllowed = true;
-      }
+    const causalSource = Object.fromEntries(frames.map(frame => [frame, source[frame].filter(c =>
+      normalizeKlineTimeMs(c.time) + getTimeframeMs(frame) <= startTime)])) as typeof source;
+    const levels = await calculateSurveillanceState(coin.symbol, coin.exchange, coin.marketType, config, causalSource);
+    if (!levels) continue;
+    const previousClose = closed[closed.length - 2].close;
+    const price = candle.close;
+    const add = (kind: string, type: SurveillanceEvent['type'], title: string, description: string,
+      severity: SurveillanceEvent['severity'], reference = '') => {
+      newEvents.push({ id: `${kind}_${tf}_${startTime}_${reference}`, type, title, description, severity, price,
+        timestamp: startTime + getTimeframeMs(tf),
+        details: { timeframe: tf, triggerMode: mode, notificationType: kind, eventIdentity: `${kind}_${tf}_${reference}` },
+      });
+    };
+    const crossing = (level: number, kind: string, label: string, severity: SurveillanceEvent['severity']) => {
+      if (!(level > 0) || !Number.isFinite(level)) return;
+      if (previousClose <= level && price > level) add(kind, 'level', `🔔 ${label}: пробій вгору ($${formatPrice(level)})`,
+        `Свічка ${tf} закрилася вище рівня $${formatPrice(level)}.`, severity, String(level));
+      else if (previousClose >= level && price < level) add(kind, 'level', `🔔 ${label}: пробій вниз ($${formatPrice(level)})`,
+        `Свічка ${tf} закрилася нижче рівня $${formatPrice(level)}.`, severity, String(level));
+    };
+    if (config.levelsEnabled) {
+      crossing(levels.resistance4h, 'LEVEL_CROSS_4H', 'Опір 4H', 'critical');
+      crossing(levels.support4h, 'LEVEL_CROSS_4H', 'Підтримка 4H', 'critical');
+      crossing(levels.localHigh1h, 'LEVEL_CROSS_1H', 'Максимум 1H', 'warning');
+      crossing(levels.localLow1h, 'LEVEL_CROSS_1H', 'Мінімум 1H', 'warning');
+      crossing(levels.localHigh15m, 'LEVEL_CROSS_15M', 'Максимум 15m', 'info');
+      crossing(levels.localLow15m, 'LEVEL_CROSS_15M', 'Мінімум 15m', 'info');
     }
+    if (config.channelEnabled) {
+      if (previousClose <= levels.channelUpper && price > levels.channelUpper) add('CHANNEL_BREAKOUT', 'risk',
+        '🌊 Вихід із каналу вгору', `Закриття ${tf} вище $${formatPrice(levels.channelUpper)}.`, 'warning', 'UP');
+      else if (previousClose >= levels.channelLower && price < levels.channelLower) add('CHANNEL_BREAKOUT', 'risk',
+        '🌊 Вихід із каналу вниз', `Закриття ${tf} нижче $${formatPrice(levels.channelLower)}.`, 'warning', 'DOWN');
+    }
+    const endTime = startTime + getTimeframeMs(tf);
+    const completedSource = Object.fromEntries(frames.map(frame => [frame, source[frame].filter(c =>
+      normalizeKlineTimeMs(c.time) + getTimeframeMs(frame) <= endTime)])) as typeof source;
+    const completedState = await calculateSurveillanceState(coin.symbol, coin.exchange, coin.marketType, config, completedSource);
+    if (config.structureEnabled && completedState && levels.structureTrend !== completedState.structureTrend) add(
+      'STRUCTURE_SHIFT', 'structure', `🔄 Зміна структури (${completedState.structureTrend.toUpperCase()})`,
+      `Підтверджено закриттям ${tf}.`, 'critical', completedState.structureTrend);
+    if (config.momentumEnabled && tf === config.momentumTf && completedState &&
+        Math.abs(completedState.momentumRecentPct || 0) >= config.momentumPct) add('MOMENTUM', 'momentum',
+      `⚡ Імпульс: ${completedState.momentumRecentPct}%`,
+      `Рух за ${config.momentumBars} закритих свічок ${tf}.`, 'warning', completedState.momentumRecentPct! > 0 ? 'UP' : 'DOWN');
+    if (config.fibonacciEnabled && levels.fib618 > 0 && Math.abs(price - levels.fib618) / levels.fib618 <= 0.0035 &&
+        Math.abs(previousClose - levels.fib618) / levels.fib618 > 0.0035) add('FIBONACCI', 'level',
+      '🎯 Тест Fibonacci 0.618', `Закриття ${tf} у зоні $${formatPrice(levels.fib618)}.`, 'info', String(levels.fib618));
   }
 
-  // 2. 1H Candle Close Check (#3 & #4: bind to specific newly closed candle timestamp with causal levels <= N-1)
-  if (isBarClose1h && klines1h.length >= 3) {
-    const completedCandle1h = klines1h[klines1h.length - 2];
-    const candleTime1h = completedCandle1h.time > 1e11 ? completedCandle1h.time : completedCandle1h.time * 1000;
-    if (candleTime1h > processedCandles['1h']) {
-      newProcessedCandles['1h'] = candleTime1h;
-      const prior1h = klines1h.slice(0, klines1h.length - 2);
-      const priorHigh1h = prior1h.length > 0 ? Math.max(...prior1h.slice(-15).map((k) => k.high)) : newState.localHigh1h;
-      const priorLow1h = prior1h.length > 0 ? Math.min(...prior1h.slice(-15).map((k) => k.low)) : newState.localLow1h;
-
-      const crossedUp1h = completedCandle1h.close > newState.resistance4h || completedCandle1h.close > priorHigh1h;
-      const crossedDown1h = completedCandle1h.close < newState.support4h || completedCandle1h.close < priorLow1h;
-      if (crossedUp1h || crossedDown1h) {
-        isTriggerAllowed = true;
-      }
-    }
+  const fresh = findSurveillanceCoinById(coin.id, coin.userId)?.coin;
+  if (!fresh || fresh.isActive !== coin.isActive || JSON.stringify(fresh.config) !== JSON.stringify(config)) {
+    return { coin: fresh || coin, newEvents: [] };
   }
-
-  // 3. 4H Candle Close Check (#2: 4H bucket window calculation)
-  if (isBarClose4h) {
-    const fourHourBucket = Math.floor(now / (4 * 60 * 60 * 1000));
-    const last4hBucket = Math.floor(processedCandles['4h'] / (4 * 60 * 60 * 1000));
-    if (fourHourBucket > last4hBucket) {
-      newProcessedCandles['4h'] = fourHourBucket * 4 * 60 * 60 * 1000;
-      isTriggerAllowed = true;
-    }
-  }
-
-  // Baseline initialization for brand new coin tracking state
-  if (!prevState) {
-    if (klines15m.length >= 2 && !newProcessedCandles['15m']) {
-      const c15 = klines15m[klines15m.length - 2];
-      newProcessedCandles['15m'] = c15.time > 1e11 ? c15.time : c15.time * 1000;
-    }
-    if (klines1h.length >= 2 && !newProcessedCandles['1h']) {
-      const c1h = klines1h[klines1h.length - 2];
-      newProcessedCandles['1h'] = c1h.time > 1e11 ? c1h.time : c1h.time * 1000;
-    }
-    if (!newProcessedCandles['4h']) {
-      newProcessedCandles['4h'] = Math.floor(now / (4 * 60 * 60 * 1000)) * (4 * 60 * 60 * 1000);
-    }
-  }
-
-  newState.lastProcessedCandleTimes = newProcessedCandles;
-
-  // 1. Senior & Local Levels (Crossing Up / Down)
-  if (config.levelsEnabled && isTriggerAllowed) {
-    if (prev <= newState.resistance4h && cur > newState.resistance4h) {
-      newEvents.push({
-        id: `level_break_up_4h_${now}`,
-        type: 'level',
-        title: `🔔 Пробій 4H опору (Crossing Up $${formatPrice(newState.resistance4h)})`,
-        description: `Ціна вийшла вище ключового 4H опору $${formatPrice(newState.resistance4h)}. Рух до наступної зони $${formatPrice(newState.nextZoneUp)}.`,
-        price: cur,
-        timestamp: now,
-        severity: 'critical',
-      });
-    } else if (prev >= newState.resistance4h && cur < newState.resistance4h && prevState) {
-      newEvents.push({
-        id: `level_retest_res_${now}`,
-        type: 'level',
-        title: `⚠️ Повернення нижче 4H опору (Crossing Down $${formatPrice(newState.resistance4h)})`,
-        description: `Ціна повернулася нижче рівня опору $${formatPrice(newState.resistance4h)}.`,
-        price: cur,
-        timestamp: now,
-        severity: 'warning',
-      });
-    }
-
-    if (prev >= newState.support4h && cur < newState.support4h) {
-      newEvents.push({
-        id: `level_break_down_4h_${now}`,
-        type: 'level',
-        title: `🔔 Пробій 4H підтримки (Crossing Down $${formatPrice(newState.support4h)})`,
-        description: `Ціна пробила 4H підтримку $${formatPrice(newState.support4h)}. Наступна зона: $${formatPrice(newState.nextZoneDown)}.`,
-        price: cur,
-        timestamp: now,
-        severity: 'critical',
-      });
-    } else if (prev <= newState.support4h && cur > newState.support4h && prevState) {
-      newEvents.push({
-        id: `level_recover_sup_${now}`,
-        type: 'level',
-        title: `🛡 Відновлення вище 4H підтримки (Crossing Up $${formatPrice(newState.support4h)})`,
-        description: `Ціна відкупилася вище підтримки $${formatPrice(newState.support4h)}.`,
-        price: cur,
-        timestamp: now,
-        severity: 'info',
-      });
-    }
-
-    if (prev <= newState.localHigh1h && cur > newState.localHigh1h) {
-      newEvents.push({
-        id: `level_cross_up_1h_${now}`,
-        type: 'level',
-        title: `⚡ Пробій 1H максимуму (Crossing Up $${formatPrice(newState.localHigh1h)})`,
-        description: `Імпульсне перетинання 1H рівня опору.`,
-        price: cur,
-        timestamp: now,
-        severity: 'warning',
-      });
-    }
-    if (prev >= newState.localLow1h && cur < newState.localLow1h) {
-      newEvents.push({
-        id: `level_cross_down_1h_${now}`,
-        type: 'level',
-        title: `⚠️ Пробій 1H мінімуму (Crossing Down $${formatPrice(newState.localLow1h)})`,
-        description: `Пробій 1H рівня підтримки вниз.`,
-        price: cur,
-        timestamp: now,
-        severity: 'warning',
-      });
-    }
-
-    if (prev <= newState.localHigh15m && cur > newState.localHigh15m) {
-      newEvents.push({
-        id: `level_cross_up_15m_${now}`,
-        type: 'level',
-        title: `⚡ Пробій 15m рівня (Crossing Up $${formatPrice(newState.localHigh15m)})`,
-        description: `Пробито локальний 15m рівень вгору.`,
-        price: cur,
-        timestamp: now,
-        severity: 'info',
-      });
-    }
-    if (prev >= newState.localLow15m && cur < newState.localLow15m) {
-      newEvents.push({
-        id: `level_cross_down_15m_${now}`,
-        type: 'level',
-        title: `⚠️ Пробій 15m рівня (Crossing Down $${formatPrice(newState.localLow15m)})`,
-        description: `Пробито локальний 15m рівень підтримки вниз.`,
-        price: cur,
-        timestamp: now,
-        severity: 'info',
-      });
-    }
-  }
-
-  // 2. Momentum Moves
-  if (config.momentumEnabled && newState.momentumRecentPct !== undefined && isTriggerAllowed) {
-    if (Math.abs(newState.momentumRecentPct) >= config.momentumPct) {
-      const dir = newState.momentumRecentPct > 0 ? 'вгору' : 'вниз';
-      const emoji = newState.momentumRecentPct > 0 ? '🚀' : '📉';
-      newEvents.push({
-        id: `momentum_${now}`,
-        type: 'momentum',
-        title: `${emoji} Різкий рух ${dir}: ${newState.momentumRecentPct > 0 ? '+' : ''}${newState.momentumRecentPct}%`,
-        description: `Зміна на ${newState.momentumRecentPct}% за ${config.momentumBars} бари (${config.momentumTf}).`,
-        price: cur,
-        timestamp: now,
-        severity: 'warning',
-      });
-    }
-  }
-
-  // 3. Structure Changes
-  if (config.structureEnabled && prevState?.structureTrend && prevState.structureTrend !== newState.structureTrend && isTriggerAllowed) {
-    newEvents.push({
-      id: `structure_change_${now}`,
-      type: 'structure',
-      title: `🔄 Зміна структури ринку (${newState.structureTrend.toUpperCase()})`,
-      description: `Структура змінила тренд на ${newState.structureTrend}.`,
-      price: cur,
-      timestamp: now,
-      severity: 'critical',
-    });
-  }
-
-  // 4. Channel Breakout
-  if (config.channelEnabled && isTriggerAllowed) {
-    if (prev <= newState.channelUpper && cur > newState.channelUpper) {
-      newEvents.push({
-        id: `channel_out_up_${now}`,
-        type: 'risk',
-        title: `🌊 Вихід із каналу вгору ($${formatPrice(newState.channelUpper)})`,
-        description: `Ціна вийшла за верхню межу каналу 1H.`,
-        price: cur,
-        timestamp: now,
-        severity: 'warning',
-      });
-    } else if (prev >= newState.channelLower && cur < newState.channelLower) {
-      newEvents.push({
-        id: `channel_out_down_${now}`,
-        type: 'risk',
-        title: `🌊 Вихід із каналу вниз ($${formatPrice(newState.channelLower)})`,
-        description: `Ціна пробила нижню межу каналу 1H.`,
-        price: cur,
-        timestamp: now,
-        severity: 'warning',
-      });
-    }
-  }
-
-  // 5. Fibonacci Reaction
-  if (config.fibonacciEnabled && newState.fib618 > 0 && isTriggerAllowed) {
-    const distToFib = Math.abs(cur - newState.fib618) / newState.fib618;
-    if (distToFib <= 0.0035) {
-      newEvents.push({
-        id: `fib_golden_pocket_${now}`,
-        type: 'level',
-        title: `🎯 Тест зони Fibonacci 0.618 (Golden Pocket)`,
-        description: `Ціна дійшла до золотого рівня $${formatPrice(newState.fib618)}.`,
-        price: cur,
-        timestamp: now,
-        severity: 'info',
-      });
-    }
-  }
-
-  const updatedCoin: SurveillanceCoin = {
-    ...coin,
-    lastCheckedAt: new Date().toISOString(),
-    state: {
-      ...newState,
-      lastEvent: newEvents.length > 0 ? newEvents[0] : prevState?.lastEvent,
-      recentEvents: [...newEvents, ...(prevState?.recentEvents || [])].slice(0, 10),
-    },
-  };
-
-  // #2, #3, #4, #5: Route notifications through central notificationRouter
-  // Fully scoped per user/coin/symbol/exchange/marketType/eventType/eventIdentity
-  if (newEvents.length > 0 && isTriggerAllowed) {
-    const highestSeverityEvent =
-      newEvents.find((e) => e.severity === 'critical') ||
-      newEvents.find((e) => e.severity === 'warning') ||
-      newEvents[0];
-
-    const messageHtml = formatSurveillanceTelegramMessage(updatedCoin, newState, highestSeverityEvent);
-    const triggerMode = modes.includes('bar_close')
-      ? 'bar_close'
-      : modes.includes('bar_close_1h')
-      ? 'bar_close_1h'
-      : 'bar_close_15m';
-
+  const allEvents = [...newEvents, ...(fresh.state?.recentEvents || [])];
+  const ids = new Set<string>();
+  const updatedCoin: SurveillanceCoin = { ...fresh, lastCheckedAt: new Date(now).toISOString(), state: {
+    ...newState, lastProcessedCandleTimes: processed,
+    lastEvent: newEvents[0] || fresh.state?.lastEvent,
+    recentEvents: allEvents.filter(event => { if (ids.has(event.id)) return false; ids.add(event.id); return true; }).slice(0, 25),
+  } };
+  const cooldownMs = Math.max(0, config.cooldownMinutes ?? 15) * 60 * 1000;
+  const lastNotified = fresh.lastNotifiedAt ? new Date(fresh.lastNotifiedAt).getTime() : 0;
+  const event = newEvents.find(e => e.severity === 'critical') || newEvents.find(e => e.severity === 'warning') || newEvents[0];
+  if ((event && now - lastNotified >= cooldownMs) || forceNotify) {
+    const selected = event || { id: `manual_${now}`, type: 'risk' as const, title: '🛰 Ручна перевірка стану монети',
+      description: 'Поточний стан отримано з обраної біржі.', severity: 'info' as const, price: newState.currentPrice, timestamp: now };
     const sent = await notificationRouter.dispatch({
-      source: 'SURVEILLANCE',
-      userId: coin.userId,
-      coinId: coin.id,
-      symbol: coin.symbol,
-      exchange: coin.exchange,
-      marketType: coin.marketType,
-      eventType: highestSeverityEvent.type.toUpperCase(),
-      eventIdentity: highestSeverityEvent.title,
-      triggerMode,
-      htmlMessage: messageHtml,
-      customCooldownMs: cooldownMs,
-      forceNotify,
-      coin: updatedCoin,
+      source: 'SURVEILLANCE', userId: coin.userId, coinId: coin.id, symbol: coin.symbol,
+      exchange: coin.exchange, marketType: coin.marketType,
+      eventType: selected.details?.notificationType || 'MANUAL_CHECK',
+      eventIdentity: selected.details?.eventIdentity || selected.id,
+      triggerMode: forceNotify ? 'manual' : selected.details?.triggerMode,
+      htmlMessage: formatSurveillanceTelegramMessage(updatedCoin, { ...newState, currentPrice: selected.price }, selected),
+      customCooldownMs: cooldownMs, forceNotify, coin: updatedCoin,
     });
-
-    if (sent) {
-      updatedCoin.lastNotifiedAt = new Date().toISOString();
-    }
+    if (sent) updatedCoin.lastNotifiedAt = new Date().toISOString();
   }
-
   return { coin: updatedCoin, newEvents };
 }
 
 let isLoopRunning = false;
 
 export async function checkAllUserCoins(userId: string): Promise<SurveillanceCoin[]> {
-  const store = loadSurveillanceStore();
   const uid = userId && userId.trim() !== '' ? userId.trim() : 'guest';
-  const list = store[uid] || [];
+  const list = [...(loadSurveillanceStore()[uid] || [])];
   if (list.length === 0) return [];
 
-  const updatedList: SurveillanceCoin[] = [];
   for (const coin of list) {
     try {
       // #6: check-all runs with forceCheck: true (re-evaluates current levels) but forceNotify: false
       // This strictly enforces cooldown to prevent mass Telegram spam!
       const { coin: updated } = await checkCoinSurveillance(coin, { forceCheck: true, forceNotify: false });
-      updatedList.push(updated);
-    } catch {
-      updatedList.push(coin);
-    }
+      commitSurveillanceCheck(updated);
+    } catch {}
   }
 
-  store[uid] = updatedList;
-  saveSurveillanceStore(store);
-  return updatedList;
+  return loadSurveillanceList(uid);
 }
 
 export function startSurveillanceMonitor(intervalMs = 25000) {
@@ -942,18 +782,10 @@ export function startSurveillanceMonitor(intervalMs = 25000) {
       const activeItems = getAllActiveSurveillanceCoins();
       if (activeItems.length === 0) return;
 
-      const store = loadSurveillanceStore();
-
       for (const { userId, coin } of activeItems) {
         try {
           const { coin: updated } = await checkCoinSurveillance(coin);
-          const userCoins = store[userId] || [];
-          const idx = userCoins.findIndex((c) => c.id === coin.id);
-          if (idx !== -1) {
-            userCoins[idx] = updated;
-            store[userId] = userCoins;
-            saveSurveillanceStore(store);
-          }
+          commitSurveillanceCheck(updated);
         } catch (e) {
           console.error(`[Surveillance] Failed to check coin ${coin.symbol} for user ${userId}:`, e);
         }

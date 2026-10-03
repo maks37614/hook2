@@ -1,6 +1,7 @@
 import { SurveillanceCoin } from '../src/types';
 import { getUserTelegram } from './alertService';
 import { sendTelegramMessage } from './telegramService';
+import { findSurveillanceCoinById } from './surveillanceService';
 
 export type NotificationSource =
   | 'PRICE_ALERT'
@@ -128,7 +129,10 @@ export class NotificationRouter {
 
     // 1. If coin context provided, check active status & config toggles
     if (params.coin) {
-      const { coin } = params;
+      const coin = params.coin.id && params.coin.userId
+        ? findSurveillanceCoinById(params.coin.id, params.userId)?.coin
+        : params.coin;
+      if (!coin) return { allowed: false, reason: 'coin_removed', scopedKey };
 
       if (!coin.isActive) {
         return { allowed: false, reason: 'coin_inactive', scopedKey };
@@ -140,10 +144,10 @@ export class NotificationRouter {
       }
 
       // Check triggerModes if triggerMode is specified
-      if (params.triggerMode === 'realtime') {
+      if (params.triggerMode && params.triggerMode !== 'manual') {
         const modes = coin.config?.triggerModes || (coin.config?.triggerMode ? [coin.config.triggerMode] : ['bar_close']);
-        if (!modes.includes('realtime')) {
-          return { allowed: false, reason: 'realtime_mode_disabled', scopedKey };
+        if (!modes.includes(params.triggerMode)) {
+          return { allowed: false, reason: 'trigger_mode_disabled', scopedKey };
         }
       }
 
@@ -170,6 +174,12 @@ export class NotificationRouter {
       if (evUpper.startsWith('MOMENTUM') && coin.config?.momentumEnabled === false) {
         return { allowed: false, reason: 'momentum_disabled', scopedKey };
       }
+      if (evUpper.startsWith('CHANNEL') && coin.config?.channelEnabled === false) {
+        return { allowed: false, reason: 'channel_disabled', scopedKey };
+      }
+      if (evUpper.startsWith('FIBONACCI') && coin.config?.fibonacciEnabled === false) {
+        return { allowed: false, reason: 'fibonacci_disabled', scopedKey };
+      }
     }
 
     // 2. Check Telegram credentials
@@ -184,12 +194,10 @@ export class NotificationRouter {
     }
 
     const lastTime = this.scopedAlertTimestamps.get(scopedKey) || 0;
-    const cooldownMs =
-      params.customCooldownMs !== undefined
-        ? params.customCooldownMs
-        : (params.coin?.config?.cooldownMinutes ? params.coin.config.cooldownMinutes * 60 * 1000 : 0) ||
-          this.defaultCooldowns[params.eventType.toUpperCase()] ||
-          15 * 60 * 1000;
+    const cooldownMs = params.customCooldownMs ??
+      (params.coin?.config?.cooldownMinutes !== undefined
+        ? Math.max(0, params.coin.config.cooldownMinutes) * 60 * 1000
+        : this.defaultCooldowns[params.eventType.toUpperCase()] ?? 15 * 60 * 1000);
 
     if (now - lastTime < cooldownMs) {
       return { allowed: false, reason: `cooldown_active (${Math.round((cooldownMs - (now - lastTime)) / 1000)}s left)`, scopedKey };

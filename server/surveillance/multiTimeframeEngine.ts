@@ -5,7 +5,7 @@ import { StructureBreak, SwingPoint, TimeframeStructure } from './types';
 
 export const SUPPORTED_TIMEFRAMES: Timeframe[] = ['1d', '4h', '1h', '15m', '5m'];
 
-function getTimeframeMs(tf: Timeframe): number {
+export function getTimeframeMs(tf: Timeframe): number {
   switch (tf) {
     case '1m': return 60 * 1000;
     case '5m': return 5 * 60 * 1000;

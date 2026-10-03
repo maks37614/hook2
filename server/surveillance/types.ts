@@ -25,6 +25,8 @@ export interface OrderBookState {
   lastReceivedAt: number;
   dataValid?: boolean;
   sequenceGap?: boolean;
+  bidDepth?: number;
+  askDepth?: number;
 }
 
 export interface DensityItem {

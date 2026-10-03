@@ -39,6 +39,7 @@ export class OrderBookEngine {
   public dataValid = false;
   public sequenceGap = false;
   public status: OrderBookStatus = 'CONNECTING';
+  private volume24hUsd = 0;
 
   constructor(
     public readonly symbol: string,
@@ -49,15 +50,34 @@ export class OrderBookEngine {
     }
   ) {}
 
-  public updateConfig(newConfig: Partial<DensityConfig>) { this.config = { ...this.config, ...newConfig }; }
-  public setStatus(newStatus: OrderBookStatus) { this.status = newStatus; }
+  public updateConfig(newConfig: Partial<DensityConfig>) {
+    const previous = JSON.stringify(this.config);
+    this.config = { ...this.config, ...newConfig };
+    if (!(this.config.manualThresholdUsd > 0) || !Number.isFinite(this.config.manualThresholdUsd)) this.config.manualThresholdUsd = 1000000;
+    if (previous !== JSON.stringify(this.config) && this.dataValid && Date.now() - this.lastReceivedAt <= 5000) this.evaluateDensities();
+  }
+  public setVolume24hUsd(volume: number) {
+    this.volume24hUsd = Number.isFinite(volume) && volume > 0 ? volume : 0;
+  }
+  public setStatus(newStatus: OrderBookStatus) {
+    this.status = newStatus;
+    if (newStatus !== 'LIVE') {
+      this.dataValid = false;
+      this.activeDensities.clear();
+      this.densityStats.clear();
+      this.newlyAppearedDensities = [];
+    }
+  }
 
   public applyDepth(delta: RawDepthDelta) {
     const now = Date.now();
+    if (this.lastReceivedAt && now - this.lastReceivedAt > 5000) {
+      this.activeDensities.clear(); this.densityStats.clear(); this.newlyAppearedDensities = [];
+    }
     const seq = delta.sequence || now;
     // Old/duplicate deltas are harmless; never invalidate a good book for them.
     if (!delta.isSnapshot && this.lastUpdateId > 0 && seq <= this.lastUpdateId) return;
-    if (!delta.isSnapshot && this.lastUpdateId === 0) {
+    if (!delta.isSnapshot && (this.lastUpdateId === 0 || this.sequenceGap)) {
       this.status = 'SYNCING';
       return;
     }
@@ -111,17 +131,21 @@ export class OrderBookEngine {
       bids:this.getSortedBids(20), asks:this.getSortedAsks(20), bestBid:this.bestBid, bestAsk:this.bestAsk,
       spread:this.spread, spreadPct:Number(this.spreadPct.toFixed(4)), lastUpdateId:this.lastUpdateId,
       sequence:this.lastUpdateId, timestamp:this.lastReceivedAt||Date.now(), status:this.status, lastReceivedAt:this.lastReceivedAt,
+      dataValid: this.dataValid, sequenceGap: this.sequenceGap,
+      bidDepth: this.bids.size, askDepth: this.asks.size,
     };
   }
 
-  public calculateAdaptiveThreshold(volume24hUsd = 0): number {
+  public calculateAdaptiveThreshold(volume24hUsd = this.volume24hUsd): number {
+    if (this.config.mode === 'MANUAL') return this.config.manualThresholdUsd;
     const all = [...Array.from(this.bids, ([p,q])=>p*q), ...Array.from(this.asks, ([p,q])=>p*q)];
     if (!all.length) return this.config.manualThresholdUsd || 1000000;
     all.sort((a,b)=>a-b);
-    const p90 = all[Math.min(all.length-1, Math.floor(all.length*0.90))] || 50000;
-    const turnoverBaseline = volume24hUsd > 0 ? Math.max(50000, volume24hUsd * 0.0003) : 100000;
-    const autoVal = Math.max(turnoverBaseline, p90 * 2);
-    if (this.config.mode === 'MANUAL') return this.config.manualThresholdUsd;
+    // A large wall must not raise its own detection threshold above itself.
+    // The median estimates a normal level even in a shallow or uneven book.
+    const median = all[Math.floor((all.length - 1) / 2)];
+    const turnoverBaseline = volume24hUsd > 0 ? Math.max(1000, volume24hUsd * 0.0001) : 1000;
+    const autoVal = Math.max(turnoverBaseline, median * 5);
     // #13: HYBRID takes the maximum so manual threshold is strictly respected and never diluted
     if (this.config.mode === 'HYBRID') return Math.max(this.config.manualThresholdUsd, autoVal);
     return autoVal;
@@ -137,7 +161,7 @@ export class OrderBookEngine {
   }
 
   private evaluateDensities() {
-    const now = this.lastReceivedAt;
+    const now = Date.now();
     const mid = (this.bestBid + this.bestAsk) / 2 || this.bestBid || this.bestAsk || 1;
     const threshold = this.calculateAdaptiveThreshold();
     const seen = new Set<string>();
@@ -165,11 +189,9 @@ export class OrderBookEngine {
                                      (item.side === 'ASK' && item.price > maxAskInBook);
 
       if (isOutsideVisibleWindow) {
-        // Keep order alive in persistence memory without falsely increasing cancellation rate
-        if (now - item.lastSeenAt > 600000) { // Clean up after 10 mins outside window
-          this.activeDensities.delete(id);
-          this.densityStats.delete(id);
-        }
+        // Missing outside the snapshot is unknown, not a cancellation or continuous persistence.
+        this.activeDensities.delete(id);
+        this.densityStats.delete(id);
         continue;
       }
 
@@ -244,7 +266,13 @@ export class OrderBookEngine {
     return this.getDensities().filter(d=>d.side===side && d.classification!=='POSSIBLE_SPOOF' && Math.abs(d.price-price)/Math.max(price,1e-12)*100<=maxDistancePct).sort((a,b)=>(b.qualityScore||0)-(a.qualityScore||0))[0];
   }
 
-  public getDensities(): DensityItem[] { return this.dataValid && Date.now() - this.lastReceivedAt <= 5000 ? Array.from(this.activeDensities.values()).filter(d => d.lastSeenAt === this.lastReceivedAt).sort((a,b)=>b.notionalUsd-a.notionalUsd) : []; }
+  public getDensities(): DensityItem[] {
+    if (!this.dataValid || Date.now() - this.lastReceivedAt > 5000) return [];
+    const threshold = this.calculateAdaptiveThreshold();
+    return Array.from(this.activeDensities.values())
+      .filter(d => (d.side === 'BID' ? this.bids : this.asks).get(d.price) === d.quantity && d.notionalUsd >= threshold)
+      .sort((a,b)=>b.notionalUsd-a.notionalUsd);
+  }
   public getSignificantDensities(minNotional=500000):DensityItem[]{return this.getDensities().filter(d=>d.notionalUsd>=minNotional);}
   public clear(){this.bids.clear();this.asks.clear();this.activeDensities.clear();this.densityStats.clear();this.dataValid=false;this.sequenceGap=false;this.status='CONNECTING';this.lastUpdateId=0;this.lastReceivedAt=0;this.bestBid=0;this.bestAsk=0;this.newlyAppearedDensities=[];}
 }

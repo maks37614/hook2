@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Radar,
   Eye,
@@ -143,24 +143,15 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   const [loadingWorkerData, setLoadingWorkerData] = useState(false);
   const [backtestResult, setBacktestResult] = useState<any | null>(null);
   const [loadingBacktest, setLoadingBacktest] = useState(false);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
+  const detailsId = useRef<string | null>(null);
+  detailsId.current = detailedCoin?.id || null;
 
   // Screener coins list for selection
-  const screenerCoinsList = useMemo(() => {
-    if (availableCoins && availableCoins.length > 0) {
-      return availableCoins;
-    }
-    return [
-      { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 84300, priceChange24h: 1.2, volume24hUsd: 2500000000 },
-      { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2050, priceChange24h: -0.8, volume24hUsd: 1200000000 },
-      { symbol: 'SOLUSDT', baseAsset: 'SOL', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 125, priceChange24h: 3.4, volume24hUsd: 800000000 },
-      { symbol: 'DOGEUSDT', baseAsset: 'DOGE', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 0.165, priceChange24h: -2.1, volume24hUsd: 400000000 },
-      { symbol: 'XRPUSDT', baseAsset: 'XRP', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 1.45, priceChange24h: 0.5, volume24hUsd: 300000000 },
-      { symbol: 'SUIUSDT', baseAsset: 'SUI', quoteAsset: 'USDT', exchange: 'binance' as ExchangeId, marketType: 'futures' as MarketType, currentPrice: 2.15, priceChange24h: 4.8, volume24hUsd: 250000000 },
-    ] as ScannedCoin[];
-  }, [availableCoins]);
+  const screenerCoinsList = availableCoins || [];
 
   // New coin modal selection state
-  const [selectedSymbolInput, setSelectedSymbolInput] = useState(screenerCoinsList[0]?.symbol || 'BTCUSDT');
+  const [selectedSymbolInput, setSelectedSymbolInput] = useState('');
   const [selectedExchange, setSelectedExchange] = useState<ExchangeId>(defaultEx);
   const [selectedMarketType, setSelectedMarketType] = useState<MarketType>(defaultMarket);
 
@@ -207,6 +198,9 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   };
 
   const handleOpenAddModal = (prefillSymbol?: string) => {
+    setSelectedSymbolInput(prefillSymbol || '');
+    setSelectedExchange(defaultEx);
+    setSelectedMarketType(defaultMarket);
     if (prefillSymbol) {
       setSelectedSymbolInput(prefillSymbol);
       const match = screenerCoinsList.find((c) => c.symbol === prefillSymbol);
@@ -265,6 +259,14 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
   };
 
   const handleSaveCoin = async () => {
+    if (!editingCoin && !selectedSymbolInput.trim()) {
+      setNotificationToast({ message: 'Оберіть або введіть символ монети', type: 'error' });
+      return;
+    }
+    if (formConfig.densityMode !== 'AUTO' && !(Number.isFinite(formConfig.manualDensityThresholdUsd) && formConfig.manualDensityThresholdUsd! > 0)) {
+      setNotificationToast({ message: 'Вкажіть додатний поріг щільності в USDT', type: 'error' });
+      return;
+    }
     if (editingCoin) {
       const ok = await updateCoinConfig(editingCoin.id, formConfig);
       if (ok) {
@@ -318,6 +320,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
     setDetailedCoin(coin);
     setWorkerData(null);
     setBacktestResult(null);
+    setBacktestError(null);
+    setLoadingBacktest(false);
   };
 
   useEffect(() => {
@@ -343,11 +347,14 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
   const handleRunCausalBacktest = async (coin: SurveillanceCoin) => {
     setLoadingBacktest(true);
+    setBacktestError(null);
     try {
       const res = await runBacktest(coin.symbol, coin.exchange, coin.marketType, '15m');
-      setBacktestResult(res);
+      if (detailsId.current === coin.id) setBacktestResult(res);
+    } catch (error) {
+      if (detailsId.current === coin.id) setBacktestError(error instanceof Error ? error.message : 'Помилка бектесту');
     } finally {
-      setLoadingBacktest(false);
+      if (detailsId.current === coin.id) setLoadingBacktest(false);
     }
   };
 
@@ -808,24 +815,12 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
               Оберіть монети нижче та натисніть «Стежити». Сервер веде безперервний 24/7 моніторинг ринку через WebSockets навіть при вимкненому комп'ютері.
             </p>
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+          <div className="flex items-center justify-center pt-2">
             <button
-              onClick={() => handleOpenAddModal('BTCUSDT')}
+              onClick={() => handleOpenAddModal()}
               className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-md cursor-pointer"
             >
-              + Стежити за BTCUSDT (Binance Futures)
-            </button>
-            <button
-              onClick={() => handleOpenAddModal('SOLUSDT')}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
-            >
-              + Стежити за SOLUSDT (Bybit Linear)
-            </button>
-            <button
-              onClick={() => handleOpenAddModal('ETHUSDT')}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
-            >
-              + Стежити за ETHUSDT
+              + Обрати монету для стеження
             </button>
           </div>
         </div>
@@ -1207,7 +1202,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                       {detailedCoin.exchange} {detailedCoin.marketType}
                     </span>
                     <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                      24/7 LIVE STREAM
+                      {workerData?.orderBookState?.status || (detailedCoin.isActive ? 'ПІДКЛЮЧЕННЯ' : 'ПАУЗА')}
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-400">
@@ -1240,10 +1235,14 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                         <span>Біржовий стакан</span>
                       </span>
                       <span className="text-[10px] text-slate-400 font-normal">
+                        {workerData.orderBookState?.bidDepth || 0} BID / {workerData.orderBookState?.askDepth || 0} ASK •{' '}
                         Спред: ${formatPrice(workerData.orderBookState?.spread)} ({workerData.orderBookState?.spreadPct}%)
                       </span>
                     </div>
 
+                    {workerData.orderBookState?.status !== 'LIVE' && (
+                      <p className="text-amber-300">Стакан синхронізується або дані застаріли. Очікуйте відновлення потоку.</p>
+                    )}
                     <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800">
                       {/* Bids */}
                       <div className="space-y-1">
@@ -1251,7 +1250,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                           <span>BID PRICE</span>
                           <span>QTY (USD)</span>
                         </div>
-                        {workerData.orderBookState?.bids?.slice(0, 7).map((b: any, idx: number) => (
+                        {(workerData.orderBookState?.status === 'LIVE' ? workerData.orderBookState?.bids : [])?.slice(0, 7).map((b: any, idx: number) => (
                           <div key={idx} className="flex justify-between text-[11px] py-0.5">
                             <span className="text-emerald-400 font-bold">${formatPrice(b.price)}</span>
                             <span className="text-slate-300">{formatNotionalUsd(b.notionalUsd)}</span>
@@ -1265,7 +1264,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                           <span>ASK PRICE</span>
                           <span>QTY (USD)</span>
                         </div>
-                        {workerData.orderBookState?.asks?.slice(0, 7).map((a: any, idx: number) => (
+                        {(workerData.orderBookState?.status === 'LIVE' ? workerData.orderBookState?.asks : [])?.slice(0, 7).map((a: any, idx: number) => (
                           <div key={idx} className="flex justify-between text-[11px] py-0.5">
                             <span className="text-rose-400 font-bold">${formatPrice(a.price)}</span>
                             <span className="text-slate-300">{formatNotionalUsd(a.notionalUsd)}</span>
@@ -1279,12 +1278,13 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                   <div className="space-y-2">
                     <div className="text-xs font-bold text-white flex items-center gap-1.5">
                       <Target className="w-4 h-4 text-amber-400" />
-                      <span>Виявлені великі плотності</span>
+                      <span>Виявлені щільності</span>
+                      <span className="text-slate-400 text-[10px]">{workerData.densityMode} • Поріг: {formatNotionalUsd(workerData.densityThresholdUsd)}</span>
                     </div>
 
                     {workerData.densities?.length === 0 ? (
                       <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-500 text-center">
-                        Немає щільностей вище адаптивного порогу в поточному стакані
+                        Немає щільностей вище поточного порогу в доступній глибині стакана
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1312,6 +1312,12 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                     )}
                   </div>
 
+                </div>
+              ) : (
+                <p className="text-slate-400">
+                  Живий стакан доступний для активної монети після підключення до біржі. Бектест можна запустити окремо.
+                </p>
+              )}
                   {/* Causal Backtest & Replay Runner (#103, #104, #105) */}
                   <div className="p-4 rounded-xl bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border border-indigo-500/30 space-y-3">
                     <div className="flex items-center justify-between">
@@ -1321,7 +1327,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                           <span>Каузальний бектест сетапів (Replay Mode без заглядання вперед)</span>
                         </div>
                         <p className="text-[10px] text-slate-400 mt-0.5">
-                          Перевірка якості: Повторне тестування рівня підтримки алгоритму на історичних свічках 15m
+                          Ретест підтримки на закритих свічках 15m: TP 1.5%, SL 0.8%, горизонт 4h. Щільності стакана не входять до цього бектесту.
                         </p>
                       </div>
 
@@ -1335,6 +1341,8 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                       </button>
                     </div>
 
+                    {backtestError && <p className="text-rose-300" role="alert">{backtestError}</p>}
+                    {backtestResult?.totalSetups === 0 && <p className="text-slate-400">За доступний період немає підтверджених ретестів із повним горизонтом 4h.</p>}
                     {backtestResult && (
                       <div className="pt-2 border-t border-slate-800 space-y-2">
                         <div className="grid grid-cols-4 gap-2 text-center text-xs">
@@ -1343,7 +1351,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                             <span className="font-bold text-white">{backtestResult.totalSetups}</span>
                           </div>
                           <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
-                            <span className="text-[10px] text-slate-500 block">Вінрейт</span>
+                            <span className="text-[10px] text-slate-500 block">TP раніше SL</span>
                             <span className="font-bold text-emerald-400">{backtestResult.winRate}%</span>
                           </div>
                           <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
@@ -1362,7 +1370,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                             <div key={idx} className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px]">
                               <div>
                                 <span className={r.success ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                                  {r.success ? '✓ Успішний рух' : '✗ Просадка'}
+                                  {r.exitReason === 'TARGET' ? '✓ TP' : r.exitReason === 'STOP' ? '✗ SL' : 'Час вичерпано'}
                                 </span>
                                 <span className="text-slate-400 ml-2">Тригер: ${formatPrice(r.triggerPrice)}</span>
                               </div>
@@ -1376,8 +1384,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
                       </div>
                     )}
                   </div>
-                </div>
-              ) : null}
+
             </div>
           </div>
         </div>
@@ -1484,7 +1491,7 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
                 <div className="text-xs font-bold text-white flex items-center gap-1.5">
                   <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Виявлення великих плотностів</span>
+                  <span>Пошук щільностей</span>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2">
@@ -1506,11 +1513,11 @@ export const SurveillancePage: React.FC<SurveillancePageProps> = ({
 
                 {formConfig.densityMode !== 'AUTO' && (
                   <div className="space-y-1">
-                    <label className="text-[10px] text-slate-400">Ручний поріг плотності ($ USDT)</label>
+                    <label className="text-[10px] text-slate-400">Ручний поріг щільності ($ USDT)</label>
                     <input
                       type="number"
-                      step="100000"
-                      min="50000"
+                      step="1000"
+                      min="1"
                       value={formConfig.manualDensityThresholdUsd}
                       onChange={(e) => setFormConfig((prev) => ({ ...prev, manualDensityThresholdUsd: Number(e.target.value) }))}
                       className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-white font-mono text-xs"

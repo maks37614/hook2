@@ -760,7 +760,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           const interval = toBinanceWsInterval(timeframe);
           const baseWs =
             marketType === 'futures'
-              ? 'wss://fstream.binance.com/stream?streams='
+              ? 'wss://fstream.binance.com/market/stream?streams='
               : 'wss://stream.binance.com:9443/stream?streams=';
           const symLower = cleanSymbol.toLowerCase();
           // Combined stream: real-time klines + millisecond aggregated trades for 0 latency price ticks

@@ -25,6 +25,7 @@ import { ExchangeId, MarketType, Timeframe } from '../../types';
 import { formatCryptoPrice, formatVolume, formatWholeSum, formatCompactWholeBubble } from '../../utils/formatters';
 import { playDensityChime } from '../../utils/domSound';
 import { useAuth } from '../../context/AuthContext';
+import { BinanceOrderBookSync, binanceStreamUrls } from '../../utils/binanceOrderBook';
 
 function formatTradeTime(ts: number): string {
   const d = new Date(ts);
@@ -176,7 +177,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
       const saved = localStorage.getItem(key) || localStorage.getItem('scalper_dom_density_threshold');
       if (saved && !isNaN(Number(saved)) && Number(saved) > 0) return Number(saved);
     } catch {}
-    return 500000; // default 500k
+    return initialDensityThreshold;
   });
   const [bubbleThresholdUsd, setBubbleThresholdUsd] = useState<number>(() => {
     try {
@@ -300,6 +301,10 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   const bidsBookRef = useRef<Map<number, number>>(new Map());
   const asksBookRef = useRef<Map<number, number>>(new Map());
   const flushPendingRef = useRef<boolean>(false);
+  const binanceSyncRef = useRef<BinanceOrderBookSync | null>(null);
+  const requestDomSnapshotRef = useRef<(() => Promise<void>) | null>(null);
+  const lastBookReceivedAtRef = useRef(0);
+  const bookSocketOpenRef = useRef(false);
 
   const [rawBids, setRawBids] = useState<[number, number][]>([]);
   const [rawAsks, setRawAsks] = useState<[number, number][]>([]);
@@ -310,47 +315,13 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   // Live trades tape
   const [trades, setTrades] = useState<RecentTrade[]>([]);
 
-  // Cluster history state (initialized with ready footprint columns so it never flashes empty)
-  const [clusters, setClusters] = useState<ClusterColumn[]>(() => {
-    const now = Math.floor(Date.now() / 1000);
-    const baseP = propPrice || 83000;
-    return [3, 2, 1, 0].map((offset) => {
-      const time = now - offset * 300;
-      const date = new Date(time * 1000);
-      const label = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-      const levels: Record<number, ClusterLevel> = {};
-      const step = baseP > 1000 ? 5 : 0.05;
-      let maxVol = 0;
-      for (let i = 0; i < 16; i++) {
-        const p = Number((baseP - 40 * (step / 5) + i * step).toFixed(2));
-        const buy = Math.round(160000 + (i % 5) * 90000);
-        const sell = Math.round(130000 + (i % 4) * 70000);
-        const tot = buy + sell;
-        if (tot > maxVol) maxVol = tot;
-        levels[p] = {
-          price: p,
-          buyVol: buy,
-          sellVol: sell,
-          totalVol: tot,
-          isPOC: i === 8,
-        };
-      }
-      return {
-        candleTime: time,
-        label,
-        totalVolume: 4320000,
-        pocPrice: Number(baseP.toFixed(2)),
-        maxLevelVol: maxVol,
-        levels,
-      };
-    });
-  });
+  const [clusters, setClusters] = useState<ClusterColumn[]>([]);
 
   // Selected trade preset size
   const [selectedPreset, setSelectedPreset] = useState<string>('$751');
 
   // Density sound alert tracking to prevent duplicates
-  const alertedLevelsRef = useRef<Set<number>>(new Set());
+  const alertedLevelsRef = useRef<Set<string>>(new Set());
 
   // Container ref for auto-centering
   const domScrollContainerRef = useRef<HTMLDivElement>(null);
@@ -412,10 +383,14 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   // 1. Initial snapshot fetch via REST proxy (full depth 500+ orders)
   useEffect(() => {
     let isMounted = true;
+    let inFlight = false;
     bidsBookRef.current.clear();
     asksBookRef.current.clear();
 
     const fetchSnapshot = async () => {
+      if (inFlight || (Date.now() - lastBookReceivedAtRef.current < 5000 &&
+          !(exchange === 'binance' && binanceSyncRef.current?.needsSnapshot))) return;
+      inFlight = true;
       try {
         const start = Date.now();
         const res = await fetch(
@@ -427,6 +402,11 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         if (!res.ok) return;
         const data = await res.json();
         if (isMounted && data.success && Array.isArray(data.bids) && Array.isArray(data.asks)) {
+          if (exchange === 'binance' && binanceSyncRef.current && binanceSyncRef.current.needsSnapshot && data.lastUpdateId) {
+            binanceSyncRef.current.setSnapshot({ bids: data.bids, asks: data.asks, sequence: data.lastUpdateId });
+          }
+          // A REST response must not overwrite deltas received while it was in flight.
+          if (bookSocketOpenRef.current || Date.now() - lastBookReceivedAtRef.current < 5000) return;
           // REST returns a complete window; absent prices are no longer visible.
           bidsBookRef.current.clear();
           asksBookRef.current.clear();
@@ -442,14 +422,16 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
         }
       } catch (err) {
         console.warn('DOM snapshot fetch error:', err);
-      }
+      } finally { inFlight = false; }
     };
 
+    requestDomSnapshotRef.current = fetchSnapshot;
     fetchSnapshot();
     const interval = setInterval(fetchSnapshot, 3000); // Polling sync to ensure zero drift
 
     return () => {
       isMounted = false;
+      if (requestDomSnapshotRef.current === fetchSnapshot) requestDomSnapshotRef.current = null;
       clearInterval(interval);
     };
   }, [cleanSymbol, exchange, marketType, scheduleBookFlush]);
@@ -575,8 +557,37 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
   // 3. Connect to live Binance/Bybit WebSocket for instant real depth & trades
   useEffect(() => {
     let ws: WebSocket | null = null;
+    let marketWs: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let isSubscribed = true;
+    let bybitReady = false;
+    let bybitSequence = 0;
+    lastBookReceivedAtRef.current = 0;
+    bookSocketOpenRef.current = false;
+    alertedLevelsRef.current.clear();
+    const sync = new BinanceOrderBookSync(marketType, update => {
+      if (!isSubscribed) return;
+      if (update.isSnapshot) { bidsBookRef.current.clear(); asksBookRef.current.clear(); }
+      for (const [book, levels] of [[bidsBookRef.current, update.bids], [asksBookRef.current, update.asks]] as const) {
+        for (const [price, qty] of levels) {
+          if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(qty) || qty < 0) continue;
+          if (qty === 0) book.delete(price); else book.set(price, qty);
+        }
+      }
+      lastBookReceivedAtRef.current = Date.now();
+      scheduleBookFlush();
+    }, () => {
+      lastBookReceivedAtRef.current = 0;
+      bidsBookRef.current.clear(); asksBookRef.current.clear(); scheduleBookFlush();
+      void requestDomSnapshotRef.current?.();
+    });
+    binanceSyncRef.current = exchange === 'binance' ? sync : null;
 
+    const connect = () => {
+    if (!isSubscribed) return;
+    if (ws) { ws.onclose = null; ws.close(); }
+    if (marketWs) { marketWs.onclose = null; marketWs.close(); }
+    sync.reset(); bybitReady = false; bybitSequence = 0;
     try {
       if (exchange === 'bybit') {
         const bybitCategory = marketType === 'futures' ? 'linear' : 'spot';
@@ -585,6 +596,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
         ws.onopen = () => {
           if (!isSubscribed) return;
+          bookSocketOpenRef.current = true;
           try {
             ws?.send(
               JSON.stringify({
@@ -603,6 +615,11 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             const data = json.data;
 
             if (topic.startsWith('orderbook') && data) {
+              const sequence = Number(data.seq || data.u);
+              const snapshot = json.type === 'snapshot' || data.u === 1;
+              if (!snapshot && (!bybitReady || sequence <= bybitSequence)) return;
+              bybitReady = true; bybitSequence = sequence;
+              lastBookReceivedAtRef.current = Date.now();
               if (json.type === 'snapshot' || data.u === 1) {
                 bidsBookRef.current.clear();
                 asksBookRef.current.clear();
@@ -659,13 +676,12 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
           } catch {}
         };
       } else {
-        const lower = cleanSymbol.toLowerCase();
         // Binance real depth stream (all changes) + aggTrade
-        const wsUrl = marketType === 'futures'
-          ? `wss://fstream.binance.com/stream?streams=${lower}@depth@100ms/${lower}@aggTrade`
-          : `wss://stream.binance.com:9443/stream?streams=${lower}@depth@100ms/${lower}@aggTrade`;
+        const urls = binanceStreamUrls(cleanSymbol, marketType);
+        const wsUrl = urls[0];
 
         ws = new WebSocket(wsUrl);
+        ws.onopen = () => { bookSocketOpenRef.current = true; void requestDomSnapshotRef.current?.(); };
 
         ws.onmessage = (event) => {
           if (!isSubscribed) return;
@@ -675,28 +691,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             const data = msg.data || msg;
 
             if (stream.includes('@depth') || data.e === 'depthUpdate') {
-              let hasChanges = false;
-              if (Array.isArray(data.b)) {
-                data.b.forEach(([pStr, qStr]: [string, string]) => {
-                  const p = parseFloat(pStr);
-                  const q = parseFloat(qStr);
-                  if (q <= 0) bidsBookRef.current.delete(p);
-                  else bidsBookRef.current.set(p, q);
-                });
-                hasChanges = true;
-              }
-              if (Array.isArray(data.a)) {
-                data.a.forEach(([pStr, qStr]: [string, string]) => {
-                  const p = parseFloat(pStr);
-                  const q = parseFloat(qStr);
-                  if (q <= 0) asksBookRef.current.delete(p);
-                  else asksBookRef.current.set(p, q);
-                });
-                hasChanges = true;
-              }
-              if (hasChanges) {
-                scheduleBookFlush();
-              }
+              sync.push(data);
             } else if (stream.includes('@aggTrade') || data.e === 'aggTrade') {
               const tradePrice = parseFloat(data.p);
               const tradeQty = parseFloat(data.q);
@@ -721,13 +716,34 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
             }
           } catch (e) {}
         };
+        if (urls[1]) {
+          marketWs = new WebSocket(urls[1]);
+          marketWs.onmessage = ws.onmessage;
+          marketWs.onerror = () => {};
+        }
       }
 
       ws.onerror = () => {};
+      const reconnect = () => {
+        if (!isSubscribed || reconnectTimer) return;
+        bookSocketOpenRef.current = false;
+        lastBookReceivedAtRef.current = 0;
+        sync.reset();
+        bidsBookRef.current.clear(); asksBookRef.current.clear(); scheduleBookFlush();
+        reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 3000);
+      };
+      ws.onclose = reconnect;
+      if (marketWs) marketWs.onclose = reconnect;
     } catch (e) {}
+    };
+    connect();
 
     return () => {
       isSubscribed = false;
+      bookSocketOpenRef.current = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (marketWs) marketWs.close();
+      if (binanceSyncRef.current === sync) binanceSyncRef.current = null;
       if (ws) {
         try {
           ws.close();
@@ -837,13 +853,13 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     if (!soundAlertEnabled) return;
 
     let hasNewDensity = false;
-    const currentDenseLevels = new Set<number>();
+    const currentDenseLevels = new Set<string>();
 
     // Check asks
     aggregatedAsks.forEach((row) => {
       if (row.isDensity) {
-        currentDenseLevels.add(row.price);
-        if (!alertedLevelsRef.current.has(row.price)) {
+        currentDenseLevels.add(`ASK_${row.price}`);
+        if (!alertedLevelsRef.current.has(`ASK_${row.price}`)) {
           hasNewDensity = true;
         }
       }
@@ -852,8 +868,8 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
     // Check bids
     aggregatedBids.forEach((row) => {
       if (row.isDensity) {
-        currentDenseLevels.add(row.price);
-        if (!alertedLevelsRef.current.has(row.price)) {
+        currentDenseLevels.add(`BID_${row.price}`);
+        if (!alertedLevelsRef.current.has(`BID_${row.price}`)) {
           hasNewDensity = true;
         }
       }
@@ -940,6 +956,7 @@ export const ScalperDOMWidget: React.FC<ScalperDOMWidgetProps> = ({
 
   // Density threshold handler
   const handleSetDensityThreshold = (val: number) => {
+    if (!Number.isFinite(val) || val <= 0) return;
     setDensityThresholdUsd(val);
     persistOrderbookSettings({ densityThresholdUsd: val });
     onUpdateSettings?.({ densityThresholdUsd: val });

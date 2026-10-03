@@ -729,14 +729,16 @@ async function checkAlertsInternal() {
 
       // Determine effective telegram botToken and chatId
       const userTg = getUserTelegram(alert.userId);
-      const effectiveBotToken = alert.telegramBotToken || userTg?.botToken;
-      const effectiveChatId = alert.telegramChatId || userTg?.chatId;
+      const effectiveBotToken = userTg?.botToken || alert.telegramBotToken;
+      const effectiveChatId = userTg?.chatId || alert.telegramChatId;
 
       let telegramSent = false;
       let telegramError: string | undefined = undefined;
 
       try {
-        const sendRes = await sendTelegramMessage(message, {
+        const sendRes = !effectiveBotToken || !effectiveChatId
+          ? { success: false, error: 'Telegram користувача не налаштовано' }
+          : await sendTelegramMessage(message, {
           botToken: effectiveBotToken,
           chatId: effectiveChatId,
         });

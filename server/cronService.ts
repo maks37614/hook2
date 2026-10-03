@@ -1,5 +1,5 @@
 import { checkAlertsOnce, loadAlerts, getAllAlerts } from './alertService';
-import { checkCoinSurveillance, getAllActiveSurveillanceCoins, loadSurveillanceStore, saveSurveillanceStore } from './surveillanceService';
+import { checkCoinSurveillance, getAllActiveSurveillanceCoins, findSurveillanceCoinById, commitSurveillanceCheck } from './surveillanceService';
 import { runScreenerScan } from './marketService';
 import { sendTelegramMessage, getEffectiveTelegramConfig } from './telegramService';
 import { surveillanceManager } from './surveillance/surveillanceManager';
@@ -130,9 +130,7 @@ class CronManager {
           for (const { userId, coin } of activeItems) {
             try {
               // 1. Fresh check: ensure user has not paused or removed the coin while batch is executing
-              const store = loadSurveillanceStore();
-              const userCoins = store[userId] || [];
-              const currentCoin = userCoins.find((c) => c.id === coin.id);
+              const currentCoin = findSurveillanceCoinById(coin.id, userId)?.coin;
               if (!currentCoin || !currentCoin.isActive) {
                 // User paused or removed coin - respect user's explicit state immediately
                 continue;
@@ -143,20 +141,7 @@ class CronManager {
               const { coin: updated } = await checkCoinSurveillance(currentCoin, { forceCheck: false, forceNotify: false });
 
               // 3. Atomically write back state without ever altering or resetting isActive
-              const freshStore = loadSurveillanceStore();
-              const freshUserCoins = freshStore[userId] || [];
-              const idx = freshUserCoins.findIndex((c) => c.id === coin.id);
-              if (idx !== -1) {
-                // CRITICAL: Server surveillance NEVER disables itself!
-                // Only user manual action (pause button / delete) can alter isActive.
-                freshUserCoins[idx] = {
-                  ...updated,
-                  isActive: freshUserCoins[idx].isActive,
-                  config: freshUserCoins[idx].config, // Guarantee preserving user's current pause/active state
-                };
-                freshStore[userId] = freshUserCoins;
-                saveSurveillanceStore(freshStore);
-              }
+              commitSurveillanceCheck(updated);
             } catch (coinErr) {
               console.error(`[CRON:surveillance] Error on ${coin.symbol}:`, coinErr);
               // Coin remains active for next scan iteration despite transient network/API issues

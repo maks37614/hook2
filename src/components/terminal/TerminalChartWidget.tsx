@@ -225,7 +225,7 @@ export const TerminalChartWidget: React.FC<TerminalChartWidgetProps> = ({
       const lower = cleanSymbol.toLowerCase();
       const wsUrl =
         block.marketType === 'futures'
-          ? `wss://fstream.binance.com/ws/${lower}@miniTicker`
+          ? `wss://fstream.binance.com/market/ws/${lower}@miniTicker`
           : `wss://stream.binance.com:9443/ws/${lower}@miniTicker`;
 
       try {

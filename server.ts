@@ -39,7 +39,8 @@ import {
   findSurveillanceCoinById,
   updateSurveillanceCoinActive,
   setAllSurveillanceCoinsActive,
-  copyGuestSurveillanceCoins,
+  commitSurveillanceCheck,
+  validateSurveillanceConfig,
 } from './server/surveillanceService';
 import { ExchangeId, MarketType, Timeframe } from './src/types';
 import { cronManager } from './server/cronService';
@@ -661,16 +662,7 @@ async function startServer() {
     try {
       const requestedId = (req.query.userId as string | undefined)?.trim();
       const userId = requestedId && requestedId !== '' ? requestedId : 'guest';
-      let list = loadSurveillanceList(userId);
-      // If user just logged in and has no surveillance list yet, inherit guest list if available
-      if (list.length === 0 && userId !== 'guest') {
-        const guestList = loadSurveillanceList('guest');
-        if (guestList.length > 0) {
-          const migrated = copyGuestSurveillanceCoins(guestList, userId);
-          saveSurveillanceList(userId, migrated);
-          list = migrated;
-        }
-      }
+      const list = loadSurveillanceList(userId);
       res.json({ success: true, data: list });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -681,10 +673,17 @@ async function startServer() {
     try {
       const { symbol, baseAsset, quoteAsset, exchange, marketType, userId, config } = req.body;
       const uid = (userId && String(userId).trim()) || 'guest';
-      if (!symbol) {
+      const configError = config === undefined ? null : validateSurveillanceConfig(config);
+      if (configError) return res.status(400).json({ success: false, error: configError });
+      if (typeof symbol !== 'string' || !symbol.trim()) {
         return res.status(400).json({ success: false, error: 'Тікер монети не вказано' });
       }
       const cleanSymbol = symbol.toUpperCase().replace('/', '').trim();
+      if (!/^[A-Z0-9]+$/.test(cleanSymbol) ||
+          (exchange && !['binance', 'bybit'].includes(exchange)) ||
+          (marketType && !['spot', 'futures'].includes(marketType))) {
+        return res.status(400).json({ success: false, error: 'Невірний символ, біржа або ринок' });
+      }
       const list = loadSurveillanceList(uid);
 
       const existing = list.find((c) => c.symbol === cleanSymbol && c.exchange === (exchange || 'binance') && c.marketType === (marketType || 'futures'));
@@ -695,12 +694,12 @@ async function startServer() {
         if (config) {
           existing.config = { ...existing.config, ...config };
         }
-        const { coin: checked } = await checkCoinSurveillance(existing, true);
-        checked.isActive = true;
-        const idx = list.findIndex((c) => c.id === existing.id);
-        if (idx !== -1) list[idx] = checked;
         saveSurveillanceList(uid, list);
-        return res.json({ success: true, coin: checked, message: 'Монету активовано для системного нагляду' });
+        surveillanceManager.startWorkerForCoin(existing);
+        const { coin: checked } = await checkCoinSurveillance(existing, true);
+        const committed = commitSurveillanceCheck(checked);
+        if (!committed) return res.status(404).json({ success: false, error: 'Монету видалено під час перевірки' });
+        return res.json({ success: true, coin: committed, message: 'Монету активовано для системного нагляду' });
       }
 
       const defaultCfg = getDefaultSurveillanceConfig();
@@ -718,12 +717,14 @@ async function startServer() {
         config: { ...defaultCfg, ...(config || {}) },
       };
 
-      const { coin: checkedCoin } = await checkCoinSurveillance(newCoin, true);
-      checkedCoin.isActive = true;
-      list.unshift(checkedCoin);
+      list.unshift(newCoin);
       saveSurveillanceList(uid, list);
+      surveillanceManager.startWorkerForCoin(newCoin);
+      const { coin: checkedCoin } = await checkCoinSurveillance(newCoin, true);
+      const committed = commitSurveillanceCheck(checkedCoin);
+      if (!committed) return res.status(404).json({ success: false, error: 'Монету видалено під час перевірки' });
 
-      res.json({ success: true, coin: checkedCoin, message: 'Монету успішно додано на 24/7 системний нагляд!' });
+      res.json({ success: true, coin: committed, message: 'Монету успішно додано на 24/7 системний нагляд!' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -733,6 +734,8 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { userId, config, isActive } = req.body;
+      const configError = config === undefined ? null : validateSurveillanceConfig(config);
+      if (configError) return res.status(400).json({ success: false, error: configError });
       const found = findSurveillanceCoinById(id, userId);
 
       if (!found) {
@@ -821,10 +824,10 @@ async function startServer() {
         forceCheck: true,
         forceNotify: Boolean(forceNotify),
       });
-      found.list[found.index] = updated;
-      saveSurveillanceList(found.userId, found.list);
+      const committed = commitSurveillanceCheck(updated);
+      if (!committed) return res.status(404).json({ success: false, error: 'Монету видалено під час перевірки' });
 
-      res.json({ success: true, coin: updated });
+      res.json({ success: true, coin: committed });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -852,12 +855,22 @@ async function startServer() {
   app.post('/api/surveillance/backtest', async (req, res) => {
     try {
       const { symbol, exchange, marketType, timeframe } = req.body;
-      const sym = (symbol || 'BTCUSDT').toUpperCase().trim();
+      if (typeof symbol !== 'string' || !symbol.trim()) {
+        return res.status(400).json({ success: false, error: 'Оберіть монету для бектесту' });
+      }
+      const sym = symbol.toUpperCase().trim();
       const ex = exchange || 'binance';
       const mkt = marketType || 'futures';
       const tf = timeframe || '15m';
+      if (!/^[A-Z0-9]+$/.test(sym) || !['binance', 'bybit'].includes(ex) ||
+          !['spot', 'futures'].includes(mkt) || !['1m', '5m', '15m', '1h', '4h'].includes(tf)) {
+        return res.status(400).json({ success: false, error: 'Невірні параметри бектесту' });
+      }
 
-      const klines = await fetchKlines(ex, mkt, sym, tf, 200).catch(() => []);
+      const klines = await fetchKlines(ex, mkt, sym, tf, tf === '1m' ? 500 : 200).catch(() => []);
+      if (klines.length < 50) {
+        return res.status(503).json({ success: false, error: 'Недостатньо історичних даних з обраної біржі' });
+      }
       const result = surveillanceReplayEngine.runCausalBacktest(sym, klines, tf);
       res.json({ success: true, data: result });
     } catch (err: any) {

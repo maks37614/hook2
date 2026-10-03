@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from './AuthContext';
+import { SurveillanceRequestGuard } from '../utils/surveillanceRequests';
 import {
   SurveillanceCoin,
   SurveillanceConfig,
@@ -48,15 +49,20 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [coins, setCoins] = useState<SurveillanceCoin[]>([]);
   const currentUserId = useRef(user?.uid || 'guest');
   currentUserId.current = user?.uid || 'guest';
+  const requestGuard = useRef(new SurveillanceRequestGuard(currentUserId.current));
+  requestGuard.current.setUser(currentUserId.current);
+  const removedIds = useRef(new Map<string, Set<string>>());
   const [loading, setLoading] = useState<boolean>(true);
 
   const fetchCoins = useCallback(async () => {
     const userId = user?.uid || 'guest';
+    const request = requestGuard.current.beginRead();
+    if (!request) return;
     try {
       const res = await fetch(`/api/surveillance?userId=${encodeURIComponent(userId)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if (currentUserId.current !== userId) return;
+      if (!requestGuard.current.canApply(request)) return;
       if (data.success && Array.isArray(data.data)) {
         setCoins(data.data);
         try {
@@ -64,7 +70,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         } catch {}
       }
     } catch (err) {
-      if (currentUserId.current !== userId) return;
+      if (!requestGuard.current.canApply(request)) return;
       console.warn('[Surveillance] Fetch error, checking localStorage:', err);
       try {
         const cached = localStorage.getItem(`signalhook_surveillance_${userId}`);
@@ -73,7 +79,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         }
       } catch {}
     } finally {
-      setLoading(false);
+      if (requestGuard.current.canApply(request)) setLoading(false);
     }
   }, [user?.uid]);
 
@@ -87,11 +93,23 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => clearInterval(interval);
   }, [fetchCoins]);
 
+  const mutate = async (userId: string, url: string, options: RequestInit) => {
+    const finish = requestGuard.current.beginWrite(userId);
+    try {
+      const res = await fetch(url, options);
+      const data = await res.json();
+      if (!finish.isCurrent()) throw new Error('Обліковий запис змінено');
+      return data;
+    } finally { finish(); }
+  };
+
   const getWorkerSnapshot = useCallback(async (id: string): Promise<any | null> => {
+    const userId = user?.uid || 'guest';
     try {
       const res = await fetch(`/api/surveillance/worker/${encodeURIComponent(id)}?userId=${encodeURIComponent(user?.uid || 'guest')}`);
       if (!res.ok) return null;
       const json = await res.json();
+      if (currentUserId.current !== userId) return null;
       return json.success ? json.data : null;
     } catch {
       return null;
@@ -104,18 +122,14 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     marketType: MarketType = 'futures',
     timeframe = '15m'
   ): Promise<any | null> => {
-    try {
       const res = await fetch('/api/surveillance/backtest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol, exchange, marketType, timeframe }),
       });
-      if (!res.ok) return null;
       const json = await res.json();
-      return json.success ? json.data : null;
-    } catch {
-      return null;
-    }
+      if (!res.ok || !json.success) throw new Error(json.error || 'Не вдалося виконати бектест');
+      return json.data;
   };
 
   const addCoinToSurveillance = async (
@@ -130,7 +144,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const baseAsset = cleanSymbol.replace(/USDT$|BUSD$|USDC$/, '');
       const quoteAsset = 'USDT';
 
-      const res = await fetch('/api/surveillance', {
+      const data = await mutate(userId, '/api/surveillance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -144,8 +158,8 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
         }),
       });
 
-      const data = await res.json();
       if (data.success && data.coin) {
+        if (removedIds.current.get(userId)?.has(data.coin.id)) return { success: false, error: 'Монету вже видалено' };
         setCoins((prev) => {
           const exists = prev.some((c) => c.id === data.coin.id);
           const next = exists ? prev.map((c) => (c.id === data.coin.id ? data.coin : c)) : [data.coin, ...prev];
@@ -165,11 +179,12 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const removeCoinFromSurveillance = async (id: string): Promise<boolean> => {
     try {
       const userId = user?.uid || 'guest';
-      const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}?userId=${encodeURIComponent(userId)}`, {
+      const data = await mutate(userId, `/api/surveillance/${encodeURIComponent(id)}?userId=${encodeURIComponent(userId)}`, {
         method: 'DELETE',
       });
-      const data = await res.json();
       if (data.success) {
+        if (!removedIds.current.has(userId)) removedIds.current.set(userId, new Set());
+        removedIds.current.get(userId)!.add(id);
         setCoins((prev) => {
           const next = prev.filter((c) => c.id !== id);
           try {
@@ -191,12 +206,11 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   ): Promise<boolean> => {
     try {
       const userId = user?.uid || 'guest';
-      const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}`, {
+      const data = await mutate(userId, `/api/surveillance/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, config }),
       });
-      const data = await res.json();
       if (data.success && data.coin) {
         setCoins((prev) => {
           const next = prev.map((c) => (c.id === id ? data.coin : c));
@@ -218,12 +232,11 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     if (!coin) return false;
     try {
       const userId = user?.uid || 'guest';
-      const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}`, {
+      const data = await mutate(userId, `/api/surveillance/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, isActive: !coin.isActive }),
       });
-      const data = await res.json();
       if (data.success && data.coin) {
         setCoins((prev) => {
           const next = prev.map((c) => (c.id === id ? data.coin : c));
@@ -243,12 +256,11 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const checkCoinNow = async (id: string, forceNotify = false): Promise<SurveillanceCoin | null> => {
     try {
       const userId = user?.uid || 'guest';
-      const res = await fetch(`/api/surveillance/${encodeURIComponent(id)}/check`, {
+      const data = await mutate(userId, `/api/surveillance/${encodeURIComponent(id)}/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, forceNotify }),
       });
-      const data = await res.json();
       if (data.success && data.coin) {
         setCoins((prev) => {
           const next = prev.map((c) => (c.id === id ? data.coin : c));
@@ -268,17 +280,13 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const checkAllCoinsNow = async (): Promise<boolean> => {
     try {
       const userId = user?.uid || 'guest';
-      const res = await fetch('/api/surveillance/check-all', {
+      const data = await mutate(userId, '/api/surveillance/check-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
       });
-      const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
-        setCoins(data.data);
-        try {
-          localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(data.data));
-        } catch {}
+        await fetchCoins();
         return true;
       }
       return false;
@@ -290,17 +298,13 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const toggleAllCoinsActive = async (targetActive: boolean): Promise<boolean> => {
     try {
       const userId = user?.uid || 'guest';
-      const res = await fetch('/api/surveillance/toggle-all', {
+      const data = await mutate(userId, '/api/surveillance/toggle-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, isActive: targetActive }),
       });
-      const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
-        setCoins(data.data);
-        try {
-          localStorage.setItem(`signalhook_surveillance_${userId}`, JSON.stringify(data.data));
-        } catch {}
+        await fetchCoins();
         return true;
       }
       return false;
